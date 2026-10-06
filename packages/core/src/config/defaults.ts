@@ -62,6 +62,6 @@ export function newDeskConfig(input: NewConfigInput): DeskConfig {
       osc52Write: false,
       keymap: {},
     },
-    agents: { sessionPrefix: "desk", policy: "strict", idleTimeout: "15m" },
+    agents: { sessionPrefix: "desk", policy: "open", idleTimeout: "15m" },
   };
 }
