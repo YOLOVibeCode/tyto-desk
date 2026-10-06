@@ -1,0 +1,14 @@
+{
+  "name": "@desk/node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Node adapters: private atomic files, the port probe, and the guard that keeps tests off the real home and Desk ports.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@desk/core": "0.1.0"
+  }
+}

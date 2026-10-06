@@ -1,0 +1,65 @@
+# Default CI (docs/IMPLEMENTATION.md §18): offline checks only. It never installs a browser, never uses a secret,
+# and every action is pinned to a commit SHA. The weekly live job arrives with the live harness (slice 1b).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The engines floor for Node 22, and .nvmrc.
+        node: ["22.22.2", "26.10.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
+      - run: npm run lint:imports
+      - run: npm run lint:extension
+      - run: npm run lint:listen
+      - run: npm run lint:install-scripts
+      - run: npm run secrets:scan
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (sha256-verified)
+        env:
+          GITLEAKS_VERSION: 8.24.3
+          # gitleaks_8.24.3_checksums.txt, linux_x64
+          GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -xzf gitleaks.tar.gz gitleaks
+      - name: Scan every commit (redacted)
+        run: ./gitleaks detect --source . --config .gitleaks.toml --redact --verbose

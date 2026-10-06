@@ -1,0 +1,72 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.turbo/
+
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+*.secret
+/secrets/
+/vault/
+identity-vault/
+**/*.vault
+**/cookies.json
+**/storage-state.json
+playwright/.auth/
+
+# Desk state, Chrome profiles, agent-browser state (cookies, tokens, Local Storage) — never commit
+.desk/
+.agent-browser/
+tmp/
+**/user-data-dir/
+**/*-profile/
+**/DevToolsActivePort
+**/SingletonLock
+**/SingletonSocket
+**/SingletonCookie
+**/Default/Cookies*
+**/Default/Login Data*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Logs and traces
+*.log
+*.trace
+npm-debug.log*
+
+# Test artifacts (live results come out of the container here)
+playwright-report/
+test-results/
+blob-report/
+
+# Local-only editor junk. Committed agent rules stay in-tree.
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
+.claude/*
+!.claude/rules/
+!.claude/rules/**
+!.claude/README.md

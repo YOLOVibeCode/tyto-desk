@@ -1,0 +1,65 @@
+# Gitleaks config for the public Tyto Desk repo.
+# Run: gitleaks detect --source . --config .gitleaks.toml --redact
+# CI:  .github/workflows/ci.yml (gitleaks job, 8.24.3, tarball sha256-verified)
+#
+# No path allowlist: code, docs, tests and the checklist results are all scanned (docs/IMPLEMENTATION.md §18).
+# Only specific public or fake values are allowlisted, below.
+
+title = "tyto-desk"
+
+[extend]
+useDefault = true
+
+# Tyto's rules.
+
+[[rules]]
+id = "desk-api-key-assignment"
+description = "Assigned Desk, Tyto, OpenAI or Anthropic API keys"
+regex = '''(?i)(desk_api_key|tyto_api_key|openai_api_key|anthropic_api_key|tyto_host_token)\s*[=:]\s*['"]?[A-Za-z0-9_\-]{16,}'''
+tags = ["key"]
+
+[[rules]]
+id = "desk-sk-prefix"
+description = "OpenAI and Anthropic secret prefixes"
+regex = '''\bsk-(?:ant-|proj-)?[A-Za-z0-9_\-]{20,}'''
+tags = ["key", "openai", "anthropic"]
+
+[[rules]]
+id = "desk-cookie-header"
+description = "Raw Cookie or Set-Cookie material"
+regex = '''(?i)(?:set-cookie|cookie)\s*[:=]\s*[^\s=]+=[^\s;]{8,}'''
+tags = ["cookie", "session"]
+
+[[rules]]
+id = "desk-bearer"
+description = "Bearer tokens"
+regex = '''(?i)authorization:\s*bearer\s+[A-Za-z0-9\-._~+/]+=*'''
+tags = ["token"]
+
+# Desk's rules: what cookie import, the canary test and the operator's Mac could leak.
+
+[[rules]]
+id = "desk-google-session-cookie"
+description = "Google account session cookie values, which Desk never moves and nobody commits"
+regex = '''(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|\b(?:SAPISID|APISID|HSID|SSID|LSID|SID))\s*[=:]\s*['"]?[A-Za-z0-9_./+%\-]{20,}'''
+tags = ["cookie", "google"]
+
+[[rules]]
+id = "desk-onepassword-service-account-token"
+description = "1Password service account tokens (the op CLI on the operator's Mac uses one)"
+regex = '''\bops_eyJ[A-Za-z0-9_\-]{20,}'''
+tags = ["token", "1password"]
+
+[allowlist]
+description = "Specific public or fake values that look like secrets. Never paths."
+regexes = [
+  '''REDACTED''',
+  # RSA SubjectPublicKeyInfo headers. An MV3 manifest "key" pins the extension id and is a public key, as are the
+  # extension-id test vectors taken from Chromium (RSA-2048 and RSA-1024). A private key never starts this way.
+  '''MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA''',
+  '''MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQ''',
+  # Base64 of Chromium's id_util test string "this_string_is_longer_than_a_single_sha256_hash_digest".
+  '''dGhpc19zdHJpbmdfaXNfbG9uZ2VyX3RoYW5fYV9zaW5nbGVfc2hhMjU2X2hhc2hfZGlnZXN0''',
+  # The panel's default toggle shortcut, which generic-api-key reads as a "key" value.
+  '''^(?:Command|Ctrl)\+Shift\+Period$''',
+]

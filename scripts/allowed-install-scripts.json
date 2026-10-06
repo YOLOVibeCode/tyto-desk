@@ -1,0 +1,3 @@
+{
+  "esbuild@0.28.2": "postinstall (node install.js) only verifies and relinks the @esbuild/<platform> binary; esbuild's JS API and bin/esbuild find that optional dependency without it (the neutral bundle test and npm run build use it with ignore-scripts)"
+}

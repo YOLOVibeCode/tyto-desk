@@ -38,7 +38,7 @@ builtin. The extension bundles core, so core must run inside Chrome.
 - Test isolation: a Vitest `globalSetup` gives every run a fresh `HOME`, `DESK_HOME`, and `TMPDIR`. Node adapters take
   explicit roots and, under `VITEST`, refuse paths under the real home directory (captured before the override) and
   connections to ports 9222, 9229, and 9400–9899. Lock tests signal only pids they spawned. A meta-test checks that
-  the real `~/.desk` mtimes did not change.
+  the real `~/.desk` mtimes did not change (its `logs/` aside, D29).
 - Agents developing Desk never run the installed `desk`. macOS-only behavior is MANUAL-CHECKS.md, run by the operator.
 
 **Chrome law.** Desk starts the installed Chrome only through `ChromeProcess`, with arguments from
@@ -116,8 +116,9 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 - `.npmrc` sets `ignore-scripts=true`, and CI runs `npm ci --ignore-scripts`: npm 11.19.1 runs every dependency's
   install scripts unless the package is explicitly denied, and Node 22's npm ignores `allowScripts` [CR, RF].
 - `lint:install-scripts` fails when an installed package declares `preinstall`, `install`, or `postinstall` and is not
-  in `scripts/allowed-install-scripts.json` (empty in v1: esbuild and the node-pty package work through their
-  platform optional dependencies; checked in slice 1a). CI also runs `npm audit signatures`.
+  in `scripts/allowed-install-scripts.json`, keyed by exact version (v1 lists only `esbuild@0.28.2`, whose
+  postinstall merely verifies its platform binary: esbuild and the node-pty package work through their platform
+  optional dependencies; checked in slice 1a, D28). CI also runs `npm audit signatures`.
 - node-pty (settled in slice 1b): Microsoft's `node-pty@1.2.0-beta.15` if its tarball has darwin-arm64 and
   linux-arm64 prebuilds with an executable `spawn-helper`; otherwise `@lydell/node-pty@1.2.0-beta.15` with its
   platform packages pinned by integrity. Never node-pty 1.1.0 as shipped (`spawn-helper` mode 644, no Linux prebuilds)
@@ -1444,3 +1445,7 @@ sections above; these entries record choices, deviations, and rejections.
 | D25 | `SystemInfo.getProcessInfo`, focused-window guessing over CDP, and `run/chrome.json` are dropped (accepts the review's simplification) | `ListenerInfo` verifies the port owner; the worker knows the focused window; `desk status` queries live state |
 | D26 | Crash relaunch and idle quit are on by default, with caps | Persistence is the first requirement; the port should not stay open behind a closed window; at most 2 relaunches in 10 minutes avoids a crash loop |
 | D27 | The visible screen first, then scrollback, only if slice 2b misses the show bar | A full 5,000-line snapshot is expected to fit the bar; the split adds protocol state |
+| D28 | `scripts/allowed-install-scripts.json` lists `esbuild@0.28.2` (slice 1a; the plan said empty) | esbuild declares `postinstall: node install.js`, so `lint:install-scripts` cannot pass with an empty list. The script only verifies and relinks the `@esbuild/<platform>` binary; under `ignore-scripts` the JS API finds that optional dependency anyway (the neutral bundle test and `npm run build` use it). Entries are keyed by exact version, so a bump forces a new review. Of the PTY candidates, `@lydell/node-pty@1.2.0-beta.15` declares no install script; Microsoft's `node-pty@1.2.0-beta.15` declares `install` and `postinstall` and would need an entry (slice 1b decides) |
+| D29 | The `~/.desk` meta-test skips `logs/` (slice 1a) | The operator develops Desk inside a running Desk, whose processes append to and rotate their logs during a test run. Every other entry must hold still, and the adapter guard refuses every path under the real home anyway |
+| D30 | `lint:listen` is real from slice 1a, and type-aware | `@desk/node`'s port probe already calls `listen()`. The TypeScript checker resolves each `.listen()` call and judges only Node's own `Server.listen`, so a port's `listen(onConnection)` (`MessageServer`) is not mistaken for one. Its slice 4a test sentence is written now |
+| D31 | CI runs Node 22.22.2 and 26.10.0 exactly | The engines floor for Node 22, which catches APIs newer than the floor, and `.nvmrc`. A runner's cached 22.x can be older than the floor, which `engine-strict` refuses |
