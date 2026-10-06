@@ -1,0 +1,13 @@
+{
+  "name": "@desk/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, browser-safe core: config, Chrome arguments, policies, codecs, ports, and fakes. No Node, no DOM.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ports": "./src/ports/index.ts",
+    "./testing": "./src/testing/index.ts"
+  }
+}

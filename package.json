@@ -1,0 +1,32 @@
+{
+  "name": "tyto-desk",
+  "private": true,
+  "type": "module",
+  "description": "Your installed Chrome with a terminal docked in its side panel, and the agent in that terminal driving the same Chrome.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/core",
+    "packages/node"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/core/test && tsc --noEmit -p packages/node && tsc --noEmit -p test && tsc --noEmit -p scripts",
+    "build": "node scripts/build.mjs",
+    "lint:imports": "node scripts/check-core-imports.mjs",
+    "lint:extension": "node scripts/check-extension.mjs",
+    "lint:listen": "node scripts/check-listen.mjs",
+    "lint:install-scripts": "node scripts/check-install-scripts.mjs",
+    "secrets:scan": "node scripts/check-secrets.mjs",
+    "check": "npm run lint:imports && npm run lint:extension && npm run lint:listen && npm run lint:install-scripts && npm run secrets:scan && npm test && npm run typecheck && npm run build"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.4",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "3.2.7"
+  }
+}

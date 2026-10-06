@@ -1,0 +1,4 @@
+{
+  "esbuild@0.28.2": "postinstall (node install.js) only verifies and relinks the @esbuild/<platform> binary; esbuild's JS API and bin/esbuild find that optional dependency without it (the neutral bundle test and npm run build use it with ignore-scripts)",
+  "fsevents@2.3.3": "registry metadata only (hasInstallScript from the gypfile it was published with): the tarball ships a prebuilt universal fsevents.node and no binding.gyp or install hook, so nothing would run anyway; a darwin-only optional dependency of vite and rollup's file watchers, which npm test does not use"
+}
