@@ -1,12 +1,28 @@
 import { mkdtemp, symlink } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { NodePortProbe, assertPathAllowed, assertPortAllowed, readIfExists, writePrivate } from "../src/index.ts";
+import {
+  NodePortProbe,
+  TestIsolationError,
+  assertPathAllowed,
+  assertPortAllowed,
+  readIfExists,
+  writePrivate,
+} from "../src/index.ts";
 
 const realHome = process.env.DESK_TEST_REAL_HOME ?? userInfo().homedir;
 /** Writes aim here, never at ~/.desk: if the guard ever failed, the damage would be one stray directory. */
 const realHomeProbe = join(realHome, ".desk-test-guard-probe", "probe.json");
+
+/**
+ * macOS reaches every home through the `/System/Volumes/Data` firmlink as well, and `realpath` keeps that spelling.
+ * Only macOS has it, so only macOS gets the row; Linux has no unprivileged second name for a directory.
+ */
+const dataVolumeRows: Array<[string, string]> =
+  process.platform === "darwin"
+    ? [["the real ~/.desk spelled through the Data volume", join("/System/Volumes/Data", realHome, ".desk", "config.json")]]
+    : [];
 
 describe("adapter isolation under Vitest", () => {
   it("adapters refuse the real home directory and Desk ports under Vitest", async () => {
@@ -21,12 +37,23 @@ describe("adapter isolation under Vitest", () => {
     ["the real ~/.desk", join(realHome, ".desk", "config.json")],
     ["the real agent-browser config", join(realHome, ".agent-browser", "config.json")],
     ["a path that differs only in case", join(realHome.toUpperCase(), ".desk")],
+    ...dataVolumeRows,
   ])("the guard refuses %s", async (_label, path) => {
     await expect(assertPathAllowed(path)).rejects.toThrow(/real home directory/);
   });
 
   it("the guard refuses a relative path, because adapters take explicit roots", async () => {
     await expect(assertPathAllowed("packages/node/x.json")).rejects.toThrow(/absolute path/);
+  });
+
+  it("the guard refuses a .. segment, which the kernel applies after a symlink before it", async () => {
+    // <run tmp>/link -> real home, so <run tmp>/link/../<home name>/.desk is the real ~/.desk, while lexically it is
+    // <run tmp>/<home name>/.desk. Only the guard is called: no adapter touches the path, even if the guard failed.
+    const link = join(await mkdtemp(join(tmpdir(), "guard-")), "link");
+    await symlink(realHome, link);
+    const sneaky = `${link}/../${basename(realHome)}/.desk/config.json`;
+
+    await expect(assertPathAllowed(sneaky)).rejects.toThrow(TestIsolationError);
   });
 
   it("the guard refuses a path that reaches the real home through a symlink", async () => {

@@ -9,7 +9,8 @@ Tests define behavior. Ports define ownership. Do not ship a change that violate
 3. One port per file in `packages/core/src/ports/`, exported in PascalCase from its file name. No god port.
 4. `@desk/core` is pure and browser-safe: no `node:*`, `child_process`, `fs`, `net`, `http`, `WebSocket`,
    `node-pty`, `@xterm/*`, `chrome.*`, Electron, Playwright, Puppeteer, or vendor LLM SDKs, and no `Buffer`,
-   `process`, `require`, or `globalThis.chrome`. `npm run lint:imports` and the neutral bundle test enforce it.
+   `process`, `require`, `globalThis`, browser globals (`chrome`, `window`, `document`, …), `eval`, `Function`, or
+   triple-slash references. `npm run lint:imports` and the neutral bundle test enforce it.
 5. Adapters implement ports. Tests use separate fakes from `@desk/core/testing` (`Fake<Port>`, `Memory<Port>`,
    `FakeClock`, `SeqRandom`, `ScriptedPrompter`), never one god fake.
 6. A port that is hard to fake is the wrong port.

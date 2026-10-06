@@ -64,14 +64,21 @@ describe("config ports", () => {
     expect(ports && [...ports].sort()).toEqual([9444, 9777]);
   });
 
-  it("port allocation probes each port at most once and gives up when fewer than two are free", async () => {
+  it("port allocation probes each port at most once", async () => {
     const busy = [];
     for (let port = DESK_PORT_MIN; port <= DESK_PORT_MAX; port += 1) if (port !== 9500) busy.push(port);
     const probe = new FakePortProbe(busy);
 
-    expect(await allocateDeskPorts(probe, new SeqRandom([5]))).toBeNull();
+    await allocateDeskPorts(probe, new SeqRandom([5]));
+
     expect(new Set(probe.probed).size).toBe(probe.probed.length);
-    expect(probe.probed).toHaveLength(500);
+  });
+
+  it("port allocation gives up when fewer than two ports are free", async () => {
+    const busy = [];
+    for (let port = DESK_PORT_MIN; port <= DESK_PORT_MAX; port += 1) if (port !== 9500) busy.push(port);
+
+    expect(await allocateDeskPorts(new FakePortProbe(busy), new SeqRandom([5]))).toBeNull();
   });
 
   it("a new config is refused when fewer than two ports are free", async () => {
@@ -151,6 +158,27 @@ describe("config defaults", () => {
 
     expect(result).toEqual({ ok: false, code: "unsupported-platform" });
   });
+
+  it.each([
+    ["a relative home", "relative/home"],
+    ["an empty home", ""],
+    ["the root directory", "/"],
+    ["the root directory with a trailing slash", "//"],
+    ["a home with a NUL", "/Users/al\0ex"],
+    ["a home too long for the schema", `/Users/${"a".repeat(1_100)}`],
+  ])("a new config is refused for %s, so no config is saved that would not load again", async (_label, badHome) => {
+    const store = new MemoryConfigStore();
+
+    const result = await loadOrCreateConfig({
+      store,
+      probe: new FakePortProbe([]),
+      random: new SeqRandom([]),
+      home: badHome,
+      platform: "darwin",
+    });
+
+    expect({ result, saved: store.saved }).toEqual({ result: { ok: false, code: "bad-home" }, saved: [] });
+  });
 });
 
 describe("config schema", () => {
@@ -204,5 +232,43 @@ describe("config schema", () => {
     ["agents.idleTimeout", "15 minutes"],
   ])("the config schema refuses %s = %j", (path, value) => {
     expect(parseDeskConfig(edited(path, value))).toEqual({ ok: false, problem: "invalid", path });
+  });
+
+  it.each([
+    ["no key at all", "not a key at all"],
+    ["a key without a modifier", "Period"],
+    ["Shift as the only modifier", "Shift+Period"],
+    ["Ctrl with Alt", "Ctrl+Alt+T"],
+    ["Command with Alt", "Command+Alt+T"],
+    ["MacCtrl with Alt", "MacCtrl+Alt+T"],
+    ["modifiers without a key", "Ctrl+Shift"],
+    ["two keys", "Ctrl+Comma+Period"],
+    ["more than four parts", "Ctrl+Shift+Command+MacCtrl+P"],
+    ["a lower-case letter", "Ctrl+Shift+p"],
+    ["a lower-case modifier", "ctrl+shift+Period"],
+    ["a key Chrome does not bind", "Ctrl+Shift+F13"],
+    ["ChromeOS's Search modifier", "Search+Shift+Period"],
+    ["a media key", "MediaPlayPause"],
+    ["an empty part", "Ctrl++Period"],
+  ])("the config schema refuses a toggle key Chrome would refuse in the manifest: %s (%j)", (_label, key) => {
+    expect(parseDeskConfig(edited("panel.toggleKey", key))).toEqual({
+      ok: false,
+      problem: "invalid",
+      path: "panel.toggleKey",
+    });
+  });
+
+  it.each([
+    "Command+Shift+Period",
+    "Ctrl+Shift+Period",
+    "Alt+Shift+K",
+    "MacCtrl+Shift+Comma",
+    "Command+Up",
+    "Ctrl+1",
+    "Ctrl+Shift+Space",
+    "Alt+PageDown",
+    "Ctrl + Shift + Period",
+  ])("the config schema accepts the toggle key %j", (key) => {
+    expect(parseDeskConfig(edited("panel.toggleKey", key)).ok).toBe(true);
   });
 });

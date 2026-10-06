@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { findInstallHooks, unreviewedInstallHooks } from "../scripts/lib/install-scripts.mjs";
+import { findInstallHooks, lockedInstallHooks, unreviewedInstallHooks } from "../scripts/lib/install-scripts.mjs";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("../scripts/check-install-scripts.mjs", import.meta.url));
@@ -23,6 +23,14 @@ async function checkout(packages: Array<{ dir: string; manifest: Manifest; gyp?:
     await writeFile(join(dir, "package.json"), JSON.stringify(pkg.manifest));
     if (pkg.gyp) await writeFile(join(dir, "binding.gyp"), "{}");
   }
+  return root;
+}
+
+/** A checkout whose package-lock.json lists packages this platform did not install. */
+async function lockedCheckout(packages: Record<string, Record<string, unknown>>, allowed = {}) {
+  const root = await checkout([], allowed);
+  const lock = { name: "x", lockfileVersion: 3, requires: true, packages: { "": { name: "x" }, ...packages } };
+  await writeFile(join(root, "package-lock.json"), JSON.stringify(lock));
   return root;
 }
 
@@ -79,5 +87,42 @@ describe("lint:install-scripts", () => {
     ]);
 
     expect(await findInstallHooks(root)).toEqual([]);
+  });
+
+  it("lint:install-scripts fails on a locked package with an install script that this platform did not install", async () => {
+    const root = await lockedCheckout({
+      "node_modules/fsevents": { version: "2.3.3", hasInstallScript: true, optional: true, os: ["darwin"] },
+    });
+
+    const result = await lint(root);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("fsevents@2.3.3");
+  });
+
+  it.each([
+    ["a locked package", "node_modules/fsevents", { version: "2.3.3" }, "fsevents@2.3.3"],
+    ["a scoped locked package", "node_modules/@esbuild/linux-arm64", { version: "0.28.2" }, "@esbuild/linux-arm64@0.28.2"],
+    ["a nested locked package", "node_modules/a/node_modules/b", { version: "1.0.0" }, "b@1.0.0"],
+    ["an aliased locked package under its real name", "node_modules/alias", { name: "real", version: "1.0.0" }, "real@1.0.0"],
+  ])("lint:install-scripts finds %s marked hasInstallScript in the lockfile", async (_label, path, entry, id) => {
+    const root = await lockedCheckout({ [path]: { ...entry, hasInstallScript: true } });
+
+    expect(await lockedInstallHooks(root)).toEqual([{ id, hooks: ["install script (package-lock)"], path }]);
+  });
+
+  it("lint:install-scripts ignores locked packages the lockfile does not mark hasInstallScript", async () => {
+    const root = await lockedCheckout({ "node_modules/plain": { version: "1.0.0" } });
+
+    expect(await lockedInstallHooks(root)).toEqual([]);
+  });
+
+  it("lint:install-scripts passes a locked package that was reviewed at its version", async () => {
+    const root = await lockedCheckout(
+      { "node_modules/fsevents": { version: "2.3.3", hasInstallScript: true } },
+      { "fsevents@2.3.3": "reviewed: ships a prebuilt binary" },
+    );
+
+    expect((await lint(root)).code).toBe(0);
   });
 });

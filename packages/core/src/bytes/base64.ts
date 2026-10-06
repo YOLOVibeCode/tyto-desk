@@ -3,8 +3,9 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
 const VALUES = new Map<string, number>([...ALPHABET].map((char, value) => [char, value]));
 
 /**
- * Strict RFC 4648 base64, as Chrome reads a manifest `key`: the standard alphabet, padding to a multiple of four,
- * no whitespace. Returns `null` for anything else.
+ * Strict base64 (RFC 4648 §4): the standard alphabet, padding to a multiple of four, no whitespace. Returns `null` for
+ * anything else. Like Chrome's decoder (modp_b64), it ignores the unused bits of the last character, which RFC 4648
+ * §3.5 lets a decoder refuse, so `QQ==` and `QR==` both decode to `A`: lenient there, exactly as Chrome is.
  */
 export function base64Decode(text: string): Uint8Array | null {
   if (text.length % 4 !== 0) return null;

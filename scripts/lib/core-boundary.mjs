@@ -1,8 +1,11 @@
 /**
  * The @desk/core boundary (docs/IMPLEMENTATION.md §0): core source imports no Node builtin, no process, file, network,
- * PTY, terminal, browser-driver, Electron or LLM-SDK package, uses no Node global (Buffer, process, require, …), and no
- * Chrome extension API, so it runs unchanged inside the extension. Core tests run in Node and may use builtins, but
- * not those packages. The checks walk the TypeScript syntax tree, so comments and strings never count.
+ * PTY, terminal, browser-driver, Electron or LLM-SDK package, uses no Node global (Buffer, process, require, …), no
+ * browser or extension global (chrome, window, document, …), never names `globalThis` (a cast or an alias of it would
+ * reach all of those without a type error), never builds code from strings (eval, Function), and has no triple-slash
+ * reference, which would bring DOM or Node types back into core's compilation. So it runs unchanged inside the
+ * extension. Core tests run in Node and may use builtins, but not those packages. The checks walk the TypeScript syntax
+ * tree, so comments and strings never count.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
@@ -34,8 +37,27 @@ const PACKAGES = [
   /^node-fetch$/,
 ];
 
-/** Platform APIs core never touches: they are what adapters are for. */
-const PLATFORM_GLOBALS = new Set(["WebSocket", "fetch", "XMLHttpRequest", "EventSource"]);
+/**
+ * Platform and browser globals core never touches: they are what adapters are for. Their names are reserved in core
+ * source, so a local `chrome` (the config section is reached as `config.chrome`, a property) cannot hide the real one.
+ */
+const PLATFORM_GLOBALS = new Set([
+  "WebSocket",
+  "fetch",
+  "XMLHttpRequest",
+  "EventSource",
+  "chrome",
+  "browser",
+  "window",
+  "self",
+  "document",
+  "navigator",
+  "location",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "crypto",
+]);
 
 /** Node-only globals; core would not run in Chrome with them. */
 const NODE_GLOBALS = new Set([
@@ -49,19 +71,11 @@ const NODE_GLOBALS = new Set([
   "clearImmediate",
 ]);
 
-/** Top-level `chrome.*` extension namespaces. Config's own `chrome` section uses none of these names. */
-const CHROME_APIS = new Set(
-  (
-    "accessibilityFeatures action alarms audio bookmarks browserAction browsingData certificateProvider commands " +
-    "contentSettings contextMenus cookies debugger declarativeContent declarativeNetRequest desktopCapture devtools " +
-    "documentScan dom downloads enterprise events extension extensionTypes fileBrowserHandler fileSystemProvider " +
-    "fontSettings gcm history i18n identity idle input instanceID loginState management notifications offscreen " +
-    "omnibox pageAction pageCapture permissions platformKeys power printerProvider printing printingMetrics privacy " +
-    "processes proxy readingList runtime scripting search sessions settingsPrivate sidePanel storage system systemLog " +
-    "tabCapture tabGroups tabs topSites tts ttsEngine types userScripts vpnProvider wallpaper " +
-    "webAuthenticationProxy webNavigation webRequest windows"
-  ).split(" "),
-);
+/**
+ * Globals core never names: `globalThis` (cast, aliased or destructured, it reaches every global above with no type
+ * error) and the two ways to run a string as code, which the extension's content security policy refuses anyway.
+ */
+const ESCAPE_GLOBALS = new Set(["globalThis", "eval", "Function"]);
 
 /** `globalThis.<name>` reaches these the long way round. */
 const GLOBAL_THIS_IMPORT = new Set(["chrome", "browser", "WebSocket", "fetch", "XMLHttpRequest"]);
@@ -115,11 +129,13 @@ export function checkCoreSource(text, file, scope = "src") {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind(file));
   /** @type {Violation[]} */
   const found = [];
-  /** @param {ts.Node} node @param {Rule} rule @param {string} detail */
-  const report = (node, rule, detail) => {
-    const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+  /** @param {number} position @param {Rule} rule @param {string} detail */
+  const reportAt = (position, rule, detail) => {
+    const { line } = source.getLineAndCharacterOfPosition(position);
     found.push({ file, line: line + 1, rule, detail });
   };
+  /** @param {ts.Node} node @param {Rule} rule @param {string} detail */
+  const report = (node, rule, detail) => reportAt(node.getStart(source), rule, detail);
   /** @param {ts.Node} node @param {ts.Expression | undefined} specifier */
   const checkSpecifier = (node, specifier) => {
     if (specifier && ts.isStringLiteralLike(specifier) && forbiddenModule(specifier.text, scope)) {
@@ -150,15 +166,19 @@ export function checkCoreSource(text, file, scope = "src") {
         else if (GLOBAL_THIS_IMPORT.has(member)) report(node, "import", `globalThis.${member}`);
         else if (NODE_GLOBALS.has(member)) report(node, "global", `globalThis.${member}`);
       }
-      if (ts.isIdentifier(target) && target.text === "chrome" && (member === null || CHROME_APIS.has(member))) {
-        report(node, "import", `chrome.${member ?? "[…]"}`);
-      }
     } else if (scope === "src" && ts.isIdentifier(node) && !isNamePosition(node)) {
-      if (NODE_GLOBALS.has(node.text)) report(node, "global", node.text);
+      if (NODE_GLOBALS.has(node.text) || ESCAPE_GLOBALS.has(node.text)) report(node, "global", node.text);
       if (PLATFORM_GLOBALS.has(node.text)) report(node, "import", node.text);
     }
     ts.forEachChild(node, visit);
   };
+  if (scope === "src") {
+    for (const ref of source.libReferenceDirectives) reportAt(ref.pos, "import", `/// <reference lib="${ref.fileName}" />`);
+    for (const ref of source.typeReferenceDirectives) {
+      reportAt(ref.pos, "import", `/// <reference types="${ref.fileName}" />`);
+    }
+    for (const ref of source.referencedFiles) reportAt(ref.pos, "import", "/// <reference path=… />");
+  }
   visit(source);
   return found;
 }

@@ -31,7 +31,8 @@ laws, §19 slices, §20 anti-patterns, §22 decisions). Manual checks on the Mac
 
 - `@desk/core` imports nothing from `node:*`, `child_process`, `fs`, `net`, `http`, `WebSocket`, `node-pty`,
   `@xterm/*`, `chrome.*`, Electron, Playwright, Puppeteer, or vendor LLM SDKs, and uses no `Buffer`, `process`,
-  `require`, or `globalThis.chrome`.
+  `require`, `globalThis`, browser globals (`chrome`, `window`, `document`, …), `eval`, `Function`, or triple-slash
+  references.
 - Its tsconfig sets `"types": []` and `"lib": ["ES2023"]`. `npm run lint:imports` and a neutral-platform esbuild
   bundle test enforce the rest. The extension bundles core, so core must run inside Chrome.
 
@@ -41,8 +42,8 @@ laws, §19 slices, §20 anti-patterns, §22 decisions). Manual checks on the Mac
   `desk`. macOS-only behavior is `docs/CHECKLIST-macos.md`, which the operator runs.
 - Never touch the real `~/.desk`, `~/.agent-browser`, or any browser profile.
 - Every test run gets a fresh HOME, DESK_HOME and TMPDIR (`test/setup/global-setup.ts`), and fails if the real
-  `~/.desk` changed. Under Vitest, Node adapters refuse paths under the real home and ports 9222, 9229 and 9400–9899
-  (`@desk/node`), and `guiAllowed` is false.
+  `~/.desk` changed. Under Vitest, Node adapters refuse paths under the real home (by spelling and by identity) and
+  ports 9222, 9229 and 9400–9899 (`@desk/node`), and `guiAllowed` is false. No test listens beyond 127.0.0.1.
 
 ## Chrome law
 

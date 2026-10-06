@@ -45,12 +45,23 @@ describe("extensionIdFromKey", () => {
     },
   );
 
-  it.each(["", "dGVzdA", "dGVzdA=", "dGVz dA==", "dGVzdA==\n", "dGVzdA==dGVzdA==", "d=VzdA==", "%%%%"])(
-    "extensionIdFromKey refuses a key that is not canonical base64 (%j)",
-    (key) => {
-      expect(() => extensionIdFromKey(key)).toThrow(/manifest key/);
-    },
-  );
+  it.each([
+    "",
+    "dGVzdA",
+    "dGVzdA=",
+    "dGVz dA==",
+    "dGVzdA==\n",
+    "dGVzdA==dGVzdA==",
+    "d=VzdA==",
+    "%%%%",
+    `${"-----BEGIN"} PUBLIC KEY-----\n${vectors[0]?.key ?? ""}\n-----END PUBLIC KEY-----`,
+  ])("extensionIdFromKey refuses a key that is not strict base64, PEM armor included (%j)", (key) => {
+    expect(() => extensionIdFromKey(key)).toThrow(/not strict base64/);
+  });
+
+  it("extensionIdFromKey ignores the unused bits of the last character, as Chrome's base64 decoder does", () => {
+    expect(extensionIdFromKey("QR==")).toBe(extensionIdFromKey("QQ=="));
+  });
 });
 
 describe("sha256", () => {

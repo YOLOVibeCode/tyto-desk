@@ -79,6 +79,23 @@ describe("core purity", () => {
     ['const fs = require("fs");', "global"],
     ["const dir = __dirname;", "global"],
     ["setImmediate(() => undefined);", "global"],
+    ["(globalThis as unknown as { process: { env: Record<string, string> } }).process.env.HOME;", "global"],
+    ["const g = globalThis; g.chrome;", "global"],
+    ["const { Buffer: B } = globalThis as unknown as { Buffer: unknown };", "global"],
+    ["const c = chrome; c.runtime;", "import"],
+    ["declare const chrome: { runtime: { id: string } }; chrome.runtime.id;", "import"],
+    ["const { chrome } = settings;", "import"],
+    ["const href = window.location.href;", "import"],
+    ['self.postMessage("x");', "import"],
+    ['document.title = "x";', "import"],
+    ['localStorage.getItem("x");', "import"],
+    ["const agent = navigator.userAgent;", "import"],
+    ["const bytes = crypto.getRandomValues(new Uint8Array(4));", "import"],
+    ['eval("1 + 1");', "global"],
+    ['const f = new Function("return 1");', "global"],
+    ['/// <reference lib="dom" />\nexport const x = 1;', "import"],
+    ['/// <reference types="node" />\nexport const x = 1;', "import"],
+    ['/// <reference path="./globals.d.ts" />\nexport const x = 1;', "import"],
   ])("the core boundary lint flags %s", (source, rule) => {
     expect(checkCoreSource(source, "fixture.ts").map((v) => v.rule)).toContain(rule);
   });
@@ -87,6 +104,8 @@ describe("core purity", () => {
     '// process.env, Buffer and require("fs") in a comment',
     'const text = "process.env, chrome.runtime and node:fs in a string";',
     "const ChromeProcess = 1; const pane = { process: 1, chrome: 2 }; pane.process; pane.chrome;",
+    "const config = { chrome: { port: 9417 } }; config.chrome.port;",
+    "type Settings = { readonly chrome: { readonly port: number } }; type Port = Settings['chrome']['port'];",
     'import { sha256 } from "./bytes/sha256.ts";',
     'import type { PortProbe } from "../ports/port-probe.ts";',
   ])("the core boundary lint passes %s", (source) => {

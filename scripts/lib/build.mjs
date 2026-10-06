@@ -29,21 +29,33 @@ export async function buildBundles(root) {
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/** @param {string} text */
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Forbidden Chrome switches spelled as arguments (`--name` or `-name`, any value) in a bundle, plus
- * `--remote-debugging-port=0`. Core keeps its own list without dashes, so the list itself never matches.
+ * Forbidden Chrome switches spelled as arguments (`--name` or `-name`, any value) in a bundle, the value-specific ones
+ * (`--name=…value…` in a comma-separated list), and `--remote-debugging-port=0`. Core keeps its lists without dashes,
+ * so the lists themselves never match.
  * @param {Bundle[]} bundles
  * @param {readonly string[]} names
+ * @param {readonly { name: string; values: readonly string[] }[]} [valued]
  * @returns {{ path: string; flag: string }[]}
  */
-export function spelledForbiddenSwitches(bundles, names) {
+export function spelledForbiddenSwitches(bundles, names, valued = []) {
   /** @type {{ path: string; flag: string }[]} */
   const found = [];
   for (const bundle of bundles) {
     for (const name of names) {
-      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (new RegExp(`(?<![A-Za-z0-9-])--?${escaped}(?![A-Za-z0-9-])`, "i").test(bundle.text)) {
+      if (new RegExp(`(?<![A-Za-z0-9-])--?${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i").test(bundle.text)) {
         found.push({ path: bundle.path, flag: `--${name}` });
+      }
+    }
+    for (const { name, values } of valued) {
+      for (const value of values) {
+        const spelling = `(?<![A-Za-z0-9-])--?${escapeRegExp(name)}=[^\\s"'\`]*?(?<![A-Za-z0-9-])${escapeRegExp(value)}(?![A-Za-z0-9-])`;
+        if (new RegExp(spelling, "i").test(bundle.text)) found.push({ path: bundle.path, flag: `--${name}=${value}` });
       }
     }
     if (/--remote-debugging-port=0(?![0-9])/.test(bundle.text)) {

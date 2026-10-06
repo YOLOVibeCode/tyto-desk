@@ -14,6 +14,11 @@ const parent: Env = {
   LC_ALL: "en_US.UTF-8",
   LC_CTYPE: "UTF-8",
   LC_MESSAGES: "C",
+  LC_TIME: "en_GB.UTF-8",
+  LC_NUMERIC: "utf8-fake0123456789",
+  LC_TERMINAL: "iTerm2",
+  LC_TERMINAL_VERSION: "3.5.0",
+  LC_API_TOKEN: "utf8-fake0123456789",
   PATH: "/Users/alex/.nvm/versions/node/v26.10.0/bin:/opt/homebrew/bin:/usr/bin:/bin",
   TERM: "dumb",
   ANTHROPIC_API_KEY: "fake",
@@ -63,9 +68,24 @@ describe("shellEnv", () => {
     "LANG",
     "LC_ALL",
     "LC_CTYPE",
+    "LC_TIME",
   ])("shellEnv keeps %s", (name) => {
     expect(env()[name]).toBe(parent[name]);
   });
+
+  it.each(["UTF-8", "utf8", "en_US.UTF-8", "C.UTF-8", "es_419.UTF-8", "sr_RS.utf8@latin", "de_DE.utf-8"])(
+    "shellEnv keeps LC_CTYPE=%s, a UTF-8 locale",
+    (value) => {
+      expect(env({ LC_CTYPE: value }).LC_CTYPE).toBe(value);
+    },
+  );
+
+  it.each(["utf8-fake0123456789", "en_US.UTF-8; touch /tmp/x", "UTF-8x", "en_US.ISO8859-1", "C", ""])(
+    "shellEnv drops LC_CTYPE=%j, which is not a UTF-8 locale",
+    (value) => {
+      expect(env({ LC_CTYPE: value })).not.toHaveProperty("LC_CTYPE");
+    },
+  );
 
   it.each([
     "ANTHROPIC_API_KEY",
@@ -91,6 +111,10 @@ describe("shellEnv", () => {
     "DYLD_INSERT_LIBRARIES",
     "LD_PRELOAD",
     "LC_MESSAGES",
+    "LC_NUMERIC",
+    "LC_TERMINAL",
+    "LC_TERMINAL_VERSION",
+    "LC_API_TOKEN",
   ])("shellEnv drops %s", (name) => {
     expect(env()).not.toHaveProperty(name);
   });
@@ -145,6 +169,7 @@ describe("shellEnv", () => {
         "LANG",
         "LC_ALL",
         "LC_CTYPE",
+        "LC_TIME",
         "LOGNAME",
         "PATH",
         "SHELL",

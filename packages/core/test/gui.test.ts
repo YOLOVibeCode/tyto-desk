@@ -13,6 +13,11 @@ describe("guiAllowed", () => {
     { label: "the container under Vitest", env: { DESK_IN_CONTAINER: "1", VITEST: "true" }, platform: "linux", allowed: true },
     { label: "DESK_IN_CONTAINER=1 on a Mac", env: { DESK_IN_CONTAINER: "1", VITEST: "true" }, platform: "darwin", allowed: false },
     { label: "DESK_NO_GUI=1 in the container", env: { DESK_IN_CONTAINER: "1", DESK_NO_GUI: "1" }, platform: "linux", allowed: false },
+    { label: "DESK_NO_GUI=true and DESK_ALLOW_GUI=1", env: { DESK_ALLOW_GUI: "1", DESK_NO_GUI: "true" }, platform: "darwin", allowed: false },
+    { label: "DESK_NO_GUI=yes and DESK_ALLOW_GUI=1", env: { DESK_ALLOW_GUI: "1", DESK_NO_GUI: "yes" }, platform: "darwin", allowed: false },
+    { label: "DESK_NO_GUI=true in the container", env: { DESK_IN_CONTAINER: "1", DESK_NO_GUI: "true" }, platform: "linux", allowed: false },
+    { label: "DESK_NO_GUI=0, which turns the kill switch off", env: { DESK_ALLOW_GUI: "1", DESK_NO_GUI: "0" }, platform: "darwin", allowed: true },
+    { label: "an empty DESK_NO_GUI", env: { DESK_ALLOW_GUI: "1", DESK_NO_GUI: "" }, platform: "darwin", allowed: true },
     { label: "Linux under Vitest", env: { VITEST: "true" }, platform: "linux", allowed: false },
   ])(
     "guiAllowed is true only with DESK_ALLOW_GUI=1 outside tests, or inside the Linux test container ($label)",

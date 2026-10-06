@@ -27,18 +27,24 @@ is the wrong port.
 
 **Pure, browser-safe core.** `@desk/core` imports nothing from `node:*`, `child_process`, `fs`, `net`, `http`,
 `WebSocket`, `node-pty`, `@xterm/*`, `chrome.*`, Electron, Playwright, Puppeteer, or vendor LLM SDKs. Its tsconfig sets
-`"types": []` and `"lib": ["ES2023"]` (no DOM, no Node globals). `lint:imports` also rejects `Buffer`, `process.`,
-`require(`, and `globalThis.chrome`, and a test bundles core with esbuild `platform: "neutral"` and fails on any Node
-builtin. The extension bundles core, so core must run inside Chrome.
+`"types": []` and `"lib": ["ES2023"]` (no DOM, no Node globals). `lint:imports` also rejects `Buffer`, `process`,
+`require`, any use of `globalThis` (a cast or an alias of it reaches every global without a type error), browser and
+extension globals (`chrome`, `window`, `self`, `document`, `navigator`, `localStorage`, `crypto`, …), `eval`,
+`Function`, and triple-slash references (`/// <reference lib="dom" />` would bring DOM types back); a test bundles core
+with esbuild `platform: "neutral"` and fails on any Node builtin. The extension bundles core, so core must run inside
+Chrome.
 
 **Nothing on the operator's screen, nothing in the operator's `~/.desk`.**
-- GUI guard, core `guiAllowed(env, platform)`: false when `DESK_NO_GUI=1`; true inside the test container (Linux and
-  `DESK_IN_CONTAINER=1`); false whenever `VITEST` is set; otherwise true only with `DESK_ALLOW_GUI=1`, which only the
-  installed `desk` launcher sets. `ChromeProcess`, `LaunchAgent`, and the Desk.app writer check it.
+- GUI guard, core `guiAllowed(env, platform)`: false when `DESK_NO_GUI` is set to anything but empty or `0` (so
+  `true` or `yes` also fail closed); true inside the test container (Linux and `DESK_IN_CONTAINER=1`); false whenever
+  `VITEST` is set; otherwise true only with `DESK_ALLOW_GUI=1`, which only the installed `desk` launcher sets.
+  `ChromeProcess`, `LaunchAgent`, and the Desk.app writer check it.
 - Test isolation: a Vitest `globalSetup` gives every run a fresh `HOME`, `DESK_HOME`, and `TMPDIR`. Node adapters take
-  explicit roots and, under `VITEST`, refuse paths under the real home directory (captured before the override) and
-  connections to ports 9222, 9229, and 9400–9899. Lock tests signal only pids they spawned. A meta-test checks that
-  the real `~/.desk` mtimes did not change (its `logs/` aside, D29).
+  explicit roots and, under `VITEST`, refuse relative paths, paths with a `..` segment, paths under the real home
+  directory (captured before the override; judged by spelling, after resolving symlinks, and by file identity, so the
+  macOS `/System/Volumes/Data` firmlink cannot reach it), and connections to ports 9222, 9229, and 9400–9899. Lock
+  tests signal only pids they spawned. A meta-test checks that the real `~/.desk` did not change: every entry's kind,
+  mode, size, and timestamps, directories and `logs/` included, before and after the suite (D29).
 - Agents developing Desk never run the installed `desk`. macOS-only behavior is MANUAL-CHECKS.md, run by the operator.
 
 **Chrome law.** Desk starts the installed Chrome only through `ChromeProcess`, with arguments from
@@ -115,10 +121,13 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 **Supply chain.**
 - `.npmrc` sets `ignore-scripts=true`, and CI runs `npm ci --ignore-scripts`: npm 11.19.1 runs every dependency's
   install scripts unless the package is explicitly denied, and Node 22's npm ignores `allowScripts` [CR, RF].
-- `lint:install-scripts` fails when an installed package declares `preinstall`, `install`, or `postinstall` and is not
-  in `scripts/allowed-install-scripts.json`, keyed by exact version (v1 lists only `esbuild@0.28.2`, whose
-  postinstall merely verifies its platform binary: esbuild and the node-pty package work through their platform
-  optional dependencies; checked in slice 1a, D28). CI also runs `npm audit signatures`.
+- `lint:install-scripts` fails when an installed package declares `preinstall`, `install`, or `postinstall` (or ships
+  a `binding.gyp`), or `package-lock.json` marks a package `hasInstallScript`, and that package is not in
+  `scripts/allowed-install-scripts.json`, keyed by exact version. The lockfile matters because an optional package for
+  another platform (fsevents on Linux CI, a linux-arm64 build on the Mac) is never installed where the lint runs. v1
+  lists `esbuild@0.28.2`, whose postinstall merely verifies its platform binary, and `fsevents@2.3.3`, flagged by
+  registry metadata only (esbuild and the node-pty package work through their platform optional dependencies; checked
+  in slice 1a, D28). CI also runs `npm audit signatures`.
 - node-pty (settled in slice 1b): Microsoft's `node-pty@1.2.0-beta.15` if its tarball has darwin-arm64 and
   linux-arm64 prebuilds with an executable `spawn-helper`; otherwise `@lydell/node-pty@1.2.0-beta.15` with its
   platform packages pinned by integrity. Never node-pty 1.1.0 as shipped (`spawn-helper` mode 644, no Linux prebuilds)
@@ -140,7 +149,7 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 | `prompter.ts` | `confirm(question)`, `choose(question, items)`; refuses without an interactive TTY | cli |
 | `process-info.ts` | `alive(pid)`, `ttyOf(pid)`, `cwdOf(pid)`, `childrenOf(pid)`; never reads environments | node: `ps`, `lsof` (macOS), `/proc` (Linux); argv, 3 s |
 | `listener-info.ts` | `listenerPid(port)` → `pid \| null`; `image(pid)` → `{exe, args} \| null` | node: `lsof -nP -iTCP@127.0.0.1:<port> -sTCP:LISTEN -Fp`, `ps -o comm=,args=` |
-| `port-probe.ts` | `isFree(port)` | node (`node:net`, 127.0.0.1) |
+| `port-probe.ts` | `isFree(port)` | node (`node:net`: busy when a 127.0.0.1 connect is accepted, then free only if a 127.0.0.1 bind succeeds; D32) |
 | `login-shell.ts` | `passwdShell()`; `exportedNames(signal)` → variable names only | node |
 | `tmux.ts` | `serverRunning()`, `clients()` → `{tty, session}[]`, `hasSession(name)`, `updateEnvironment()` → names, `appendUpdateEnvironment(names)`; never `show-environment` | node (argv, 3 s) |
 | `code-signing.ts` | `teamId(path)` → `string \| null`; `adHocSign(bundle, identifier)` | node (`codesign` argv; Linux: `null` and no-op) |
@@ -259,17 +268,21 @@ Every log line is a `LogEvent`, a closed union in core whose string fields are e
 
 | Argument | Why |
 |---|---|
-| `--user-data-dir=<config.chrome.userDataDir>` | A dedicated profile; branded Chrome refuses the debugging port on its default directory [RC]. `chromeArgs` compares real paths and refuses any directory under `~/Library/Application Support/Google/Chrome` |
+| `--user-data-dir=<config.chrome.userDataDir>` | A dedicated profile; branded Chrome refuses the debugging port on its default directory [RC]. `chromeArgs` checks both the configured and the real path (absolute, with `.`, `..` and repeated slashes resolved, any letter case) and refuses any directory under a Chrome channel's default directory (`~/Library/Application Support/Google/Chrome`, `Chrome Beta`, `Chrome Dev`, `Chrome Canary`; on macOS also spelled through `/System/Volumes/Data`, which `realpath` keeps). It refuses to judge without that list |
 | `--remote-debugging-port=<config.chrome.port>` | Fixed and stored. Port 0 sets `navigator.webdriver` and is the only case that writes DevToolsActivePort [RC, LAB, VMLAB] |
 | `--no-first-run`, `--no-default-browser-check` | No first-run UI; present in every probe, webdriver stayed false [RC, LAB] |
 | `--restore-last-session`, `--hide-crash-restore-bubble` | Every launch. Tabs, back history, sessionStorage, and session cookies come back while `session.restore_on_startup` keeps its default; after a crash the tabs come back with no bubble [LAB D-close-RLS, D-kill-late-RLS-HB; VMLAB `chrome-default-kill-late-rls`] |
 
 Forbidden (core refuses them, also in `extraArgs`; a test enforces the list, and a build test asserts that no
-production module contains them): `--remote-debugging-pipe`, `--remote-debugging-port=0`, `--enable-automation`,
-`--headless` in any form, `--remote-allow-origins`, `--remote-debugging-address`, `--load-extension` (branded Chrome
-ignores it anyway [RC]), `--use-mock-keychain`, `--no-sandbox` (the VM ran Chrome sandboxed under the lab's seccomp
-profile, so Desk has no path that needs it [VMLAB]), `--disable-web-security`, and a user-data-dir under Chrome's
-default directory.
+production module contains them): `--remote-debugging-pipe` and `--remote-debugging-io-pipes`,
+`--remote-debugging-port=0`, `--enable-automation`, `--enable-blink-features` with `AutomationControlled` in its list
+(it sets `navigator.webdriver` on its own), `--headless` in any form, `--remote-allow-origins`,
+`--remote-debugging-address`, `--load-extension` (branded Chrome ignores it anyway [RC]), `--use-mock-keychain` and its
+Linux counterpart `--password-store=basic`, `--no-sandbox` (the VM ran Chrome sandboxed under the lab's seccomp
+profile, so Desk has no path that needs it [VMLAB]) and the other sandbox switches (`--disable-gpu-sandbox`,
+`--disable-setuid-sandbox`, `--no-zygote`), `--disable-site-isolation-trials`, `--disable-web-security`,
+`--use-fake-ui-for-media-stream` (camera and microphone without asking), and a user-data-dir under Chrome's default
+directory.
 
 **First-run seed** (only when `Default/Preferences` does not exist; both keys are unprotected, honored, and not
 syncable [RC; source `side_panel_prefs.cc:37-40`]):
@@ -426,7 +439,7 @@ missing, or Desk not running · 70 internal (an extension id mismatch, or loadin
 | Environment | Rule |
 |---|---|
 | `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `SSH_AUTH_SOCK`, `__CF_USER_TEXT_ENCODING` | kept |
-| `LANG`, `LC_*` | kept when UTF-8; `LANG=en_US.UTF-8` when no UTF-8 locale is set (tmux needs one [RF]) |
+| `LANG` and the locale categories (`LC_ALL`, `LC_CTYPE`, `LC_COLLATE`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, and glibc's `LC_ADDRESS`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_NAME`, `LC_PAPER`, `LC_TELEPHONE`) | kept when the value is a UTF-8 locale (`UTF-8`, `en_US.UTF-8`, `C.UTF-8`, `sr_RS.utf8@latin`); `LANG=en_US.UTF-8` when no UTF-8 locale is set (tmux needs one [RF]). Any other `LC_*` name (`LC_TERMINAL`) is dropped |
 | `PATH` | `/usr/bin:/bin:/usr/sbin:/sbin`; the login shell's `path_helper` and dotfiles build the rest [RF] |
 | `TERM=xterm-256color`, `COLORTERM=truecolor`, `CLICOLOR=1`, `TERM_PROGRAM=Desk`, `TERM_PROGRAM_VERSION` | set (YOLOTerm `env-policy.json`) |
 | `AGENT_BROWSER_CONFIG`, `AGENT_BROWSER_SESSION=desk-<pane>`, `DESK_CDP_URL` (guarded), `DESK_PANE` | set only when the agent-variable gate allows (below) |
@@ -590,7 +603,10 @@ The tmux binary is `config.terminal.tmux`, else the first of `/opt/homebrew/bin/
 - Every message from the host passes core's codecs; unknown types are dropped.
 - Chrome loads the extension over CDP at every start and removes it at the next [RC], so the extension keeps no
   durable state: `chrome.storage` is never used; layout, ui settings, and the pause state live in `~/.desk` through
-  the daemon; the toggle key lives in `config.json` and is rendered into the manifest's `suggested_key`.
+  the daemon; the toggle key lives in `config.json` and is rendered into the manifest's `suggested_key`. The config
+  schema accepts only shortcuts Chrome's manifest parser accepts (one key; Ctrl, Alt, Command or MacCtrl, with Shift
+  only beside them, never Alt with Ctrl or Command; no media keys), so a typo is exit 65 rather than a manifest
+  Chrome refuses at launch.
 
 **Service worker.**
 - At start: `setPanelBehavior({openPanelOnActionClick: true})`; `connectNative` through `HostConnector`, which keeps
@@ -800,7 +816,10 @@ prefix can still carry one; SPEC §6.1 accepts that, and §22 D22 lists the miti
 ## 12. Guarded endpoint (`packages/gateway`, in `desk watch`)
 
 - Listens on `127.0.0.1:<gateway.port>` only. `lint:listen` fails on any `listen()` in `packages/` that does not name
-  `127.0.0.1` or a socket path (Node binds every interface when the host is omitted).
+  `127.0.0.1` or a socket path (Node binds every interface when the host is omitted): the host must be the literal
+  `"127.0.0.1"`; a socket path is a string literal Node reads as a path, or `{ path }` whose type is always a string
+  and with no `port` beside it (Node prefers the port); a spread in the options, or a positional string that is not a
+  literal (Node reads `"9583"` as a port), fails (D30).
 - `core/net/http-guard.ts` `httpGuard(host, origin)`, used by every Desk listener: any `Origin` header → 403, on
   upgrades and plain requests; a `Host` other than `127.0.0.1:<port>` or `localhost:<port>` → 500 (Chrome's own rules
   [ST, SP]). No CORS headers. `/json/new` answers only `PUT`.
@@ -989,7 +1008,9 @@ Consent and incident handling: SPEC §6.3 and §6.5.
 
 §0 states the rules. Tests: `guiAllowed is true only with DESK_ALLOW_GUI=1 outside tests, or inside the Linux test
 container` (a table); `the test setup gives each run a fresh HOME, DESK_HOME and TMPDIR`; `adapters refuse the real
-home directory and Desk ports under Vitest`; `the real ~/.desk is unchanged after the suite`.
+home directory and Desk ports under Vitest`; `the real ~/.desk is unchanged after the suite`, backed by a test that
+runs a child suite under the real global setup with a stand-in home and checks that its teardown fails the run when a
+test wrote into that `~/.desk`.
 
 ### 17.3 The live container
 
@@ -1445,7 +1466,9 @@ sections above; these entries record choices, deviations, and rejections.
 | D25 | `SystemInfo.getProcessInfo`, focused-window guessing over CDP, and `run/chrome.json` are dropped (accepts the review's simplification) | `ListenerInfo` verifies the port owner; the worker knows the focused window; `desk status` queries live state |
 | D26 | Crash relaunch and idle quit are on by default, with caps | Persistence is the first requirement; the port should not stay open behind a closed window; at most 2 relaunches in 10 minutes avoids a crash loop |
 | D27 | The visible screen first, then scrollback, only if slice 2b misses the show bar | A full 5,000-line snapshot is expected to fit the bar; the split adds protocol state |
-| D28 | `scripts/allowed-install-scripts.json` lists `esbuild@0.28.2` (slice 1a; the plan said empty) | esbuild declares `postinstall: node install.js`, so `lint:install-scripts` cannot pass with an empty list. The script only verifies and relinks the `@esbuild/<platform>` binary; under `ignore-scripts` the JS API finds that optional dependency anyway (the neutral bundle test and `npm run build` use it). Entries are keyed by exact version, so a bump forces a new review. Of the PTY candidates, `@lydell/node-pty@1.2.0-beta.15` declares no install script; Microsoft's `node-pty@1.2.0-beta.15` declares `install` and `postinstall` and would need an entry (slice 1b decides) |
-| D29 | The `~/.desk` meta-test skips `logs/` (slice 1a) | The operator develops Desk inside a running Desk, whose processes append to and rotate their logs during a test run. Every other entry must hold still, and the adapter guard refuses every path under the real home anyway |
-| D30 | `lint:listen` is real from slice 1a, and type-aware | `@desk/node`'s port probe already calls `listen()`. The TypeScript checker resolves each `.listen()` call and judges only Node's own `Server.listen`, so a port's `listen(onConnection)` (`MessageServer`) is not mistaken for one. Its slice 4a test sentence is written now |
+| D28 | `scripts/allowed-install-scripts.json` lists `esbuild@0.28.2` and `fsevents@2.3.3` (slice 1a; the plan said empty) | esbuild declares `postinstall: node install.js`, so `lint:install-scripts` cannot pass with an empty list. The script only verifies and relinks the `@esbuild/<platform>` binary; under `ignore-scripts` the JS API finds that optional dependency anyway (the neutral bundle test and `npm run build` use it). The lint also reads `package-lock.json`, whose `hasInstallScript` covers every platform: fsevents (a darwin-only optional dependency of vite and rollup) carries it from registry metadata alone, and its tarball ships a prebuilt `fsevents.node` with no `binding.gyp` or install hook. Entries are keyed by exact version, so a bump forces a new review. Of the PTY candidates, `@lydell/node-pty@1.2.0-beta.15` declares no install script; Microsoft's `node-pty@1.2.0-beta.15` declares `install` and `postinstall` and would need an entry (slice 1b decides) |
+| D29 | The `~/.desk` meta-test is strict in slice 1a: every entry, `logs/` included, with directory timestamps (the first 1a commit skipped `logs/`; the slice review reverted that). How it treats a running Desk's own writes is **open for the operator** to decide before the first slice that runs Desk processes (`InstanceLock`): (1) the suite refuses to run while `run/ptyd.lock` or `run/watch.lock` names a live pid, and the check stays strict; or (2) while such a holder lives, the files §4.1 says Desk rewrites at run time (`panes.json`, `layout.json`, `agent-browser.json`, `run/*.lock`, `run/quit.marker`, the logs and their rotations) compare by existence and mode only, and everything else strictly | No Desk process exists in slice 1a, so nothing but a test can write `~/.desk` during the suite, and a backstop that can only fail closed costs nothing. The `logs/` exception hid the directory `FileLogSink` will write to, and it would not have kept a running Desk from tripping the check anyway (it rewrites `panes.json` and the locks too). Directory timestamps catch a file a test created and removed during the run |
+| D30 | `lint:listen` is real from slice 1a, and type-aware | `@desk/node`'s port probe already calls `listen()`. The TypeScript checker resolves each `.listen()` call and judges only Node's own `Server.listen`, so a port's `listen(onConnection)` (`MessageServer`) is not mistaken for one. It mirrors Node's own argument handling: a numeric string is a port, a port beside a `path` wins, and a spread or a non-literal can carry anything, so a socket path goes in as `{ path }` with a type that is always a string. Its slice 4a test sentence is written now |
 | D31 | CI runs Node 22.22.2 and 26.10.0 exactly | The engines floor for Node 22, which catches APIs newer than the floor, and `.nvmrc`. A runner's cached 22.x can be older than the floor, which `engine-strict` refuses |
+| D32 | `NodePortProbe` connects to 127.0.0.1 before it binds there (slice 1a review) | macOS lets a 127.0.0.1 bind share a port another program holds on 0.0.0.0 or ::, so a bind alone called that port free, and Desk's Chrome or gateway would take the other program's loopback traffic. A loopback connect finds such a holder on every platform. Binding 0.0.0.0 to find out instead would be a listener beyond loopback (§20) and can raise the macOS firewall prompt, so neither the probe nor its tests ever listen beyond loopback: the test checks that the probe's connection reaches a 127.0.0.1 holder |
+| D33 | The NDJSON line codec lands in slice 1a, beside the native-messaging codec (slice 1a review) | §19 lists codecs for 1a and §2 names both; slice 1c's host relay already turns native messages into NDJSON lines with the 1 MiB cap. Both decoders work on bytes and never parse, copy what they keep (a caller may reuse its read buffer), deliver the messages that arrived before a refusal, and take linear time however the stream is chunked |

@@ -43,23 +43,67 @@ describe("native-messaging codec", () => {
       const decoder = new NativeFrameDecoder();
       const a = decoder.push(stream.subarray(0, cut));
       const b = decoder.push(stream.subarray(cut));
-      const frames = [...(a.ok ? a.frames : []), ...(b.ok ? b.frames : [])];
-      expect(frames).toEqual([first, second]);
+      expect([...a.frames, ...b.frames]).toEqual([first, second]);
     }
+  });
+
+  it("the native-messaging decoder delivers every frame before an oversized header, whatever the chunking", () => {
+    const first = bytes({ type: "in", pane: "p_k2m9q3x7ab", data: "exit\r" });
+    const second = bytes({ type: "close", pane: "p_k2m9q3x7ab" });
+    const stream = new Uint8Array([...frameOf(first), ...frameOf(second), ...header(2 * MiB)]);
+
+    for (let cut = 0; cut <= stream.length; cut += 1) {
+      const decoder = new NativeFrameDecoder();
+      const a = decoder.push(stream.subarray(0, cut));
+      const b = decoder.push(stream.subarray(cut));
+      expect([...a.frames, ...b.frames]).toEqual([first, second]);
+      expect(b).toMatchObject({ ok: false, size: 2 * MiB });
+    }
+  });
+
+  it("the native-messaging decoder copies what it keeps, so a caller may reuse its read buffer", () => {
+    const first = bytes({ type: "in", pane: "p_k2m9q3x7ab", data: "ls -la\r" });
+    const second = bytes({ type: "resize", pane: "p_k2m9q3x7ab", cols: 120, rows: 40 });
+    const stream = new Uint8Array([...frameOf(first), ...frameOf(second)]);
+    const readBuffer = new Uint8Array(16);
+    const decoder = new NativeFrameDecoder();
+    const frames: Uint8Array[] = [];
+
+    for (let at = 0; at < stream.length; at += readBuffer.length) {
+      const read = stream.subarray(at, at + readBuffer.length);
+      readBuffer.set(read);
+      frames.push(...decoder.push(readBuffer.subarray(0, read.length)).frames);
+    }
+
+    expect(frames).toEqual([first, second]);
+  });
+
+  it("the native-messaging decoder takes linear time for a frame that arrives one byte at a time", () => {
+    const payload = new Uint8Array(128 * 1024).fill(0x61);
+    const stream = frameOf(payload);
+    const decoder = new NativeFrameDecoder();
+    const frames: Uint8Array[] = [];
+
+    const started = performance.now();
+    for (let at = 0; at < stream.length; at += 1) frames.push(...decoder.push(stream.subarray(at, at + 1)).frames);
+    const elapsed = performance.now() - started;
+
+    expect(frames).toEqual([payload]);
+    expect(elapsed).toBeLessThan(2_000);
   });
 
   it("the native-messaging codec refuses a frame over 1 MiB", () => {
     const decoder = new NativeFrameDecoder();
 
     expect(NATIVE_FRAME_MAX).toBe(MiB);
-    expect(decoder.push(header(MiB + 1))).toEqual({ ok: false, size: MiB + 1 });
+    expect(decoder.push(header(MiB + 1))).toEqual({ ok: false, size: MiB + 1, frames: [] });
   });
 
   it("the native-messaging decoder stays refused after an oversized frame", () => {
     const decoder = new NativeFrameDecoder();
     decoder.push(header(2 * MiB));
 
-    expect(decoder.push(frameOf(bytes({ type: "list" })))).toEqual({ ok: false, size: 2 * MiB });
+    expect(decoder.push(frameOf(bytes({ type: "list" })))).toEqual({ ok: false, size: 2 * MiB, frames: [] });
   });
 
   it("the native-messaging codec accepts a frame of exactly 1 MiB", () => {

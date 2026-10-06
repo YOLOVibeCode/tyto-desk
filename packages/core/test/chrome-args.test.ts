@@ -8,8 +8,15 @@ function args(overrides: Partial<DeskConfig["chrome"]> = {}, userDataDirReal = c
   return chromeArgs({
     chrome: { ...chrome, ...overrides },
     userDataDirReal,
-    chromeDefaultDirsReal: [chromeDefault],
+    chromeDefaultDirsReal: chromeDefaultDirs("/Users/alex", "darwin"),
   });
+}
+
+/** Chrome's stable, Beta, Dev and Canary default directories under a macOS home. */
+function macChannels(home: string): string[] {
+  return ["Chrome", "Chrome Beta", "Chrome Dev", "Chrome Canary"].map(
+    (channel) => `${home}/Library/Application Support/Google/${channel}`,
+  );
 }
 
 describe("chromeArgs", () => {
@@ -69,9 +76,25 @@ describe("chromeArgs", () => {
     "-no-sandbox",
     "--disable-web-security",
     `--user-data-dir=${chromeDefault}`,
+    "--enable-blink-features=AutomationControlled",
+    "--enable-blink-features=CSSAnchorPositioning,automationcontrolled",
+    "--remote-debugging-io-pipes=3,4",
+    "--disable-gpu-sandbox",
+    "--disable-setuid-sandbox",
+    "--no-zygote",
+    "--disable-site-isolation-trials",
+    "--password-store=basic",
+    "--use-fake-ui-for-media-stream",
   ])("chromeArgs refuses %s, also from config extraArgs", (flag) => {
     expect(args({ extraArgs: ["--lang=en-US", flag] })).toMatchObject({ ok: false, refused: flag });
   });
+
+  it.each(["--enable-blink-features=CSSAnchorPositioning", "--password-store=gnome-libsecret"])(
+    "chromeArgs passes %s, whose value is not a forbidden one",
+    (flag) => {
+      expect(args({ extraArgs: [flag] }).ok).toBe(true);
+    },
+  );
 
   it.each([0, 9222, 9229, 9399, 9900])("chromeArgs refuses a stored port of %i", (port) => {
     expect(args({ port })).toEqual({
@@ -92,12 +115,52 @@ describe("chromeArgs", () => {
     ["Chrome's default directory itself", chromeDefault],
     ["a profile inside it", `${chromeDefault}/Desk`],
     ["the same directory in other letter case", "/Users/alex/Library/Application Support/google/chrome/Profile 1"],
-    ["a symlink that resolves into it", `${chromeDefault}/Default`],
+    ["its spelling through the Data volume", `/System/Volumes/Data${chromeDefault}/Default`],
+    ["Chrome Canary's default directory", "/Users/alex/Library/Application Support/Google/Chrome Canary"],
+    ["a path whose .. segment leads into it", "/Users/alex/Library/Application Support/Google/x/../Chrome"],
+    ["a path with a . segment", "/Users/alex/Library/Application Support/Google/./Chrome"],
+    ["a path with repeated slashes", "/Users/alex//Library/Application Support/Google/Chrome/Default"],
   ])("chromeArgs refuses a user-data-dir whose real path is under Chrome's default directory (%s)", (_label, real) => {
     expect(args({ userDataDir: "/Users/alex/DeskProfile" }, real)).toEqual({
       ok: false,
       reason: "default-profile",
       refused: "--user-data-dir=/Users/alex/DeskProfile",
+    });
+  });
+
+  it.each([
+    ["Chrome's default directory", chromeDefault],
+    ["its spelling through the Data volume", `/System/Volumes/Data${chromeDefault}`],
+  ])("chromeArgs refuses a configured user-data-dir under Chrome's default directory, whatever its real path (%s)", (_label, configured) => {
+    expect(args({ userDataDir: configured }, "/Users/alex/DeskProfile")).toEqual({
+      ok: false,
+      reason: "default-profile",
+      refused: `--user-data-dir=${configured}`,
+    });
+  });
+
+  it.each([
+    ["an empty configured path", "", "/Users/alex/DeskProfile"],
+    ["a relative configured path", "DeskProfile", "/Users/alex/DeskProfile"],
+    ["an empty real path", "/Users/alex/DeskProfile", ""],
+    ["a relative real path", "/Users/alex/DeskProfile", "DeskProfile"],
+    ["a NUL in the path", "/Users/alex/Desk\0Profile", "/Users/alex/DeskProfile"],
+  ])("chromeArgs refuses a user-data-dir that is not a plain absolute path (%s)", (_label, configured, real) => {
+    expect(args({ userDataDir: configured }, real)).toEqual({
+      ok: false,
+      reason: "profile-path",
+      refused: `--user-data-dir=${configured}`,
+    });
+  });
+
+  it.each([
+    ["no directories", []],
+    ["a relative directory", ["Library/Application Support/Google/Chrome"]],
+  ])("chromeArgs refuses to judge a user-data-dir without Chrome's default directories (%s)", (_label, dirs) => {
+    expect(chromeArgs({ chrome, userDataDirReal: chrome.userDataDir, chromeDefaultDirsReal: dirs })).toEqual({
+      ok: false,
+      reason: "default-dirs-unknown",
+      refused: `--user-data-dir=${chrome.userDataDir}`,
     });
   });
 
@@ -108,9 +171,22 @@ describe("chromeArgs", () => {
   });
 
   it.each([
-    ["darwin", "/Users/alex", ["/Users/alex/Library/Application Support/Google/Chrome"]],
-    ["linux", "/home/lab", ["/home/lab/.config/google-chrome"]],
-  ])("Chrome's default user-data directory on %s", (platform, home, dirs) => {
+    ["darwin", "/Users/alex", [...macChannels("/Users/alex"), ...macChannels("/System/Volumes/Data/Users/alex")]],
+    ["darwin", "/Users/alex/", [...macChannels("/Users/alex"), ...macChannels("/System/Volumes/Data/Users/alex")]],
+    [
+      "darwin",
+      "/System/Volumes/Data/Users/alex",
+      [...macChannels("/Users/alex"), ...macChannels("/System/Volumes/Data/Users/alex")],
+    ],
+    [
+      "linux",
+      "/home/lab",
+      ["google-chrome", "google-chrome-beta", "google-chrome-unstable", "google-chrome-canary"].map(
+        (channel) => `/home/lab/.config/${channel}`,
+      ),
+    ],
+    ["win32", "C:\\Users\\alex", []],
+  ])("Chrome's default user-data directories on %s for the home %s", (platform, home, dirs) => {
     expect(chromeDefaultDirs(home, platform)).toEqual(dirs);
   });
 });

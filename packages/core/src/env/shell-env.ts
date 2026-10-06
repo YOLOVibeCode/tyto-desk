@@ -9,7 +9,29 @@ const SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 /** tmux refuses to draw without a UTF-8 charset. */
 const FALLBACK_LANG = "en_US.UTF-8";
 
-const UTF8 = /utf-?8/i;
+/** `LANG` and the locale categories: POSIX's, plus glibc's for the Linux test container. No other `LC_*` name. */
+const LOCALE_VARIABLES = [
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_COLLATE",
+  "LC_MESSAGES",
+  "LC_MONETARY",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "LC_ADDRESS",
+  "LC_IDENTIFICATION",
+  "LC_MEASUREMENT",
+  "LC_NAME",
+  "LC_PAPER",
+  "LC_TELEPHONE",
+] as const;
+
+/**
+ * A UTF-8 locale and nothing else: `UTF-8` alone (macOS's usual `LC_CTYPE`), or a locale name with a UTF-8 codeset,
+ * such as `en_US.UTF-8`, `C.UTF-8`, `es_419.UTF-8` or `sr_RS.utf8@latin`.
+ */
+const UTF8_LOCALE = /^(?:utf-?8|[a-z]{1,8}(?:_[a-z0-9]{2,8}){0,2}\.utf-?8(?:@[a-z0-9]{1,16})?)$/i;
 
 /** The variables that decide the charset. */
 const CHARSET_VARIABLES = ["LC_ALL", "LC_CTYPE", "LANG"] as const;
@@ -34,14 +56,11 @@ export type ShellEnvInput = {
   agent: AgentVariables | null;
 };
 
-function isLocaleVariable(name: string): boolean {
-  return name === "LANG" || name.startsWith("LC_");
-}
-
 /**
  * The environment of a pane's login shell (docs/IMPLEMENTATION.md §7.1): an allowlist, never a blocklist. Everything
- * not named here is dropped, including API keys, `TMUX`, `ELECTRON_*`, `NODE_OPTIONS`, color overrides, and every
- * `AGENT_BROWSER_*` variable the parent had.
+ * not named here is dropped, including API keys, `TMUX`, `ELECTRON_*`, `NODE_OPTIONS`, color overrides, every
+ * `AGENT_BROWSER_*` variable the parent had, and any `LC_*` name that is not a locale category (`LC_TERMINAL`).
+ * Locale categories pass only with a UTF-8 locale as their value.
  */
 export function shellEnv(input: ShellEnvInput): Record<string, string> {
   const env: Record<string, string> = {};
@@ -49,8 +68,9 @@ export function shellEnv(input: ShellEnvInput): Record<string, string> {
     const value = input.parent[name];
     if (value !== undefined) env[name] = value;
   }
-  for (const [name, value] of Object.entries(input.parent)) {
-    if (value !== undefined && isLocaleVariable(name) && UTF8.test(value)) env[name] = value;
+  for (const name of LOCALE_VARIABLES) {
+    const value = input.parent[name];
+    if (value !== undefined && UTF8_LOCALE.test(value)) env[name] = value;
   }
   if (!CHARSET_VARIABLES.some((name) => env[name] !== undefined)) env.LANG = FALLBACK_LANG;
 

@@ -2,8 +2,12 @@
 # Enable once per clone: git config core.hooksPath .githooks
 set -e
 cd "$(git rev-parse --show-toplevel)"
+# Scans the index (what this commit holds), not the working tree.
 node scripts/check-secrets.mjs --staged
 node scripts/check-core-imports.mjs
 if command -v gitleaks >/dev/null 2>&1; then
   gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner
+else
+  echo "pre-commit: gitleaks is not installed, so only Desk's own secret scan ran on this commit." >&2
+  echo "pre-commit: install gitleaks (brew install gitleaks) before pushing; CI scans with it either way." >&2
 fi

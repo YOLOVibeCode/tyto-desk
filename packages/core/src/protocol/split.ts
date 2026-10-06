@@ -54,11 +54,12 @@ export function jsonStringBytes(text: string): number {
  * Splits terminal data so each part, written as a JSON string, takes at most `maxBytes` UTF-8 bytes. Parts end only
  * at code-point boundaries, and joining them gives `data` back. Counting encoded bytes matters because
  * JSON.stringify writes every control character, ESC included, as a 6-byte escape, and terminal output is full of
- * them. Empty data is one empty part.
+ * them. Empty data is one empty part. A budget that is not a finite number of at least 8 bytes is a programming error:
+ * NaN or Infinity would otherwise return the whole input as one part.
  */
 export function splitForWire(data: string, maxBytes: number = WIRE_DATA_MAX): string[] {
-  if (maxBytes < QUOTES + LARGEST_CODE_POINT) {
-    throw new RangeError(`splitForWire needs at least ${QUOTES + LARGEST_CODE_POINT} bytes per part`);
+  if (!Number.isFinite(maxBytes) || maxBytes < QUOTES + LARGEST_CODE_POINT) {
+    throw new RangeError(`splitForWire needs a finite budget of at least ${QUOTES + LARGEST_CODE_POINT} bytes per part`);
   }
   const parts: string[] = [];
   let start = 0;

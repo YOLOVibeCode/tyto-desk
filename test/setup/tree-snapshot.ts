@@ -1,12 +1,15 @@
 import { lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-/** What the ~/.desk check compares for one entry. Directories compare by kind and mode only: their own
- * timestamps change whenever an entry is added or removed, which is reported for that entry. */
+/**
+ * What the ~/.desk check compares for one entry: kind, mode, and timestamps; for files and links also the size.
+ * Directories carry their timestamps too, so a file that was created and removed again between two snapshots (a lock
+ * taken and released) still shows, as a change to its directory.
+ */
 type Stamp = string;
 
-/** Kind, mode and (for files) size and timestamps of every entry under `root`, keyed by relative path. Never
- * reads file contents. An absent root has no entries. */
+/** The stamp of every entry under `root`, keyed by relative path. Never reads file contents. An absent root has no
+ * entries. */
 export type TreeSnapshot = { root: string; entries: Record<string, Stamp> };
 
 function isMissing(err: unknown): boolean {
@@ -17,7 +20,7 @@ async function stampOf(path: string): Promise<Stamp | null> {
   try {
     const st = await lstat(path);
     const mode = (st.mode & 0o7777).toString(8);
-    if (st.isDirectory()) return `dir ${mode}`;
+    if (st.isDirectory()) return `dir ${mode} ${st.mtimeMs} ${st.ctimeMs}`;
     const kind = st.isSymbolicLink() ? "link" : st.isFile() ? "file" : "other";
     return `${kind} ${mode} ${st.size} ${st.mtimeMs} ${st.ctimeMs}`;
   } catch (err) {
@@ -26,8 +29,8 @@ async function stampOf(path: string): Promise<Stamp | null> {
   }
 }
 
-/** Snapshots `root` without following symlinks. Top-level names in `skip` are left out with their subtrees. */
-export async function snapshotTree(root: string, skip: readonly string[]): Promise<TreeSnapshot> {
+/** Snapshots every entry under `root`, `logs/` included, without following symlinks. */
+export async function snapshotTree(root: string): Promise<TreeSnapshot> {
   const entries: Record<string, Stamp> = {};
   const rootStamp = await stampOf(root);
   if (rootStamp === null) return { root, entries };
@@ -45,7 +48,6 @@ export async function snapshotTree(root: string, skip: readonly string[]): Promi
       throw err;
     }
     for (const name of names) {
-      if (rel === "" && skip.includes(name)) continue;
       const childRel = rel === "" ? name : `${rel}/${name}`;
       const stamp = await stampOf(join(root, childRel));
       if (stamp === null) continue;

@@ -40,8 +40,14 @@ tags = ["token"]
 
 [[rules]]
 id = "desk-google-session-cookie"
-description = "Google account session cookie values, which Desk never moves and nobody commits"
-regex = '''(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|\b(?:SAPISID|APISID|HSID|SSID|LSID|SID))\s*[=:]\s*['"]?[A-Za-z0-9_./+%\-]{20,}'''
+description = "Google account session cookie values, which Desk never moves and nobody commits (HSID and SSID are 17 characters)"
+regex = '''(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|\b(?:SAPISID|APISID|HSID|SSID|LSID|SID))\s*[=:]\s*['"]?[A-Za-z0-9_./+%\-]{16,}'''
+tags = ["cookie", "google"]
+
+[[rules]]
+id = "desk-google-session-cookie-json"
+description = "Google account session cookies in a JSON dump (CDP Storage.getCookies, a cookie export), in either key order"
+regex = '''"name"\s*:\s*"(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|SAPISID|APISID|HSID|SSID|LSID|SID)"[^{}]{0,500}?"value"\s*:\s*"[^"]{16,}"|"value"\s*:\s*"[^"]{16,}"[^{}]{0,500}?"name"\s*:\s*"(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|SAPISID|APISID|HSID|SSID|LSID|SID)"'''
 tags = ["cookie", "google"]
 
 [[rules]]

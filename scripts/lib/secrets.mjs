@@ -5,6 +5,9 @@
 
 /** @typedef {{ name: string; re: RegExp }} SecretPattern */
 
+/** Google account session cookie names (the values Desk never moves and nobody commits). */
+const GOOGLE_SESSION = String.raw`(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|SAPISID|APISID|HSID|SSID|LSID|SID)`;
+
 /** @type {SecretPattern[]} */
 export const PATTERNS = [
   { name: "private-key-block", re: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/g },
@@ -15,8 +18,19 @@ export const PATTERNS = [
   },
   { name: "cookie-value", re: /\b(?:Set-)?Cookie:\s*[^=\s;]+=[^;\s]{12,}/gi },
   {
+    // HSID and SSID values are 17 characters long.
     name: "google-session-cookie",
-    re: /(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|\bSAPISID|\bAPISID|\bHSID|\bSSID|\bLSID|\bSID)=[A-Za-z0-9_./+%-]{20,}/g,
+    re: /(?:__(?:Secure|Host)-[0-9A-Z]*PSID[A-Z]*|\bSAPISID|\bAPISID|\bHSID|\bSSID|\bLSID|\bSID)=[A-Za-z0-9_./+%-]{16,}/g,
+  },
+  {
+    // A JSON dump of cookies (CDP Storage.getCookies, a chrome.cookies export): name and value in one object, either
+    // order, with other fields between them.
+    name: "google-session-cookie-json",
+    re: new RegExp(
+      String.raw`"name"\s*:\s*"${GOOGLE_SESSION}"[^{}]{0,500}?"value"\s*:\s*"[^"]{16,}"` +
+        String.raw`|"value"\s*:\s*"[^"]{16,}"[^{}]{0,500}?"name"\s*:\s*"${GOOGLE_SESSION}"`,
+      "g",
+    ),
   },
   { name: "github-token", re: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})/g },
   { name: "slack-token", re: /\bxox[abposr]-[A-Za-z0-9-]{10,}/g },

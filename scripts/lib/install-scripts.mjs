@@ -1,7 +1,9 @@
 /**
- * Install scripts in the installed dependency tree (docs/IMPLEMENTATION.md §2 supply chain). `.npmrc` sets
- * ignore-scripts, so none of them runs; this finds every package that declares one, so each is reviewed (it must work
- * without its script) and recorded in scripts/allowed-install-scripts.json at its exact version.
+ * Install scripts in the dependency tree (docs/IMPLEMENTATION.md §2 supply chain). `.npmrc` sets ignore-scripts, so
+ * none of them runs; this finds every package that declares one, so each is reviewed (it must work without its script)
+ * and recorded in scripts/allowed-install-scripts.json at its exact version. It reads both the installed tree and
+ * package-lock.json, because an optional package for another platform (fsevents on Linux CI, a linux-arm64 build on
+ * the Mac) is never installed where the lint runs, and only the lockfile shows its script there.
  */
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -85,6 +87,51 @@ export async function findInstallHooks(root) {
   };
   await walk(join(root, "node_modules"));
   return found;
+}
+
+/**
+ * Every package `<root>/package-lock.json` marks `hasInstallScript` (npm sets it from the published manifest: an
+ * install hook, or a binding.gyp at publish time), on every platform, keyed by `name@version` like the installed ones.
+ * An aliased package is named as it was published. No lockfile, no hooks.
+ * @param {string} root
+ * @returns {Promise<InstallHook[]>}
+ */
+export async function lockedInstallHooks(root) {
+  let lock;
+  try {
+    lock = JSON.parse(await readFile(join(root, "package-lock.json"), "utf8"));
+  } catch (err) {
+    if (isMissing(err)) return [];
+    throw err;
+  }
+  const packages = typeof lock?.packages === "object" && lock.packages !== null ? lock.packages : {};
+  /** @type {InstallHook[]} */
+  const found = [];
+  for (const path of Object.keys(packages).sort()) {
+    const entry = packages[path];
+    if (path === "" || typeof entry !== "object" || entry === null || entry.hasInstallScript !== true) continue;
+    const at = path.lastIndexOf("node_modules/");
+    const name = typeof entry.name === "string" ? entry.name : at === -1 ? path : path.slice(at + "node_modules/".length);
+    found.push({ id: `${name}@${entry.version}`, hooks: ["install script (package-lock)"], path });
+  }
+  return found;
+}
+
+/**
+ * The installed and the locked hooks together, one entry per package path and version.
+ * @param {string} root
+ * @returns {Promise<InstallHook[]>}
+ */
+export async function allInstallHooks(root) {
+  /** @type {Map<string, InstallHook>} */
+  const merged = new Map();
+  for (const hook of [...(await findInstallHooks(root)), ...(await lockedInstallHooks(root))]) {
+    const key = `${hook.path}\0${hook.id}`;
+    const known = merged.get(key);
+    if (known === undefined) merged.set(key, { ...hook, hooks: [...hook.hooks] });
+    else known.hooks.push(...hook.hooks.filter((name) => !known.hooks.includes(name)));
+  }
+  return [...merged.values()];
 }
 
 /**

@@ -2,6 +2,7 @@ export { base64Decode } from "./bytes/base64.ts";
 export { sha256 } from "./bytes/sha256.ts";
 export {
   FORBIDDEN_CHROME_SWITCHES,
+  FORBIDDEN_CHROME_SWITCH_VALUES,
   chromeArgs,
   chromeDefaultDirs,
   type ChromeArgsInput,
@@ -34,6 +35,13 @@ export {
   type DecodeResult,
   type EncodeResult,
 } from "./protocol/native-messaging.ts";
+export {
+  NDJSON_LINE_MAX,
+  NdjsonLineDecoder,
+  encodeNdjsonLine,
+  type LineDecodeResult,
+  type LineEncodeResult,
+} from "./protocol/ndjson.ts";
 export { WIRE_DATA_MAX, WIRE_MESSAGE_MAX, jsonStringBytes, splitForWire } from "./protocol/split.ts";
 export { httpGuard, type HttpGuardRequest, type HttpGuardResult } from "./net/http-guard.ts";
 export type { ConfigStore, PortProbe, Random } from "./ports/index.ts";

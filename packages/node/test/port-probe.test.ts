@@ -1,4 +1,5 @@
-import { createServer, type Server } from "node:net";
+import { once } from "node:events";
+import { createServer, type Server, type Socket } from "node:net";
 import { describe, expect, it } from "vitest";
 import { NodePortProbe } from "../src/index.ts";
 
@@ -32,4 +33,20 @@ describe("NodePortProbe", () => {
 
     expect(await new NodePortProbe().isFree(port)).toBe(true);
   });
+
+  it("asks the port with a loopback connection, so a port another program holds on 0.0.0.0 or :: is busy too", async () => {
+    // macOS lets a 127.0.0.1 bind share a port another program holds on 0.0.0.0 or ::, so a bind alone would call it
+    // free. No test may listen beyond loopback (it could raise the macOS firewall prompt on the operator's screen), so
+    // this holds 127.0.0.1 and checks that the probe's connection reached the holder. A probe that never connects
+    // leaves `accepted` pending, and the test times out.
+    const { port, server } = await holdPort();
+    const accepted = once(server, "connection") as Promise<[Socket]>;
+
+    const free = await new NodePortProbe().isFree(port);
+    const [socket] = await accepted;
+    socket.destroy();
+    await release(server);
+
+    expect(free).toBe(false);
+  }, 5_000);
 });

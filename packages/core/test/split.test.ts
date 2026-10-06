@@ -68,6 +68,13 @@ describe("splitForWire", () => {
     expect(splitForWire("")).toEqual([""]);
   });
 
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 7, 0, -1])(
+    "splitForWire refuses a budget of %s bytes per part",
+    (maxBytes) => {
+      expect(() => splitForWire("\u001b[0m".repeat(100), maxBytes)).toThrow(RangeError);
+    },
+  );
+
   it("splitForWire leaves room for the rest of the message", () => {
     expect(WIRE_DATA_MAX).toBeLessThanOrEqual(WIRE_MESSAGE_MAX - KiB);
   });

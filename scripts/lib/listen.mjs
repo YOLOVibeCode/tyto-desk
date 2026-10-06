@@ -42,27 +42,68 @@ function isNodeServerListen(declaration) {
   return /[\\/]@types[\\/]node[\\/]/.test(declaration.getSourceFile().fileName);
 }
 
-/** @param {ts.CallExpression} call @param {ts.TypeChecker} checker */
-function namesLoopbackOrPath(call, checker) {
-  if (call.arguments.some((arg) => ts.isStringLiteralLike(arg) && arg.text === LOOPBACK)) return true;
-  const [first] = call.arguments;
-  if (first === undefined) return false;
-  if (ts.isObjectLiteralExpression(first)) {
-    return first.properties.some((property) => {
-      if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return false;
-      const key = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : null;
-      if (key === "path") return true;
-      return (
-        key === "host" &&
-        ts.isPropertyAssignment(property) &&
-        ts.isStringLiteralLike(property.initializer) &&
-        property.initializer.text === LOOPBACK
-      );
-    });
+/**
+ * Node's own test (`isPipeName` in lib/net.js): a positional string is a socket path only when `Number()` does not
+ * turn it into a port, so `"9583"`, `" 9583 "` and `""` are ports, which bind every interface without a host.
+ * @param {string} text
+ */
+function isPipeName(text) {
+  return !(Number(text) >= 0);
+}
+
+/**
+ * A string on every path the checker can see: no `undefined`, `null` or `any` in it. Needs `strictNullChecks`.
+ * @param {ts.Type} type
+ * @returns {boolean}
+ */
+function isDefinitelyString(type) {
+  if (type.isUnion()) return type.types.every(isDefinitelyString);
+  if (type.isIntersection()) return type.types.some(isDefinitelyString);
+  return (type.flags & ts.TypeFlags.StringLike) !== 0;
+}
+
+/**
+ * `listen({ … })`: a literal `host: "127.0.0.1"`, or a `path` that is always a string and no `port` (Node prefers the
+ * port to the path, and binds every interface when a port comes without a host). A spread, a method, an accessor or a
+ * computed key could set any of them out of sight, so each one fails the check.
+ * @param {ts.ObjectLiteralExpression} options
+ * @param {ts.TypeChecker} checker
+ */
+function optionsNameLoopbackOrPath(options, checker) {
+  /** @type {string | null} */
+  let host = null;
+  let hasPort = false;
+  /** @type {ts.Node | null} */
+  let path = null;
+  for (const property of options.properties) {
+    if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return false;
+    const key = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : null;
+    if (key === null) return false;
+    if (key === "host") {
+      host = ts.isPropertyAssignment(property) && ts.isStringLiteralLike(property.initializer) ? property.initializer.text : "";
+    } else if (key === "port") {
+      hasPort = true;
+    } else if (key === "path") {
+      path = ts.isPropertyAssignment(property) ? property.initializer : property.name;
+    }
   }
-  // listen(path): a string that is not a number. Node reads a numeric string as a port on every interface.
-  if (ts.isStringLiteralLike(first)) return !/^\d+$/.test(first.text);
-  return (checker.getTypeAtLocation(first).flags & ts.TypeFlags.StringLike) !== 0;
+  if (host === LOOPBACK) return true;
+  return path !== null && !hasPort && isDefinitelyString(checker.getTypeAtLocation(path));
+}
+
+/**
+ * Whether a Node `listen()` call binds 127.0.0.1 or a socket path: options as above; a positional string literal
+ * that Node reads as a path; or a port whose host, the second argument, is the literal `"127.0.0.1"`. A positional
+ * string that is not a literal could hold a number, which Node would read as a port on every interface.
+ * @param {ts.CallExpression} call
+ * @param {ts.TypeChecker} checker
+ */
+function namesLoopbackOrPath(call, checker) {
+  const [first, second] = call.arguments;
+  if (first === undefined) return false;
+  if (ts.isObjectLiteralExpression(first)) return optionsNameLoopbackOrPath(first, checker);
+  if (ts.isStringLiteralLike(first) && isPipeName(first.text)) return true;
+  return second !== undefined && ts.isStringLiteralLike(second) && second.text === LOOPBACK;
 }
 
 /**
@@ -81,6 +122,7 @@ export function listenViolations(files, options) {
     module: ts.ModuleKind.Node16,
     moduleResolution: ts.ModuleResolutionKind.Node16,
     allowImportingTsExtensions: true,
+    strictNullChecks: true,
     types: ["node"],
     typeRoots: options.typeRoots,
   });

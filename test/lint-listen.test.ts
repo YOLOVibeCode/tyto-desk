@@ -12,6 +12,9 @@ const header = `
 import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 declare const socketPath: string;
+declare const maybePath: string | undefined;
+declare const host: string;
+declare const opts: { host: string };
 declare const onConnection: () => void;
 const server = createServer();
 const messages = { listen(handler: () => void): void { handler(); } };
@@ -24,14 +27,25 @@ const refused = [
   'server.listen({ port: 9583, host: "localhost" });',
   "server.listen();",
   "createHttpServer().listen(9583, () => undefined);",
+  'server.listen(process.env.DESK_PORT ?? "9583");',
+  "server.listen(socketPath);",
+  'server.listen("");',
+  'server.listen(" 9583 ");',
+  "server.listen(9583, host);",
+  "server.listen({ path: maybePath });",
+  "server.listen({ path: maybePath, port: 9583 });",
+  "server.listen({ path: socketPath, port: 9583 });",
+  'server.listen({ host: "127.0.0.1", ...opts, port: 9583 });',
 ];
 
 const passed = [
   'server.listen(9583, "127.0.0.1");',
   'server.listen({ host: "127.0.0.1", port: 0 });',
+  'server.listen({ host: "127.0.0.1", port: 9583 }, () => undefined);',
   'createHttpServer().listen(9583, "127.0.0.1", () => undefined);',
-  "server.listen(socketPath);",
+  'server.listen("/tmp/desk-test.sock");',
   "server.listen({ path: socketPath });",
+  "const path = socketPath; server.listen({ path });",
   "messages.listen(onConnection);",
 ];
 

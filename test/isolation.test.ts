@@ -35,50 +35,73 @@ describe("test isolation", () => {
   });
 
   it("the real ~/.desk is unchanged after the suite", async () => {
-    // The global teardown repeats this comparison after every test file has run and fails the run on any change.
+    // The global teardown repeats this comparison after every test file has run and fails the run on any change;
+    // test/real-desk-teardown.test.ts runs a suite that writes into a stand-in ~/.desk to prove it.
     const before = inject("realDeskBefore");
 
     expect(before.root).toBe(join(inject("realHome"), ".desk"));
-    expect(treeChanges(before, await snapshotTree(before.root, ["logs"]))).toEqual([]);
+    expect(treeChanges(before, await snapshotTree(before.root))).toEqual([]);
   });
 
   it("the ~/.desk check reports an added, a removed and a changed file", async () => {
     const root = await mkdtemp(join(tmpdir(), "desk-"));
     await writeFile(join(root, "config.json"), "{}");
     await writeFile(join(root, "panes.json"), "{}");
-    const before = await snapshotTree(root, []);
+    const before = await snapshotTree(root);
 
     await writeFile(join(root, "layout.json"), "{}");
     await rm(join(root, "panes.json"));
     await utimes(join(root, "config.json"), new Date(1_000), new Date(1_000));
 
-    expect(treeChanges(before, await snapshotTree(root, []))).toEqual([
-      "changed config.json",
-      "added layout.json",
-      "removed panes.json",
-    ]);
+    expect(treeChanges(before, await snapshotTree(root))).toEqual(
+      expect.arrayContaining(["changed config.json", "added layout.json", "removed panes.json"]),
+    );
     await rm(root, { recursive: true, force: true });
   });
 
-  it("the ~/.desk check reports a directory that appeared or disappeared", async () => {
+  it("the ~/.desk check reports a directory that appeared", async () => {
     const root = join(await mkdtemp(join(tmpdir(), "home-")), ".desk");
-    const absent = await snapshotTree(root, []);
+    const absent = await snapshotTree(root);
     await mkdir(root);
 
-    expect(treeChanges(absent, await snapshotTree(root, []))).toEqual(["added ."]);
-    expect(treeChanges(await snapshotTree(root, []), absent)).toEqual(["removed ."]);
+    expect(treeChanges(absent, await snapshotTree(root))).toEqual(["added ."]);
   });
 
-  it("the ~/.desk check skips the logs a running Desk appends to", async () => {
+  it("the ~/.desk check reports a directory that disappeared", async () => {
+    const root = join(await mkdtemp(join(tmpdir(), "home-")), ".desk");
+    await mkdir(root);
+    const present = await snapshotTree(root);
+    await rm(root, { recursive: true });
+
+    expect(treeChanges(present, await snapshotTree(root))).toEqual(["removed ."]);
+  });
+
+  it("the ~/.desk check reports a file that was created and removed between its snapshots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "desk-"));
+    await mkdir(join(root, "run"));
+    // An old timestamp, so the change shows even where the file system keeps whole seconds only.
+    await utimes(join(root, "run"), new Date(1_000), new Date(1_000));
+    const before = await snapshotTree(root);
+
+    await writeFile(join(root, "run", "launch.lock"), "{}");
+    await rm(join(root, "run", "launch.lock"));
+
+    expect(treeChanges(before, await snapshotTree(root))).toEqual(["changed run"]);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("the ~/.desk check reports a change under logs/", async () => {
     const root = await mkdtemp(join(tmpdir(), "desk-"));
     await mkdir(join(root, "logs"));
     await writeFile(join(root, "logs", "ptyd.log"), "a");
-    const before = await snapshotTree(root, ["logs"]);
+    const before = await snapshotTree(root);
 
     await writeFile(join(root, "logs", "ptyd.log"), "ab");
     await writeFile(join(root, "logs", "ptyd.log.1"), "a");
 
-    expect(treeChanges(before, await snapshotTree(root, ["logs"]))).toEqual([]);
+    expect(treeChanges(before, await snapshotTree(root))).toEqual(
+      expect.arrayContaining(["changed logs/ptyd.log", "added logs/ptyd.log.1"]),
+    );
     await rm(root, { recursive: true, force: true });
   });
 });

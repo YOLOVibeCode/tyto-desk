@@ -100,6 +100,52 @@ const stringRecord: Check = (value) =>
 
 const deskPort = integerIn(DESK_PORT_MIN, DESK_PORT_MAX);
 
+const ACCELERATOR_MODIFIERS: ReadonlySet<string> = new Set(["Ctrl", "Alt", "Shift", "Command", "MacCtrl"]);
+
+const ACCELERATOR_KEYS: ReadonlySet<string> = new Set([
+  "Comma",
+  "Period",
+  "Up",
+  "Down",
+  "Left",
+  "Right",
+  "Insert",
+  "Delete",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+  "Space",
+]);
+
+/** Chrome trims ASCII whitespace around each part of a shortcut. */
+const PART_WHITESPACE = /^[ \t\n\v\f\r]+|[ \t\n\v\f\r]+$/g;
+
+/**
+ * A shortcut Chrome accepts as a command's `suggested_key`, which Desk renders from `panel.toggleKey` (Chromium
+ * `extensions/common/command.cc`): two to four `+`-separated parts, exactly one key (A–Z, 0–9, or a named key), at
+ * least one of Ctrl, Alt, Command or MacCtrl, and never Alt together with Ctrl, MacCtrl or Command; Shift only adds to
+ * another modifier. Media keys (no modifiers allowed) and ChromeOS's Search are not offered. Anything else would make
+ * Chrome refuse the whole manifest at launch, so the config is refused first.
+ */
+const isChromeAccelerator: Check = (value) => {
+  if (typeof value !== "string" || value.length > 64) return false;
+  const parts = value.split("+").map((part) => part.replace(PART_WHITESPACE, ""));
+  if (parts.length < 2 || parts.length > 4) return false;
+  const modifiers = new Set<string>();
+  let key: string | null = null;
+  for (const part of parts) {
+    if (ACCELERATOR_MODIFIERS.has(part)) modifiers.add(part);
+    else if (key === null && (/^[A-Z0-9]$/.test(part) || ACCELERATOR_KEYS.has(part))) key = part;
+    else return false;
+  }
+  const ctrl = modifiers.has("Ctrl") || modifiers.has("MacCtrl");
+  const alt = modifiers.has("Alt");
+  const command = modifiers.has("Command");
+  if (key === null || (alt && (ctrl || command))) return false;
+  return ctrl || alt || command;
+};
+
 const SCHEMA: Shape<DeskConfig> = {
   version: (value) => value === 1,
   chrome: {
@@ -113,7 +159,7 @@ const SCHEMA: Shape<DeskConfig> = {
     setContinuePref: isBoolean,
   },
   gateway: { port: deskPort, focusGuard: oneOf("auto", "on", "off") },
-  panel: { toggleKey: nonEmptyText(64) },
+  panel: { toggleKey: isChromeAccelerator },
   terminal: {
     shell: nullOr(isAbsolutePath),
     tmux: nullOr(isAbsolutePath),
