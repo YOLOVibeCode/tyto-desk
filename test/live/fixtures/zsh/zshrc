@@ -1,0 +1,4 @@
+# Copied to a fresh HOME as .zshrc by the PTY live tests: zsh reads it only for an interactive shell, and its presence
+# keeps zsh-newuser-install away. The prompt is what the tests wait for.
+export ZSHRC_RAN=1
+PROMPT='desk-live %# '

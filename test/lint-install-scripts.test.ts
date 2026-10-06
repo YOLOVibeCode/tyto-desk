@@ -117,6 +117,27 @@ describe("lint:install-scripts", () => {
     expect(await lockedInstallHooks(root)).toEqual([]);
   });
 
+  it("lint:install-scripts also fails on an install script in the live image's tools lockfile", async () => {
+    const root = await lockedCheckout({});
+    const tools = join(root, "test", "live", "image", "tools");
+    await mkdir(tools, { recursive: true });
+    const lock = {
+      name: "desk-live-tools",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": { name: "desk-live-tools" },
+        "node_modules/agent-browser": { version: "0.38.1", hasInstallScript: true },
+      },
+    };
+    await writeFile(join(tools, "package-lock.json"), JSON.stringify(lock));
+
+    const result = await lint(root);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("agent-browser@0.38.1 (install script (package-lock))  test/live/image/tools/node_modules/agent-browser");
+  });
+
   it("lint:install-scripts passes a locked package that was reviewed at its version", async () => {
     const root = await lockedCheckout(
       { "node_modules/fsevents": { version: "2.3.3", hasInstallScript: true } },

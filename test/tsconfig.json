@@ -3,5 +3,5 @@
   "compilerOptions": {
     "allowJs": true
   },
-  "include": [".", "../vitest.config.ts"]
+  "include": [".", "../vitest.config.ts", "../vitest.live.config.ts"]
 }

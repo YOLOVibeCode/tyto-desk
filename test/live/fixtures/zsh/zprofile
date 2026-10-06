@@ -1,0 +1,2 @@
+# Copied to a fresh HOME as .zprofile by the PTY live tests: zsh reads it only for a login shell.
+export ZPROFILE_RAN=1

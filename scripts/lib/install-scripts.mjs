@@ -118,14 +118,40 @@ export async function lockedInstallHooks(root) {
 }
 
 /**
- * The installed and the locked hooks together, one entry per package path and version.
+ * Other lockfiles whose packages are installed somewhere Desk is tested: the live image installs its npm tools
+ * (agent-browser, the Puppeteer and Playwright cores) from this one with `npm ci --ignore-scripts`.
+ */
+export const OTHER_LOCKFILE_DIRS = ["test/live/image/tools"];
+
+/**
+ * The hooks marked in each of OTHER_LOCKFILE_DIRS's package-lock.json, with paths relative to the checkout.
+ * @param {string} root
+ * @returns {Promise<InstallHook[]>}
+ */
+async function otherLockedInstallHooks(root) {
+  /** @type {InstallHook[]} */
+  const found = [];
+  for (const dir of OTHER_LOCKFILE_DIRS) {
+    for (const hook of await lockedInstallHooks(join(root, dir))) found.push({ ...hook, path: `${dir}/${hook.path}` });
+  }
+  return found;
+}
+
+/**
+ * The installed and the locked hooks together (the checkout's and the live image's), one entry per package path and
+ * version.
  * @param {string} root
  * @returns {Promise<InstallHook[]>}
  */
 export async function allInstallHooks(root) {
   /** @type {Map<string, InstallHook>} */
   const merged = new Map();
-  for (const hook of [...(await findInstallHooks(root)), ...(await lockedInstallHooks(root))]) {
+  const found = [
+    ...(await findInstallHooks(root)),
+    ...(await lockedInstallHooks(root)),
+    ...(await otherLockedInstallHooks(root)),
+  ];
+  for (const hook of found) {
     const key = `${hook.path}\0${hook.id}`;
     const known = merged.get(key);
     if (known === undefined) merged.set(key, { ...hook, hooks: [...hook.hooks] });

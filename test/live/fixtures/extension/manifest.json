@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Desk live fixture",
+  "version": "0.0.1",
+  "description": "Live-test fixture (slice 1b): a side panel, a service worker and a native host, with Desk's CSP. Its key is a fixture key, not Desk's.",
+  "minimum_chrome_version": "155",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj+EK4Sn+O8APY7SOhIYZy+HrlwEgBmaRFCHkAqe2fcpszEnoJrmmw5TKoFN9amT7Cbt22sZmyVkVh8keBCGGATL0LTTuQTe8jJbquInHgQN4cDNbw39FYBXw+++ghpmMEPMfLvbi+jMWm+ENzQqka2hhef+nhZtjZmeaoyfvnvt5euDC7XxtlANS7vyTpgdn5nTrj8TF34sRwbNcppfUvlDafZ7qtUTTw8mo3hJMdg7K3zF/gLQei0J6rqU8Jn/FMD2GCpngepvYaPcVd72zCKjBerKEqQXQvUJEo/uEho5ZW153NkYTjckCUKEC9aSAYmnBXfvN57wvRlqFMDhVLQIDAQAB",
+  "permissions": ["sidePanel", "nativeMessaging"],
+  "background": { "service_worker": "sw.js" },
+  "side_panel": { "default_path": "panel.html" },
+  "action": { "default_title": "Desk terminal" },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+  },
+  "externally_connectable": { "ids": [], "matches": [] }
+}

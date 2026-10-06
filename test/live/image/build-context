@@ -1,0 +1,17 @@
+#!/bin/bash
+# build-context <chrome sha256> <chrome deb>: write the live image's build context to stdout as a tar: the image
+# directory (mounted read-only at /context) and the pinned Chrome .deb from the desk-live-cache volume (mounted
+# read-only at /cache). It copies /context to local disk first: GNU tar reading the virtiofs mount directly exits 1
+# ("file changed as we read it") although nothing changed.
+set -euo pipefail
+usage="usage: build-context <sha256> <deb>"
+sum="${1:?$usage}"
+deb="${2:?$usage}"
+[[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "build-context: not a sha256" >&2; exit 2; }
+[[ "$deb" =~ ^google-chrome-stable_[0-9.]+-[0-9]+_arm64\.deb$ ]] || { echo "build-context: not a Chrome .deb name" >&2; exit 2; }
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+cp -R /context/. "$work/"
+echo "$sum  /cache/chrome/$sum/$deb" | sha256sum --check --strict --quiet - >&2
+ln -s "/cache/chrome/$sum/$deb" "$work/$deb"
+tar --create --file=- --dereference --directory="$work" .
