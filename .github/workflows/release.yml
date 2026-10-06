@@ -1,0 +1,162 @@
+# Releases (docs/IMPLEMENTATION.md §23.8; RELEASING.md). A v-tag, which only the release App creates, starts it: `plan`
+# (classifyBuild), `build` (macos-26), and the `live` gate; then `publish`, which waits for the owner's approval of the
+# publish environment, attests, uploads to the draft release, checks the assets and publishes it; then `verify`.
+# Dispatched on main it is a dry run: plan, build and live as a stable-shaped build, and nothing is tagged, released or
+# attested. Until slice 1c adds `npm run pack` a real release refuses in `plan` (D58).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      dry-run: ${{ steps.mode.outputs.dry-run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: A dry run on main, or a release of a tag?
+        id: mode
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$REF" = "refs/heads/main" ]; then
+            echo "dry-run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry-run=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: classifyBuild (a stable build of a v-tag on main, or a dry run on main)
+        id: plan
+        env:
+          DRY_RUN: ${{ steps.mode.outputs.dry-run }}
+        run: |
+          args=(--plan --expect-channel stable)
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node scripts/delivery/stamp.mjs "${args[@]}"
+      - name: A release needs a runtime (slice 1c; D58)
+        if: steps.mode.outputs.dry-run != 'true'
+        run: |
+          if [ "$(npm pkg get scripts.pack)" = "{}" ]; then
+            echo "::error title=release::There is no runtime to release until slice 1c adds npm run pack (D58)."
+            exit 1
+          fi
+
+  build:
+    needs: plan
+    uses: ./.github/workflows/build-darwin.yml
+    permissions:
+      contents: read
+    with:
+      channel: stable
+      ref: ${{ github.sha }}
+      dry-run: ${{ needs.plan.outputs.dry-run == 'true' }}
+
+  live:
+    needs: plan
+    uses: ./.github/workflows/live-run.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ github.sha }}
+
+  publish:
+    needs: [plan, build, live]
+    if: needs.plan.outputs.dry-run != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: publish
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desk-stable-darwin-arm64
+          path: release
+      - name: Check the files against SHA256SUMS
+        working-directory: release
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Find the tag's release, and resume an earlier attempt
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          ASSETS_DIR: release
+        run: node scripts/delivery/publish.mjs prepare
+      - name: Attest build provenance for every file SHA256SUMS names
+        if: steps.prepare.outputs.next == 'attest'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Upload to the draft, check its assets, publish (latest only when highest)
+        if: steps.prepare.outputs.next == 'attest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          ASSETS_DIR: release
+        run: node scripts/delivery/publish.mjs finish
+
+  verify:
+    needs: [plan, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: gh 2.102.0 or later (exact --cert-identity and --source-ref matching)
+        run: |
+          version="$(gh --version | sed -n 's/^gh version \([0-9][0-9.]*\).*/\1/p')"
+          if ! printf '%s\n%s\n' 2.102.0 "$version" | sort --version-sort --check=quiet; then
+            echo "::error title=verify::The runner's gh is $version; verify needs 2.102.0 or later."
+            exit 1
+          fi
+      - name: The release, its assets, and their provenance, as desk update checks them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh release verify "$TAG" --repo "$REPOSITORY"
+          dir="$(mktemp -d)"
+          gh release download "$TAG" --repo "$REPOSITORY" --dir "$dir"
+          for asset in "$dir"/*; do
+            gh release verify-asset "$TAG" "$asset" --repo "$REPOSITORY"
+          done
+          for asset in "$dir/desk-${TAG#v}-darwin-arm64.tar.gz" "$dir/install.sh"; do
+            gh attestation verify "$asset" --repo "$REPOSITORY" \
+              --cert-identity "https://github.com/$REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG" \
+              --source-ref "refs/tags/$TAG" --source-digest "$COMMIT" --deny-self-hosted-runners
+          done

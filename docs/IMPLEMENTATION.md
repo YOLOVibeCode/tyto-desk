@@ -110,7 +110,8 @@ After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:lis
 | Package | Version | Used by |
 |---|---|---|
 | typescript | 5.9.3 (Tyto parity; TypeScript 7 later, on purpose) | dev |
-| vitest | 3.2.7 | dev |
+| vitest | 5.0.3 (D62) | dev |
+| yaml | 2.9.1 | dev: `lint:workflows` and the PR check (§23.7) |
 | esbuild | 0.28.2 | dev: extension and installed-runtime bundles |
 | @types/node · @types/chrome | 26.6.4 · 0.3.4 | dev |
 | @xterm/xterm 6.0.0, addon-webgl 0.19.0, fit 0.11.0, search 0.16.0, web-links 0.12.0, unicode11 0.9.0 [ST] | exact | extension |
@@ -1066,10 +1067,11 @@ test wrote into that `~/.desk`.
   linux-arm64 binary); xvfb, tmux, zsh, procps, lsof, fonts; puppeteer-core and playwright-core; user `lab`. Debian's
   Chromium is not used: it is 154, below the manifest's minimum [VMLAB]. Google prunes old builds from its pool, so the
   runner keeps the `.deb` by sha256: in a Colima volume (`desk-live-cache`) on the Mac, in an Actions cache keyed by
-  the same sha256 in CI; a bump is a one-line change. GitHub evicts a cache entry unused for 7 days, the weekly run's
-  interval, so `live.yml` restores the entry every three days as well, and only runs on `main` save it (tag and PR
-  runs can read `main`'s entries). No copy of Chrome lives anywhere else, such as a container registry (D60). When
-  Google has pruned the pinned build and no cache holds it, the run fails naming the bump.
+  the same sha256 in CI (`DESK_LIVE_CACHE_DIR`, D64); a bump is a one-line change. GitHub evicts a cache entry unused
+  for 7 days, the weekly run's interval, so `live.yml` restores the entry every three days as well, and only runs on
+  `main` save it (tag and PR runs can read `main`'s entries). No copy of Chrome lives anywhere else, such as a
+  container registry (D60). When Google has pruned the pinned build and no cache holds it, the run fails naming the
+  bump.
 - `scripts/live.mjs` runs in two places only. On the Mac it is the only thing that runs, and it drives
   `docker --context colima` and nothing else. In CI (`--ci`, accepted only when `GITHUB_ACTIONS=true` on a Linux
   arm64 runner) it drives the runner's own Docker engine on `ubuntu-24.04-arm`, with the same phases, flags, seccomp
@@ -1661,7 +1663,7 @@ agent running `npm run deploy`, `desk update`, `desk use`, or `desk rollback`.
 
 Review of 2026-10-06 (security, persistence and UX, testability). Every blocker and major issue is resolved in the
 sections above; these entries record choices, deviations, and rejections. D28–D33 come from slice 1a; D34–D61 from
-the delivery design and its security and operability review, the same day.
+the delivery design and its security and operability review, the same day; D62–D67 from slice D1.
 
 | # | Decision | Why |
 |---|---|---|
@@ -1726,6 +1728,12 @@ the delivery design and its security and operability review, the same day.
 | D59 | `installed.json` is written only under `install.lock`; the manifest render serial moves to its own `render.json`, written only under `launch.lock` | A launch bumped the serial under `launch.lock` while an install wrote `current` under `install.lock`, so one could lose the other's write |
 | D60 | No copy of Google Chrome outside the Actions cache and the Mac's Colima volume (rejects keeping the pinned `.deb` or the live image in a container registry). The cache is restored every three days so GitHub never evicts it, and the release PR's live run finds a pruned pin before a tag exists | A registry image would redistribute Google Chrome. With the keep-alive, a pruned pin costs a bump PR, not a release (§23.9) |
 | D61 | Delivery scripts and the Node pin live under `scripts/delivery/`, an owner-merge path | One glob keeps every script a privileged job runs, the stamp, and the scripts added later under the owner's review |
+| D62 | Vitest 5.0.3 replaces 3.2.7 (slice D1). Vite 8.3.3 comes in as its peer; the lockfile gains no install script (`lint:install-scripts` still lists esbuild and fsevents only) | 3.2.7 pulled `tinypool` 1.x (GHSA-5gmw-xhrv-c9v3, GHSA-85c8-ppgw-ccpr: critical) and `@vitest/mocker` 3.2.7 (GHSA-82fw-gwwq-j7x9); 4.1.11 and 5.0.3 both fix them, and 5.0.3, the newest, passed every test and type check on Node 22.22.2 and 26.10.0 with no change. Dev only: nothing Vitest provides ships |
+| D63 | `release.yml`'s `plan` checks the tag (`classifyBuild`) and that a runtime exists; `publish`'s first step (`publish.mjs prepare`) is what refuses a tag with no release (amends §23.7's `plan`: "the tag's release exists") | A `contents: read` token does not list draft releases, and only `publish` may hold `contents: write`. `prepare` runs before anything is attested or uploaded, so a missing draft still stops the release before it changes anything |
+| D64 | The live suite in CI, until and after slice 1b: `live-run.yml` runs `npm run test:live -- --ci` only when that script exists (otherwise it passes with a notice, so `release.yml`'s gate and `live.yml` work from D1 on). It restores the pinned Chrome `.deb` into `DESK_LIVE_CACHE_DIR` (`$RUNNER_TEMP/desk-live-cache`) under the key `desk-live-chrome-<CHROME_SHA256>`, read from `test/live/image/Dockerfile`; saves it only on `main` after a miss; lifts AppArmor's user-namespace limit before the suite; uploads `test-results/`. Slice 1b's `--ci` mode keeps the `.deb` in that directory, and adds Dependabot's `docker` entry for `test/live` | The workflow must own the cache (only actions can reach the Actions cache), so the runner and the workflow share one directory; until 1b there is no suite, Dockerfile, or `test/live` for Dependabot to watch |
+| D65 | Delivery scripts import core's release code (`classifyBuild`, the semver rules, the latest-flag rule, `DESK_COMPAT`) as TypeScript, through Node's type stripping (Node 22.18 and later; core is `erasableSyntaxOnly`). Each script is a thin CLI over `scripts/delivery/lib/`; `ci-ok`'s decision is `scripts/delivery/ci-ok.mjs` so its spec sentence has a unit. Until slice 1c pins Desk Terminal in `scripts/delivery/node-runtime.json`, the stamp's `node` is `.nvmrc`'s | One implementation decides what a build is, wherever it runs, and the CI jobs need no build step and no `npm ci` to run it. `.nvmrc` and the pin name the same Node 26.10.0 (D49) |
+| D66 | `lint:workflows` also refuses YAML anchors and aliases, Docker actions, `write-all`, string job permissions, runners outside the three fixed labels, and an expression that reaches every secret (`toJSON(secrets)`); it counts a secret only inside `${{ }}`. The PR check adds `pinned-sha` (online). `ci.yml`'s `changes` job asks for `pull-requests: read` to list a PR's files, and `release.yml`'s `verify` for `attestations: read`. Owner-merge paths and docs-only paths compare without case, and a renamed file counts under both names | Each closes a way around a §23.7 rule (an alias can hide a value from the lint; `claude.md` is `CLAUDE.md` on the operator's Mac; a rename moves a file out of an owner-merge path). Both scopes are read-only |
+| D67 | The first release needs slice D2 as well as 1c: `publish` refuses a draft whose assets are not exactly the tarball, `install.sh` and `SHA256SUMS`, and `install.sh` arrives with D2 (`build-darwin.yml` adds `scripts/delivery/install.sh` to stable builds once it exists) | A release without its installer could never be installed on a fresh Mac, and releases are immutable (D37) |
 
 ## 23. Delivery: branches, versions, deploy paths, releases
 
@@ -2101,7 +2109,7 @@ verified with (`--version`), checks that release's tarball and `SHA256SUMS` as `
 | `live-run.yml` | `workflow_call` (ref) | `live` (`ubuntu-24.04-arm`): `npm run test:live -- --ci` (§17.3); results as an artifact | `contents: read` |
 | `edge.yml` | `push` to `main` that is not docs-only; `workflow_dispatch` | `build-darwin.yml` (`edge`), then `attest` (`ubuntu-24.04`), only when `test` and `pack` succeeded and `runtime` is true | `attest`: `id-token: write`, `attestations: write`, `contents: read` |
 | `release-please.yml` | `push` to `main`; `workflow_dispatch` | `release-please` (`ubuntu-24.04`, environment `release-please` with `deployment: false`; checks out nothing; pinned actions only): mints the App's token with `actions/create-github-app-token` (this repository only; contents, pull requests, and issues write), then runs release-please; without the App it stops with a notice | `GITHUB_TOKEN`: none; the App's token as minted |
-| `release.yml` | `push` of a `v*` tag, which only the App creates; `workflow_dispatch` (on a tag: that release; on `main`: a dry run) | `plan` (`classifyBuild`: stable, or a dry run on `main`; the tag's release exists), `build` (`build-darwin.yml`, `stable`), `live` (`live-run.yml`); a dry run stops here. `publish` (environment `publish`: waits for the owner's approval; resumable, §23.8), then `verify` | `publish`: `contents: write`, `id-token: write`, `attestations: write`; the rest `contents: read` |
+| `release.yml` | `push` of a `v*` tag, which only the App creates; `workflow_dispatch` (on a tag: that release; on `main`: a dry run) | `plan` (`classifyBuild`: stable, or a dry run on `main`; a runtime exists; `publish` checks that the tag's release exists, D63), `build` (`build-darwin.yml`, `stable`), `live` (`live-run.yml`); a dry run stops here. `publish` (environment `publish`: waits for the owner's approval; resumable, §23.8), then `verify` | `publish`: `contents: write`, `id-token: write`, `attestations: write`; the rest `contents: read` |
 | `dependabot-auto-merge.yml` | `pull_request_target` (opened, reopened, synchronize), only when the author is `dependabot[bot]` and the head repository is this one | `automerge` (`ubuntu-24.04`): `dependabot/fetch-metadata` (never `skip-verification`), then the base's dependency-free `scripts/delivery/automerge-decision.mjs` on `updated-dependencies-json` (through `env`), then `gh pr merge --auto --squash` for the allowed class, or a comment naming why the owner must merge. No `npm ci`, no PR checkout | `contents: write`, `pull-requests: write` |
 
 The Dependabot class that merges itself (`automerge-decision.mjs`): an npm `direct:development` update of `@types/*`,
@@ -2287,7 +2295,7 @@ updates:
 | The changelog files an entry under the wrong section | Add a `BEGIN_COMMIT_OVERRIDE` … `END_COMMIT_OVERRIDE` block with the right Conventional Commit to the merged PR's body, then run `release-please.yml`; never edit the release PR |
 | The release PR's checks are red | Fix on `main`; release-please updates its PR. Before slice 1c `ci-ok` is red on purpose |
 | The release PR merged, but there is no `vX.Y.Z` tag or draft | `release-please.yml` failed (the App's token, an outage): `gh workflow run release-please.yml` |
-| `release.yml` failed in `plan` | A refusal (§23.3) names the cause: a tag off `main`, a version mismatch, or no release for the tag |
+| `release.yml` failed in `plan` | A refusal (§23.3) names the cause: a tag off `main`, a version mismatch, or no runtime yet (slice 1c). No release for the tag stops `publish` before it changes anything (D63) |
 | `release.yml` failed in `build`, `live`, `publish`, or `verify` for a passing reason (runner, network, Sigstore) | `gh run rerun <run-id> --failed`. The draft and its tag wait; `publish` resumes, and a release an earlier attempt already published with matching digests goes straight to `verify` |
 | The live gate failed because Google pruned the pinned Chrome and no cache holds it | Bump the pin in a PR (§17.3); leave that tag a draft and release the next patch. The release PR's own live run should have caught it first |
 | `release.yml` failed because of the code | Fix forward: a `fix:` PR, then the next release PR (X.Y.Z+1). The failed version stays an unpublished draft that nothing installs; delete the draft if you like. Its tag stays, and nobody moves it |

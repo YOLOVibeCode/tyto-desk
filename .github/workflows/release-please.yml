@@ -1,0 +1,57 @@
+# release-please (docs/IMPLEMENTATION.md §23.8, D36, D52). After every push to main it opens or updates the draft
+# release PR, "chore(main): release X.Y.Z", labeled live; when the owner merges that PR it drafts the release and its
+# tag, which starts release.yml. It runs as the Desk Release App, whose pull requests and tags start workflows, as
+# GITHUB_TOKEN's never do. The App's key lives only in the release-please environment (deployments from main only), and
+# this job checks out nothing and runs pinned actions only, so no repository code ever holds it. Without the App
+# (RELEASING.md, one-time setup 2) it stops with a notice.
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: release-please
+      deployment: false
+    permissions: {}
+    steps:
+      - name: Is the Desk Release App set up?
+        id: app
+        env:
+          CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          HAS_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+        run: |
+          if [ -z "$CLIENT_ID" ] || [ "$HAS_KEY" != "true" ]; then
+            echo "::notice title=release-please::The Desk Release App is not set up yet (RELEASING.md, one-time setup 2): no release PR."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The App's token, for this repository only
+        id: token
+        if: steps.app.outputs.ready == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - name: Open or update the release PR, or draft the release and its tag
+        if: steps.app.outputs.ready == 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -166,7 +166,8 @@ and after any change to the release path.
 | No release PR | Only a `feat`, `fix`, `perf`, `refactor`, or `revert` commit, or a breaking change, proposes one. Or the release App is missing: `release-please.yml`'s run says so (one-time setup, below) |
 | The release PR's checks are red | Fix it on `main` in a PR; release-please updates its PR. Before slice 1c, `ci-ok` is red on purpose |
 | The release PR merged, but there is no `vX.Y.Z` tag or draft | `release-please.yml` failed (the App's token, an outage): `gh workflow run release-please.yml` |
-| `release.yml` failed in `plan` | It names the refusal: a tag off `main`, a version that differs from package.json, or no release for the tag |
+| `release.yml` failed in `plan` | It names the refusal: a tag off `main`, a version that differs from package.json, or no runtime yet (slice 1c) |
+| `publish` failed: no release for the tag | release-please drafts the release with its tag; if it did not, `gh workflow run release-please.yml`, then re-run the failed jobs |
 | `release.yml` failed in build, live, publish, or verify for a passing reason (runner, network, Sigstore) | `gh run rerun <run-id> --failed`. The draft and its tag wait. `publish` resumes: a release an earlier attempt already published with matching assets goes straight to `verify` |
 | The live suite failed because Google pruned the pinned Chrome | Bump the pin in a PR (IMPLEMENTATION §17.3), leave that tag a draft, and release the next patch. The release PR's own live run normally catches this first |
 | `release.yml` failed because of the code | Fix forward: a `fix:` PR, then merge the next release PR (X.Y.Z+1). The failed version stays an unpublished draft that nothing installs; delete the draft in the web UI if you like. Its tag stays, and nobody moves it |

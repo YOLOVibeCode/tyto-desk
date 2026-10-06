@@ -52,6 +52,7 @@ slice's "Done when" stands. Put a `BREAKING CHANGE:` footer there for a breaking
 ```bash
 git switch -c slice-1c/walking-skeleton origin/main
 # tests first, then code; npm run check
+node scripts/delivery/check-pr.mjs --title "feat(slice-1c): one shell, one agent, in the left panel"   # pr-title, locally
 git push -u origin slice-1c/walking-skeleton
 gh pr create --title "feat(slice-1c): one shell, one agent, in the left panel" --body-file - <<'EOF'
 What changed and why. Tests that ran, by name. Where the slice's "Done when" stands.

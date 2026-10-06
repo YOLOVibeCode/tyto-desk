@@ -1,0 +1,65 @@
+# The live suite on a schedule (docs/IMPLEMENTATION.md §17.3, §18, §23.7): weekly on main, on workflow_dispatch, and on
+# same-repository pull requests labeled `live` (the release PR always is). Never on a fork's pull request; no secrets.
+# A Chrome change that breaks loading over the port, triggerAction or the side-panel prefs shows up within a week.
+# Every three days `keep-alive` restores the pinned Chrome .deb's cache entry and nothing else, so GitHub never evicts
+# it (D60). Until slice 1b adds `npm run test:live`, both pass with a notice.
+name: live
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # weekly, Monday: the live suite on main
+    - cron: "23 5 */3 * *" # every three days: the Chrome .deb cache keep-alive
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled]
+
+permissions: {}
+
+concurrency:
+  group: live-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  live:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'schedule' && github.event.schedule == '23 6 * * 1') ||
+      (github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'live') &&
+        github.event.pull_request.head.repo.full_name == github.repository)
+    uses: ./.github/workflows/live-run.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  keep-alive:
+    if: github.event_name == 'schedule' && github.event.schedule == '23 5 */3 * *'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: test/live/image
+          persist-credentials: false
+      - name: The pinned Chrome .deb's cache key
+        id: chrome
+        run: |
+          dockerfile=test/live/image/Dockerfile
+          sha=""
+          if [ -f "$dockerfile" ]; then
+            sha="$(sed -n 's/^ARG CHROME_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$dockerfile")"
+          fi
+          if [ -z "$sha" ]; then
+            echo "::notice title=keep-alive::No pinned Chrome .deb yet (slice 1b): nothing to keep."
+          else
+            echo "key=desk-live-chrome-$sha" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore the entry, which keeps it from eviction
+        if: steps.chrome.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/desk-live-cache
+          key: ${{ steps.chrome.outputs.key }}

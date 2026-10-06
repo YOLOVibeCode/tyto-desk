@@ -1,0 +1,38 @@
+# Dependabot (docs/IMPLEMENTATION.md §23.7, D44). Its commit prefix becomes the PR title (pr-title checks only the type
+# and scope of a bot's title). Only patch updates of @types/*, typescript, vitest and yaml merge themselves
+# (dependabot-auto-merge.yml); the weekly GitHub Actions group is an owner-merge path; everything else waits for the
+# owner. Version updates wait out a cooldown; security updates have none. The live image's base (test/live) joins with
+# slice 1b.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    commit-message:
+      prefix: fix # fix(deps): …
+      prefix-development: chore # chore(deps-dev): …
+      include: scope
+    groups:
+      dev-tools:
+        dependency-type: development
+        update-types: [patch]
+        patterns: ["@types/*", "typescript", "vitest", "yaml"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci # ci(deps): …
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]

@@ -45,3 +45,23 @@ export {
 export { WIRE_DATA_MAX, WIRE_MESSAGE_MAX, jsonStringBytes, splitForWire } from "./protocol/split.ts";
 export { httpGuard, type HttpGuardRequest, type HttpGuardResult } from "./net/http-guard.ts";
 export type { ConfigStore, PortProbe, Random } from "./ports/index.ts";
+export { BRANCH_SLUG_MAX, branchSlug } from "./release/branch-slug.ts";
+export {
+  classifyBuild,
+  type BuildChannel,
+  type BuildClassification,
+  type BuildPublish,
+  type BuildRefusal,
+  type ClassifyBuildInput,
+  type LiveSuite,
+} from "./release/classify-build.ts";
+export { DESK_COMPAT, type DeskCompat } from "./release/compat.ts";
+export { isLatestRelease } from "./release/latest.ts";
+export {
+  compareSemver,
+  compareVersions,
+  isBaseVersion,
+  parseSemver,
+  releaseTagVersion,
+  type Semver,
+} from "./release/semver.ts";

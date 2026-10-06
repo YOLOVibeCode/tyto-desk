@@ -1,0 +1,129 @@
+# The darwin-arm64 build (docs/IMPLEMENTATION.md §23.6, §23.7), called by ci.yml (pr), edge.yml (edge) and release.yml
+# (stable). `test` runs the checks on macos-26; `pack` stamps the build and packs the runtime from a checkout of exactly
+# `ref`, with no cache. Until slice 1c adds `npm run pack` there is no runtime: `pack` stamps, reports
+# runtime=false, and uploads nothing. DESK_NO_GUI=1: neither job starts the Chrome the runner image ships.
+name: build-darwin
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: pr, edge or stable
+        type: string
+        required: true
+      ref:
+        description: The commit to build (a pull request's head, never GitHub's test merge)
+        type: string
+        required: true
+      dry-run:
+        description: release.yml dispatched on main
+        type: boolean
+        default: false
+    outputs:
+      runtime:
+        description: true when npm run pack produced a runtime
+        value: ${{ jobs.pack.outputs.runtime }}
+      version:
+        description: The stamped version
+        value: ${{ jobs.pack.outputs.version }}
+
+permissions: {}
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DESK_NO_GUI: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm audit signatures
+      - run: npm run check
+
+  pack:
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DESK_NO_GUI: "1"
+    outputs:
+      runtime: ${{ steps.runtime.outputs.runtime }}
+      version: ${{ steps.stamp.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - name: Stamp (classifyBuild; version.json into dist/)
+        id: stamp
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          args=(--expect-channel "$CHANNEL")
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          node scripts/delivery/stamp.mjs "${args[@]}"
+      - name: Is there a runtime to pack? (npm run pack arrives with slice 1c)
+        id: runtime
+        env:
+          VERSION: ${{ steps.stamp.outputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [ "$(npm pkg get scripts.pack)" = "{}" ]; then
+            echo "::notice title=pack::No npm run pack yet (slice 1c): stamped $VERSION ($CHANNEL), nothing packed or uploaded."
+            echo "runtime=false" >> "$GITHUB_OUTPUT"
+            echo "Desk $VERSION ($CHANNEL): stamped; no runtime until slice 1c adds npm run pack." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "runtime=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Pack the runtime (esbuild and the repo's own scripts; no dev tool runs)
+        if: steps.runtime.outputs.runtime == 'true'
+        run: npm run pack
+      - name: Check the packed runtime, then write the tarball and SHA256SUMS
+        if: steps.runtime.outputs.runtime == 'true'
+        env:
+          VERSION: ${{ steps.stamp.outputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          dir="dist/desk-$VERSION"
+          home="$(mktemp -d)"
+          HOME="$home" DESK_NO_GUI=1 "$dir/Desk Terminal.app/Contents/MacOS/desk-node" "$dir/desk.mjs" --version --json
+          codesign --verify --strict "$dir/Desk Terminal.app"
+          mkdir -p out
+          tarball="desk-$VERSION-darwin-arm64.tar.gz"
+          tar -C dist -czf "out/$tarball" "desk-$VERSION"
+          subjects=("$tarball")
+          if [ "$CHANNEL" = "stable" ] && [ -f scripts/delivery/install.sh ]; then
+            cp scripts/delivery/install.sh out/install.sh
+            subjects+=(install.sh)
+          fi
+          if [ "$CHANNEL" != "pr" ]; then
+            (cd out && shasum -a 256 "${subjects[@]}" > SHA256SUMS)
+          fi
+          echo "Desk $VERSION ($CHANNEL): packed $tarball." >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the runtime (pr 7 days, edge 30, dry run 1, a release until it is published)
+        if: steps.runtime.outputs.runtime == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desk-${{ inputs.channel }}-darwin-arm64
+          path: out/
+          retention-days: ${{ inputs.channel == 'pr' && 7 || inputs.channel == 'edge' && 30 || inputs.dry-run && 1 || 30 }}
+          if-no-files-found: error
