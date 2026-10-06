@@ -1,10 +1,13 @@
 # Tyto Desk — Product specification
 
 Noctusoft, Inc. · Status: draft 2 (2026-10-06), revised after the security, persistence-and-UX, and testability
-review · working name "Tyto Desk", command `desk`, repo `/Users/admin/Dev/YOLOProjects/tyto-desk` (not created yet)
-Engineering contract: [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) (decisions and rejected review items in its §22) ·
-Manual checks: [`MANUAL-CHECKS.md`](./CHECKLIST-macos.md) · Evidence: §10, cited as [RC], [AB], [RF], [PA], [ST], [CR],
-[OR], [SP], [LAB], [VMLAB], [PROTO], [source]
+review; delivery added the same day · working name "Tyto Desk", command `desk`, public repo
+[`YOLOVibeCode/tyto-desk`](https://github.com/YOLOVibeCode/tyto-desk), checked out at
+`/Users/admin/Dev/YOLOProjects/tyto-desk`
+Engineering contract: [`IMPLEMENTATION.md`](./IMPLEMENTATION.md) (decisions and rejected review items in its §22;
+delivery in its §23) · Manual checks: [`MANUAL-CHECKS.md`](./CHECKLIST-macos.md) · Releases and contributions:
+[`RELEASING.md`](./RELEASING.md), [`CONTRIBUTING.md`](./CONTRIBUTING.md) · Evidence: §10, cited as [RC], [AB], [RF],
+[PA], [ST], [CR], [OR], [SP], [LAB], [VMLAB], [PROTO], [source]
 
 ## 1. What it is
 
@@ -54,7 +57,8 @@ a visual page editor (DevTools' element picker is enough), a Windows or Linux GU
 builds), Chrome Web Store distribution, Chrome's split view as the terminal host [RC], a separate terminal window glued
 to Chrome [RC], stealth or anti-detection, cloud browsers, syncing Desk state between Macs, Macs shared with other user
 accounts, scrollback or keystroke history on disk, Desk-managed tmux around panes, saving files dropped onto the
-terminal, and backups made by Desk itself (§6.4).
+terminal, backups made by Desk itself (§6.4), builds for Intel Macs, and automatic updates (Desk changes version only
+when you run `desk update`, `desk use`, `desk rollback`, or `npm run deploy`).
 
 ## 5. Behavior
 
@@ -70,6 +74,10 @@ terminal, and backups made by Desk itself (§6.4).
 | `desk agents` · `pause` · `resume` · `detach` | Lists agent-browser sessions started from Desk panes. `pause` refuses every agent-browser command from Desk shells until you `resume` (which asks you on a terminal). `detach` disconnects them. |
 | `desk import cookies` · `desk import native-hosts --host <name>` | One-time imports from your main Chrome, each only on an interactive terminal after you confirm (§5.5). |
 | `desk install` · `desk doctor` · `desk uninstall` | Setup, with consent for every step outside `~/.desk`; checks that each name their fix; removal of everything install recorded. |
+| `desk --version` | The installed version, its channel (stable, edge, or dev), commit, branch, and build time, from the build's `version.json` (IMPLEMENTATION §23.4); `--json` prints the file. |
+| `desk update` | After you confirm, installs the newest release (`--channel stable`, the default for a stable install), the newest build of `main` (`--channel edge`), or `--version X.Y.Z` next to the versions already installed, and makes it current. It accepts only what this repository's release or edge workflow built from `main`, checked against the release's `SHA256SUMS` and GitHub's build provenance, which needs `gh` 2.102.0 or later, signed in. It never moves to an older version unless you name one with `--version`, and then it says so. Shells and tmux sessions keep running; the next `desk` loads the new version and restarts `desk watch` with it. `--check` only reports. |
+| `desk versions` · `desk use <version>` · `desk rollback` | Lists the installed versions (current, previous, and any the terminal daemon, `desk watch`, or a native host still run); switches to another installed version after you confirm; goes back to the previous one. They refuse a version that cannot read your current state files. |
+| `npm run deploy` (in a checkout) | The developer path: builds the checkout as a dev version (`0.3.1-dev.<branch>+<commit>`), installs it after you confirm, and makes it current. Refuses uncommitted changes unless `--allow-dirty`. Never starts Chrome. |
 | `desk daemon restart` | Restarts the terminal daemon after you confirm, without waiting for its own pane. Plain shells end; tmux sessions survive and re-attach. |
 | `desk config toggle-key <key>` · `new-port` · `agent-policy strict\|open` | The panel shortcut (Chrome forgets changes made at chrome://extensions/shortcuts at its next start); a new guarded-endpoint port; whether agents may read cookies, storage, and saved state through agent-browser (`open` by default; going back to `open` after `strict` asks you first). |
 
@@ -86,7 +94,7 @@ quitting" is on unless you turned it off [source], and `desk doctor` reports it.
 | Panel hidden, or replaced by Reading list or another panel | — | — | back with the shortcut within 300 ms | yes | yes | yes |
 | Last Desk window closed (for example Cmd+W on the last tab) | yes | Cmd+Shift+T reopens the window | `desk` opens a new window with the panel | yes | yes | yes |
 | A second Desk window | — | — | each window can show the panel; a pane shows in one window at a time, with "bring it here" in the other | yes | yes | yes |
-| Desk update (`desk install`) | — | — | reloads | yes | yes: the running daemon keeps its shells until you choose "Restart now" | yes |
+| Desk update (`desk update`, `desk use`, `desk rollback`, `npm run deploy`) | — | — | reloads at the next `desk` | yes | yes: the running daemon keeps its shells until you choose "Restart now" | yes |
 | Terminal daemon crash or restart | — | — | — | layout and working directories; the screen only inside tmux | no (SIGHUP) | yes, re-attached |
 | The stored debugging port is taken while Desk is down | — | — | — | — | — | Desk moves Chrome to a new port; the guarded URL agents use does not change |
 | Mac restart or logout | yes | yes | yes | layout and working directories; panes re-attach to their tmux sessions as those come back | no | only with claude-rc supervision and its Desk change (IMPLEMENTATION §11); otherwise start again with `claude --resume` |
@@ -211,6 +219,12 @@ Also accepted, with these limits:
   the skill's rules reduce this; nothing removes it.
 - Sandboxed agents: a sandbox that allows 127.0.0.1 reaches both Desk ports. For agents that must stay sandboxed, deny
   127.0.0.1 on the raw and the guarded port in the sandbox's network settings.
+- Agent pull requests merge themselves without a human review (your 2026-10-06 policy), so `main`, and every edge
+  build made from it, holds code nobody read; its provenance proves where it was built, not that it was reviewed. A
+  stable release is the version you chose to cut after reading what changed. Changes to the delivery pipeline and the
+  agent rules wait for your merge by hand, but while agents use your own GitHub token that is a rule they follow, not
+  a lock: the same token can merge them, or turn off a ruleset. A fine-grained token for agents narrows this
+  (IMPLEMENTATION §22 D50, D51).
 
 ### 6.2 Controls
 
@@ -226,18 +240,20 @@ Also accepted, with these limits:
 | Terminal input and output | Pastes sanitized; OSC 52 reads never and writes only if enabled; no window reports; links only on Cmd+click; titles shown as plain text |
 | Extension | A strict content security policy, no web-accessible resources, no connections from other extensions or pages; it uses Chrome's debugger API only to list targets |
 | Files and logs | `~/.desk` is 0700 and owned by you; files are 0600 and written atomically. Titles, scrollback, keystrokes, cookie values, URLs, and CDP payloads never reach disk or logs; logs hold typed events only |
-| Installed runtime | Desk runs from a versioned copy in `~/.desk/app` with its own copy of Node named Desk Terminal, never from the source tree, so macOS privacy prompts and grants name Desk Terminal rather than every `node` |
+| Installed runtime | Desk runs from a versioned copy in `~/.desk/app` with its own copy of Node named Desk Terminal, never from the source tree, so macOS privacy prompts and grants name Desk Terminal rather than every `node`. Versions sit side by side; `current` switches atomically; `desk rollback` returns to the previous one |
+| Updates | `desk update` and the fresh-Mac installer accept only what this repository's release workflow on that release's tag (or, for edge, its edge workflow on `main`) built from a commit on `main`, checked against `SHA256SUMS`, GitHub's release attestation, and build provenance with the exact workflow, ref, and commit (`gh attestation verify`, `gh` 2.102.0 or later); a published release is immutable and is published only after you approve it; nothing updates on its own, and nothing moves to an older version unless you name it |
 | Imports | Opt-in per site; Google account cookies never move; both Chromes' listeners are verified before cookies move; values are never printed; the main Chrome's remote debugging is switched back off |
 | Consent | §6.3 |
-| Repo | Public repo: gitleaks `--redact` and a secret scan over code, docs, and tests; actions pinned by commit; no dependency install scripts; no profiles, state, traces, or keys committed |
+| Repo | Public repo: gitleaks `--redact` and a secret scan over code, docs, and tests; actions pinned by commit; no dependency install scripts; no profiles, state, traces, or keys committed. `main` takes changes only through pull requests whose required checks passed, and the checks that guard titles, workflows, and docs-only changes run from `main`'s own copy, so a pull request cannot weaken them. No ruleset has a bypass actor, so `--admin` merges fail for everyone; pipeline and agent-rule changes and the release PR wait for your merge by hand; only the release App creates tags. Agents holding your token can still merge, or turn off a ruleset, against the rules (§6.1; IMPLEMENTATION §23) |
 
 ### 6.3 Consent
 
 These run only after you confirm on an interactive terminal, and refuse without one (there is no `--yes`): importing
 cookies or native hosts; `desk install` and `desk uninstall` steps outside `~/.desk` (tmux config, `~/.claude` and
 `~/.cursor` rules and skills, Desk.app, the login item); `desk quit --all`; `desk daemon restart`;
-`desk agents resume`; `desk config agent-policy open`. Each writes one audit line to `desk.log` with the operation,
-counts, and exit code, never names or values.
+`desk agents resume`; `desk config agent-policy open`; and changing the installed version: `desk update`, `desk use`,
+`desk rollback`, and `npm run deploy`. Each writes one audit line to `desk.log` with the operation, counts, and exit
+code, never names or values.
 
 ### 6.4 Backups
 
@@ -256,15 +272,17 @@ imported, change the passwords that synced into Desk, then delete and recreate t
 
 macOS on Apple silicon (developed on macOS 26, Darwin 25.6). Google Chrome stable ≥ 155; the behavior Desk relies on
 was verified on 155.0.8059.26 and 155.0.8059.40 on macOS [RC, LAB] and on 155.0.8059.39 for Linux arm64 in the test VM
-[VMLAB]. Desk brings its own copy of Node, made from your Node 26 at install; development uses Node 26, and the
-packages declare engines `^22.22.2 || ^24.15.0 || >=26`. tmux (the environment behavior Desk relies on was verified
-on 3.7c [RF]). agent-browser ≥ 0.38.1. Linux runs Desk only inside its test container. Windows: not supported.
+[VMLAB]. Desk brings its own copy of Node, Desk Terminal: Node 26.10.0 for darwin-arm64, pinned by sha256 (a
+developer build copies your Node only when it matches that pin); development uses Node 26, and the packages declare
+engines `^22.22.2 || ^24.15.0 || >=26`. Releases are built for macOS on Apple silicon only. tmux (the environment
+behavior Desk relies on was verified on 3.7c [RF]). agent-browser ≥ 0.38.1. Linux runs Desk only inside its test
+container. Windows: not supported.
 
 ## 8. Quality bars
 
 | Bar | Target | Measured |
 |---|---|---|
-| Nothing on your screen during development or tests | 0 windows: unit tests start no browser and no PTY; live tests run only in the Colima VM; no test touches your `~/.desk` | GUI-guard and isolation tests (IMPLEMENTATION §0, §17) |
+| Nothing on your screen during development or tests | 0 windows: unit tests start no browser and no PTY; live tests run only in the Desk test container (the Colima VM, or GitHub's arm64 runner in CI); no test touches your `~/.desk` | GUI-guard and isolation tests (IMPLEMENTATION §0, §17) |
 | Cold `desk` until the panel shows a live shell | ≤ 2.5 s p50, ≤ 4 s p95 (confirmed or revised by the slice 1c baseline) | live VM; checklist |
 | `desk` with Chrome already running, until the panel is focused | ≤ 0.5 s | live VM |
 | Showing the hidden terminal until it takes input | ≤ 300 ms p95 with 4 visible panes | live VM; checklist |
@@ -274,7 +292,8 @@ on 3.7c [RF]). agent-browser ≥ 0.38.1. Linux runs Desk only inside its test co
 | Crash | Tabs restore automatically; state older than 40 s survives | live VM; [LAB, VMLAB] |
 | Panes | 100% re-attach after a Chrome restart with the screen intact; 100% return in their working directory after a daemon restart, including a `cd` made 2 s before | live VM |
 | tmux sessions | 100% survive Chrome quit, crash, update, a Desk update, and a daemon restart, and their panes re-attach | live VM |
-| Desk update | 0 shells lost when a new build is installed while panes run | live VM |
+| Desk update | 0 shells lost when a version is installed, updated to, or rolled back to while panes run | live VM |
+| Release integrity | Every published asset carries build provenance from the release workflow on its tag; `desk update` installs nothing that fails its sha256 or provenance check | release workflow; slice D2 tests |
 | Agents and your view | An agent opening or using its tab never changes your active tab or keyboard focus | live VM (slice 4b) |
 | Automation fingerprint | `navigator.webdriver` is false on every tab; no infobar (window chrome as tall as a launch without Desk's flags) | live VM; checklist; `desk doctor --security` |
 | Your agent state | `~/.agent-browser/config.json` and `sessions/` byte-identical after any Desk run, including `desk agents detach` run from another terminal | live VM |
@@ -294,6 +313,8 @@ on 3.7c [RF]). agent-browser ≥ 0.38.1. Linux runs Desk only inside its test co
 - If a cookie value, a keystroke, terminal output, or a window title reaches a file or log Desk writes, Desk is not
   done.
 - If Desk changes your main Chrome profile or your agent-browser `main` state, Desk is not done.
+- If `desk --version` cannot name the commit your Desk was built from, or Desk installs a build that this
+  repository's release or edge workflow did not build, Desk is not done.
 
 ## 10. Evidence
 

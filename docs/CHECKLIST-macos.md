@@ -4,12 +4,13 @@ Status: draft 2 (2026-10-06). Becomes `docs/CHECKLIST-macos.md` in the repo. The
 make (IMPLEMENTATION §17.5): your real account, the Keychain, LaunchServices, hardware keys, macOS privacy prompts,
 logout. Each item names the slice that makes it runnable.
 
-**When.** Run B, the full run, once after slice 8 (about 35 minutes). Run A is optional, after slice 4a (about
-10 minutes), to catch macOS-only surprises early. Run U after Chrome's major version changes (about 5 minutes;
-`desk doctor` reminds you).
+**When.** Run B, the full run, once after slice 8 (about 40 minutes; M19 needs slice D2 and two installed versions).
+Run A is optional, after slice 4a (about 10 minutes), to catch macOS-only surprises early. Run U after Chrome's major
+version changes (about 5 minutes; `desk doctor` reminds you).
 
 **Before you start**
-- `desk install` is done, and (from slice 5 on) `desk doctor` reports no problems.
+- Desk is installed: `npm run deploy` in a checkout, or, once releases exist, `install.sh` or `desk update`
+  (IMPLEMENTATION §23.5); and (from slice 5 on) `desk doctor` reports no problems.
 - Termius is open, your phone has the Claude app, and 1Password is installed if you use it.
 - For M5, M15, and M17 use a throwaway login (a test account or `desk doctor --autofill-probe`'s local page), never a
   real password. Never paste a password into the terminal.
@@ -19,7 +20,7 @@ logout. Each item names the slice that makes it runnable.
 hold secrets:
 
 ```json
-{ "date": "2026-11-02", "run": "B", "chrome": "155.0.8059.40", "desk": "<build id from desk status>",
+{ "date": "2026-11-02", "run": "B", "chrome": "155.0.8059.40", "desk": "<version from desk --version>",
   "results": { "M1": "pass", "M4a": "fail", "M10": "skip" } }
 ```
 
@@ -122,6 +123,13 @@ when you cancel, the field stays empty. Delete the throwaway password afterwards
 
 **M18 — Agents pause (4b).** Run `desk agents pause`, then in a pane `agent-browser get title`. Pass: it is refused by
 policy and the terminal shows "agents paused". `desk agents resume` asks you to confirm.
+
+**M19 — Update and roll back (D2).** With Claude running in a pane, run `desk update` in Termius (or pick another
+version from `desk versions` and run `desk use <version>`), confirm, then run `desk`. Pass: the panel reloads, the
+pane shows the same conversation, `desk --version` names the new version, and `desk status` shows `desk watch` on that
+version too (agents in other panes still work on their next command). In the pane run `ls ~/Documents`: when
+`desk --version --json` shows the same `node` as before, macOS does not ask again (M9's grant still applies). Then run
+`desk rollback`, confirm, and `desk`. Pass: the pane survives again, and `desk --version` names the previous version.
 
 ## Run U (after Chrome's major version changes)
 

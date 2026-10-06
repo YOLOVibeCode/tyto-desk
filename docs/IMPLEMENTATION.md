@@ -1,13 +1,16 @@
 # Tyto Desk — Implementation plan (TDD + ISP)
 
 Noctusoft, Inc. · Status: draft 2 (2026-10-06), revised after the security, persistence-and-UX, and testability
-review; decisions and rejected review items are in §22 — the engineering contract for `tyto-desk` (repo not created yet)
+review, and after the delivery review; decisions and rejected review items are in §22, and delivery (branches,
+versions, releases) in §23 — the engineering contract for `tyto-desk`
+([`YOLOVibeCode/tyto-desk`](https://github.com/YOLOVibeCode/tyto-desk))
 Product: [`SPEC.md`](./SPEC.md). Manual checks: [`MANUAL-CHECKS.md`](./CHECKLIST-macos.md) (becomes
-`docs/CHECKLIST-macos.md`). Conventions are copied from Tyto (`/Users/admin/Dev/YOLOProjects/tyto`): `CLAUDE.md`,
-`AGENTS.md`, `.claude/rules/*`, `tsconfig.base.json`, `vitest.config.ts`, `scripts/check-core-imports.mjs`,
-`scripts/check-secrets.mjs`, `.gitleaks.toml` (its rules and MV3-key entry, not its path allowlist, §18),
-`.githooks/pre-commit`, `.github/workflows/ci.yml` (hardened, §18), one port per file with separate fakes,
-`writePrivate`, the argv runner, the install and doctor patterns. The new repo's `CLAUDE.md` records the user's
+`docs/CHECKLIST-macos.md`). Runbooks: [`RELEASING.md`](./RELEASING.md), [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+Conventions are copied from Tyto (`/Users/admin/Dev/YOLOProjects/tyto`): `CLAUDE.md`, `AGENTS.md`, `.claude/rules/*`,
+`tsconfig.base.json`, `vitest.config.ts`, `scripts/check-core-imports.mjs`, `scripts/check-secrets.mjs`,
+`.gitleaks.toml` (its rules and MV3-key entry, not its path allowlist, §18), `.githooks/pre-commit`,
+`.github/workflows/ci.yml` (hardened, §18), one port per file with separate fakes, `writePrivate`, the argv runner,
+the install and doctor patterns. The new repo's `CLAUDE.md` records the user's
 2026-10-06 exception to the one-door rule: Desk is built interactively on this Mac, because the cloud-agents farm's
 Linux VMs cannot run its live suite [RF, CR]; changes to claude-remote-control go as a PR in that repo (§22 D24).
 
@@ -63,7 +66,7 @@ explicit environments. Desk sends nothing to a model.
 `--yes`: unit tests inject `ScriptedPrompter`, and live tests answer prompts through a PTY.
 
 After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:listen`, `lint:install-scripts`,
-`secrets:scan`, `test`, `typecheck`, `build`).
+`secrets:scan`, `test`, `typecheck`, `build`, and from slice D1 `lint:workflows`).
 
 ## 1. Processes
 
@@ -83,7 +86,7 @@ After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:lis
 | `desk-nmhost` for the service worker | Desk Terminal | while Chrome runs (its port keeps the worker alive) | Chrome | the worker's port |
 | `desk-nmhost` for a panel | Desk Terminal | while that panel is shown | Chrome | the panel's port |
 | `desk-ptyd` | Desk Terminal | until logout, `desk quit --all`, or a daemon restart you confirm | the first `desk-nmhost` | — (detached, own session) |
-| `desk watch` | Desk Terminal | from the first `desk` until logout or `desk quit --all` | `desk` | — (detached, own session) |
+| `desk watch` | Desk Terminal | from the first `desk` until logout, `desk quit --all`, or a `desk` of another version (§6.1 step 13) | `desk` | — (detached, own session) |
 | shells | your shell | until they exit | `desk-ptyd` | the daemon (SIGHUP) |
 | tmux server, claude | — | independent | `cc` typed in a pane | logout or reboot (claude-rc may restart them) |
 
@@ -93,7 +96,7 @@ After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:lis
 
 | Package | Role |
 |---|---|
-| `packages/core` (`@desk/core`) | Pure: config schema; Chrome args, first-run prefs, instance classification; launch, reuse, quit, panel, watch, and import plans over ports; protocol types, NDJSON and native-messaging codecs, the encoded-size splitter, client verbs; env policy and the agent-variable gate; OSC parser; pane registry, ownership, attach queue, flow-control accounting; escape-tail splitter; layout tree and reconcile; keymap and `sanitizePaste`; panel controller and toggle decision; cold-restore plan; tmux matching; agent-browser config, policy, and skill text; import filters; gateway policy and `httpGuard`; `guiAllowed`; typed `LogEvent`s; `SecretRedactor`; ports; fakes (`@desk/core/testing`) |
+| `packages/core` (`@desk/core`) | Pure: config schema; Chrome args, first-run prefs, instance classification; launch, reuse, quit, panel, watch, and import plans over ports; protocol types, NDJSON and native-messaging codecs, the encoded-size splitter, client verbs; env policy and the agent-variable gate; OSC parser; pane registry, ownership, attach queue, flow-control accounting; escape-tail splitter; layout tree and reconcile; keymap and `sanitizePaste`; panel controller and toggle decision; cold-restore plan; tmux matching; agent-browser config, policy, and skill text; import filters; gateway policy and `httpGuard`; `guiAllowed`; typed `LogEvent`s; `SecretRedactor`; release: semver, `classifyBuild`, the update plan and retention (§23); ports; fakes (`@desk/core/testing`) |
 | `packages/node` | Shared Node adapters: `writePrivate`, the argv runner (AbortSignal, output cap), `FileLogSink`, `InstanceLock`, `DetachedSpawner`, `TextFiles`, `ConfigStore`, system clock and random, `ProcessInfo`, `ListenerInfo`, `PortProbe`, `LoginShell`, `Tmux`, `CodeSigning`, `LaunchAgent` |
 | `packages/chrome` | `ChromeProcess` (macOS `/usr/bin/open -n -a`, Linux detached exec), `ChromeProfile`, `MainChromeProfile`, `NativeHostDir`, `DevToolsHttp`, and the CDP role adapters `DeskExtension`, `PanelOpener`, `ChromeSettings`, `BrowserLifecycle`, `TargetWatch`, `CookieJar`, `SecurityProbe`, over an internal CDP connection (Node's WebSocket client, as in PROTO `cdp.mjs`) |
 | `packages/ptyd` | `desk-ptyd`: `MessageServer` (Unix socket, NDJSON), `PtySpawner`, `TerminalMirror` (`@xterm/headless` + serialize + unicode11), `LayoutStore`, `PaneStore` |
@@ -147,7 +150,7 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 | `instance-lock.ts` | `acquire(name)` → `{release}` or `{heldBy: pid}`; a dead holder's lock is reclaimed | node (`run/*.lock`) |
 | `detached-spawner.ts` | `spawn(file, args, env)` → pid; own session, stdio ignored | node |
 | `prompter.ts` | `confirm(question)`, `choose(question, items)`; refuses without an interactive TTY | cli |
-| `process-info.ts` | `alive(pid)`, `ttyOf(pid)`, `cwdOf(pid)`, `childrenOf(pid)`; never reads environments | node: `ps`, `lsof` (macOS), `/proc` (Linux); argv, 3 s |
+| `process-info.ts` | `alive(pid)`, `ttyOf(pid)`, `cwdOf(pid)`, `childrenOf(pid)`, `executablesUnder(dir)` → `{pid, exe}[]`; never reads environments | node: `ps` (`-axo pid=,comm=` for executables), `lsof` (macOS), `/proc` (Linux); argv, 3 s |
 | `listener-info.ts` | `listenerPid(port)` → `pid \| null`; `image(pid)` → `{exe, args} \| null` | node: `lsof -nP -iTCP@127.0.0.1:<port> -sTCP:LISTEN -Fp`, `ps -o comm=,args=` |
 | `port-probe.ts` | `isFree(port)` | node (`node:net`: busy when a 127.0.0.1 connect is accepted, then free only if a 127.0.0.1 bind succeeds; D32) |
 | `login-shell.ts` | `passwdShell()`; `exportedNames(signal)` → variable names only | node |
@@ -183,6 +186,10 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 | `terminal-view.ts` | `create(paneId, opts)` → `{write(data, done), reset(), paste(text), onInput, onResize, onFocus, onBell, size(), focus(), dispose()}` | extension (xterm) |
 | `agent-sessions.ts` | `list(prefix)`, `close(session)`; always Desk's config and a clean environment | cli (agent-browser argv; socket-dir rules from Tyto's `agentBrowserSocketDir`) |
 | `extension-bridge.ts` | `windows()`, `tabCurrent()`, `tabMine(pane)`, `focusWindow(id)` | cli, watch (via `DaemonClient` `ext.call`) |
+| `release-feed.ts` | `latest(channel, signal)` → `ReleaseRef \| null`; `find(version, signal)`; `onMain(commit, signal)` → boolean; `fetch(ref, dir, signal)` → the tarball's and `SHA256SUMS`' paths; a `ReleaseRef` is `{tag, version, channel, commit, run?, assets: {name, size, digest}[]}` | cli: GitHub REST without a token for stable (`releases`, `commits/<tag>`, `compare/<commit>...main`; 30 s per call, 300 MB cap); `gh run list`, `gh api …/artifacts`, and `gh run download` argv for edge (§23.5) |
+| `provenance.ts` | `verify(path, {identity, sourceRef, sourceDigest}, signal)` and `verifyReleaseAsset(tag, path, signal)` → `verified \| refused \| unavailable` (`gh` missing, signed out, or older than 2.102.0) | cli: `gh --version`, then `gh attestation verify … --cert-identity … --source-ref … --source-digest … --deny-self-hosted-runners` and `gh release verify-asset` argv, 60 s |
+| `file-digest.ts` | `sha256(path, signal)` → hex | node (`node:crypto`, streamed) |
+| `app-versions.ts` | `list()`, `current()`, `stage()` → a staging directory, `commit(staging, version)`, `use(version)` (atomic link swap), `remove(version)`, `inUse()` → the versions `ptyd.lock` and `watch.lock` name, plus every version whose Desk Terminal a process runs (`ProcessInfo.executablesUnder`, which finds native hosts too) | node (`fs/promises`, `rename`, `symlink`) |
 
 Each file exports the port named in PascalCase (`listener-info.ts` → `ListenerInfo`). Fakes are separate classes in
 `@desk/core/testing`, one per port, named `Fake<Port>` or, for stores, `Memory<Port>`; plus `FakeClock`, `SeqRandom`,
@@ -202,13 +209,20 @@ method they use. Node adapters are tested with stub executables (`fake-tmux.mjs`
   agent-policy.json               0600  strict, open, or paused (§11); written before any agent session, never deleted
   layout.json                     0600  written only by desk-ptyd: tabs, splits, ui (font size, theme, welcome done)
   panes.json                      0600  written only by desk-ptyd: cwd, tmux, lastTmux, shell; never titles
-  installed.json                  0600  build id; files install manages outside ~/.desk, with sha256
-  app/<build>/                    0700  installed runtime (§15.1): Desk Terminal, desk.mjs + chunks, node-pty, extension
-  extension/                      0700  what Chrome loads: the running build's extension, manifest rendered with your key
-  bin/desk-nmhost                 0700  launcher → Desk Terminal + the nmhost entry
-  run/                            0700  ptyd.sock (0600, bound under umask 077), ptyd.lock, watch.lock, launch.lock, quit.marker
+  installed.json                  0600  current and previous version, each version's channel, build id, provenance, and
+                                        install time; files install manages outside ~/.desk, with sha256; written only
+                                        under install.lock, and only ever extended (§23.5)
+  render.json                     0600  the manifest render serial (§23.3); written only under launch.lock
+  app/<version>/                  0700  an installed runtime (§15.1): Desk Terminal, desk.mjs + chunks, node-pty, extension,
+                                        version.json, files.sha256; immutable once installed
+  app/current                           symlink to the current version, replaced with rename(2) (§23.5)
+  extension/                      0700  what Chrome loads: the current version's extension, manifest rendered with your key
+  bin/desk-nmhost                 0700  launcher → the current version's Desk Terminal + the nmhost entry
+  run/                            0700  ptyd.sock (0600, bound under umask 077), ptyd.lock, watch.lock, launch.lock,
+                                        install.lock (§23.5), quit.marker
   logs/                           0700  desk.log, ptyd.log, nmhost.log, watch.log (typed events, 1 MB × 3)
-~/.local/bin/desk                 0700  launcher → Desk Terminal + the cli entry (your dotfiles put ~/.local/bin on PATH)
+~/.local/bin/desk                 0700  launcher → the current version's Desk Terminal + the cli entry (your dotfiles put
+                                        ~/.local/bin on PATH)
 ~/Library/Application Support/Desk/Chrome/       the Desk profile (config.chrome.userDataDir; Chrome-owned)
   NativeMessagingHosts/com.noctusoft.desk.json   Desk writes only: the first-run seed, this manifest, host manifests you
                                                   imported, and removes stale Singleton* files (§6.1 step 4)
@@ -325,16 +339,17 @@ always an observed condition, never a sleep.
    | alive | answers | anything else, or unverifiable | exit 75: "port N is held by another program while the Desk Chrome runs; quit the Desk Chrome (Cmd+Q) and run desk" (fail closed) |
    | alive | silent | — | wait up to 10 s for the singleton to exit (Chrome is quitting), then launch; else exit 75: "the Desk Chrome is running without its debugging port; quit it with Cmd+Q" |
 
-5. Every launch: write the Desk native-host manifest if it differs; render `~/.desk/extension` (copy the build's files
-   when the build changed; render the manifest with `config.panel.toggleKey`); write `agent-browser.json`; make sure
-   `agent-policy.json` exists (§11).
+5. Every launch: write the Desk native-host manifest if it differs; render `~/.desk/extension` (copy the current
+   version's files when the version changed; render the manifest with `config.panel.toggleKey`, `version`
+   `X.Y.Z.<render serial>` from `render.json`, and `version_name` the full Desk version, §23.3); write
+   `agent-browser.json`; make sure `agent-policy.json` exists (§11).
 6. First run: `seedFirstRun`.
 7. `ChromeProcess.start(args)`. macOS: `/usr/bin/open -n -a <app> --args …`, so LaunchServices starts Chrome with
    launchd's environment and its own privacy identity rather than the terminal's (inferred; M2). Linux: exec the binary
    detached with an explicit environment.
 8. Wait for `/json/version` (polled every 100 ms), then connect to the browser WebSocket.
-9. Ensure the extension: skip when `DeskExtension.installedVersion(id)` is this build's; otherwise
-   `load(~/.desk/extension)` on the browser session (`Extensions.*` works only there [RC]). The id must equal
+9. Ensure the extension: skip when `DeskExtension.installedVersion(id)` equals the rendered manifest's `version`;
+   otherwise `load(~/.desk/extension)` on the browser session (`Extensions.*` works only there [RC]). The id must equal
    `extensionIdFromKey(manifest.key)`, else exit 70. If loading fails because Chrome stopped allowing it over the port,
    exit 70 naming the fallback: a one-time Developer-mode "Load unpacked" of `~/.desk/extension` (same key, same id;
    Chrome disables it whenever Developer mode is off) [RC]. Later launches find the id installed and skip loading.
@@ -347,14 +362,19 @@ always an observed condition, never a sleep.
     shows the panel: `focusWindow` it and ask its panel to focus. Otherwise
     `PanelOpener.open(id, tabTargetInWindow(lastFocused))` runs the toolbar action, which opens the panel [RC]. Wait
     for that window's panel `hello` (5 s).
-13. Start `desk watch` when `run/watch.lock` is free (`DetachedSpawner`, explicit environment).
+13. Start `desk watch` when `run/watch.lock` is free (`DetachedSpawner`, explicit environment). When the lock names
+    a live watch whose `build` is not the current version, replace it: SIGTERM to that pid (it closes the guarded
+    endpoint and releases the lock), wait for the lock (10 s), then start the current version's watch. The daemon and
+    every shell keep running; agents reconnect on their next command, because their `cdp` is the `http://` form
+    (§11).
 14. Print `Desk ready (port 9417, guarded 9583, Chrome 155.0.8059.40) in 1.8 s`; after step 12 created a window, add
     "Cmd+Shift+T reopens the window you closed". Exit 0.
 
 ### 6.2 Reuse
 
-Steps 1, 4, 5, 9, 10, and 12–14. After `desk install` the build differs, so step 9 reloads the extension; panels close
-and reopen, and their panes re-attach to the running daemon (§7.2 negotiation).
+Steps 1, 4, 5, 9, 10, and 12–14. After an install, `desk update`, `desk use`, `desk rollback`, or `npm run deploy` the
+version differs, so step 9 reloads the extension (panels close and reopen, and their panes re-attach to the running
+daemon, §7.2 negotiation) and step 13 replaces `desk watch` with the current version's.
 
 ### 6.3 `desk quit`
 
@@ -367,8 +387,9 @@ daemon and stop `desk watch`; return without waiting for the pane it runs in.
 
 ### 6.4 `desk watch`
 
-One instance (`run/watch.lock`), from the first `desk` until logout or `desk quit --all`. It is a daemon client of kind
-`watch`.
+One instance (`run/watch.lock`, which records its `build`), from the first `desk` until logout, `desk quit --all`, or
+a `desk` of another version replacing it (§6.1 step 13). It is a daemon client of kind `watch`; it exits 0 on SIGTERM
+after closing the guarded endpoint.
 
 - Hosts the guarded endpoint on `gateway.port` (§12). While Chrome is down it answers HTTP 503 "Desk is not running;
   run desk", so no other program can take the port in the meantime.
@@ -425,8 +446,8 @@ missing, or Desk not running · 70 internal (an extension id mismatch, or loadin
   from Chrome's, which on macOS is launchd's GUI environment, inferred). The live suite proves it survives SIGKILL of
   every Chrome process.
 - At start it checks that `~/.desk` and `run/` are owned by you, mode 0700, and not symlinks; sets umask 077; takes
-  `run/ptyd.lock` `{pid, build, protocol range, startedAt}` (a live holder wins, a dead holder's lock is reclaimed);
-  then binds `run/ptyd.sock`.
+  `run/ptyd.lock` `{pid, build (its version), protocol range, startedAt}` (a live holder wins, a dead holder's lock
+  is reclaimed); then binds `run/ptyd.sock`.
 - It stops only on `shutdown` (from `desk quit --all`, `desk daemon restart`, or the panel's "Restart now"): it flushes
   `panes.json` and sends SIGHUP to its shells; tmux servers are separate processes and survive. It also flushes
   `panes.json` on SIGTERM and SIGHUP.
@@ -441,7 +462,7 @@ missing, or Desk not running · 70 internal (an extension id mismatch, or loadin
 | `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `SSH_AUTH_SOCK`, `__CF_USER_TEXT_ENCODING` | kept |
 | `LANG` and the locale categories (`LC_ALL`, `LC_CTYPE`, `LC_COLLATE`, `LC_MESSAGES`, `LC_MONETARY`, `LC_NUMERIC`, `LC_TIME`, and glibc's `LC_ADDRESS`, `LC_IDENTIFICATION`, `LC_MEASUREMENT`, `LC_NAME`, `LC_PAPER`, `LC_TELEPHONE`) | kept when the value is a UTF-8 locale (`UTF-8`, `en_US.UTF-8`, `C.UTF-8`, `sr_RS.utf8@latin`); `LANG=en_US.UTF-8` when no UTF-8 locale is set (tmux needs one [RF]). Any other `LC_*` name (`LC_TERMINAL`) is dropped |
 | `PATH` | `/usr/bin:/bin:/usr/sbin:/sbin`; the login shell's `path_helper` and dotfiles build the rest [RF] |
-| `TERM=xterm-256color`, `COLORTERM=truecolor`, `CLICOLOR=1`, `TERM_PROGRAM=Desk`, `TERM_PROGRAM_VERSION` | set (YOLOTerm `env-policy.json`) |
+| `TERM=xterm-256color`, `COLORTERM=truecolor`, `CLICOLOR=1`, `TERM_PROGRAM=Desk`, `TERM_PROGRAM_VERSION` (the daemon's `version.json` version) | set (YOLOTerm `env-policy.json`) |
 | `AGENT_BROWSER_CONFIG`, `AGENT_BROWSER_SESSION=desk-<pane>`, `DESK_CDP_URL` (guarded), `DESK_PANE` | set only when the agent-variable gate allows (below) |
 | everything else, including `ANTHROPIC_API_KEY`, `TMUX`, `TMUX_PANE`, `ELECTRON_*`, `NODE_OPTIONS`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE`, `AGENT_BROWSER_CDP`, `AGENT_BROWSER_NAMESPACE`, `AGENT_BROWSER_RESTORE*`, `AGENT_BROWSER_PIN_TAB` | dropped [RF, CR] |
 
@@ -565,15 +586,19 @@ The tmux binary is `config.terminal.tmux`, else the first of `/opt/homebrew/bin/
 - Chrome reads the manifest from `<ud>/NativeMessagingHosts`, so the main Chrome never sees it; it starts the host as
   its child with the caller origin as the first argument and, on macOS, disclaims privacy responsibility for it [RC;
   PROTO `nmhost/host.mjs`; source `launch_context_posix.cc:92-96`].
-- `bin/desk-nmhost` is `exec /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE
-  "<build>/Desk Terminal.app/Contents/MacOS/desk-node" "<build>/desk.mjs" nmhost "$@"`: a bundled entry in the
-  installed build, never the source tree, so a panel shows without TypeScript stripping.
+- `bin/desk-nmhost` resolves `~/.desk/app/current` once (`realpath`) into `<version>` and runs
+  `exec /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE
+  "<version>/Desk Terminal.app/Contents/MacOS/desk-node" "<version>/desk.mjs" nmhost "$@"`: a bundled entry in the
+  installed version, never the source tree, so a panel shows without TypeScript stripping, and never a path through
+  `current`, so a running host never loads a chunk from another version (§23.5).
 - The host exits 1 without contacting the daemon unless `argv[1]` is exactly the Desk origin.
 - Relay: each native message becomes one NDJSON line and each daemon line one native message. A frame over 1 MiB drops
   the connection and logs only its size. On stdin EOF it closes the socket and exits 0.
-- Daemon start: when the connect fails with `ENOENT` or `ECONNREFUSED`, check the build's files against
-  `files.sha256` (a mismatch sends `error install-damaged` and stops), spawn `desk-ptyd` with `DetachedSpawner` and an
-  explicit environment, then retry with backoff for 3 s.
+- Daemon start: when the connect fails with `ENOENT` or `ECONNREFUSED`, resolve `~/.desk/app/current` once, check that
+  version's files against its `files.sha256` (a mismatch sends `error install-damaged` and stops), spawn that
+  version's `desk-ptyd` with `DetachedSpawner` and an explicit environment, then retry with backoff for 3 s. A host
+  that Chrome started before an update therefore never starts an old daemon (its relay never parses, so it serves
+  any protocol version, §7.2), and retention keeps its own version while it runs (§23.5).
 - Logs carry sizes, codes, and timings only.
 
 ## 9. Extension
@@ -591,6 +616,8 @@ The tmux binary is `config.terminal.tmux`, else the first of `/opt/homebrew/bin/
   "externally_connectable": { "ids": [], "matches": [] } }
 ```
 
+- The template's `version` is a placeholder: every launch renders `version` as `X.Y.Z.<render serial>` and adds
+  `version_name`, the full Desk version (§6.1 step 5, §23.3).
 - `key` is a public RSA key generated once at repo creation; the private key is discarded. It pins the id for the
   native host's `allowed_origins` (without it the id derives from the path [RC]); gitleaks already allowlists this key
   prefix. No experiment has used a `key` yet, so slice 1b's first live test asserts the id.
@@ -911,25 +938,36 @@ passwords, by hand: export a CSV from the main Chrome's Password Manager, import
 
 ### 15.1 Installed runtime
 
-`desk install`, run by the operator from a checkout, builds and installs one build; development never touches
-`~/.desk`.
+A runtime is built by `npm run pack` from a checkout (it writes only `dist/`, so agents may run it) or by the edge and
+release workflows (§23.6), and is installed by its own `desk install --from <dir>`, which `npm run deploy`,
+`desk update`, and the fresh-Mac installer all end in (§23.5). Development never touches `~/.desk`.
 - esbuild bundles the cli, `desk watch`, the host, and the daemon into `desk.mjs` plus chunks (ESM with splitting), and
-  the extension into `extension/`; it copies the native node-pty package and records its sha256.
-- macOS: copies the pinned Node binary into `Desk Terminal.app/Contents/MacOS/desk-node` with an `Info.plist`
-  (`CFBundleIdentifier` `com.noctusoft.desk.terminal`, `LSUIElement`) and signs the bundle ad hoc with that identifier
+  the extension into `extension/`; it copies the native node-pty package and records its sha256. Every package it
+  bundles is a `dependencies` entry of its workspace, never a `devDependencies` one (a check over esbuild's metafile,
+  slice 1c), so a dev tool's update can never change what ships (§23.7). The build runs esbuild and the repo's own
+  scripts only; no dev tool (Vitest, TypeScript) runs while it packs.
+- macOS: copies the pinned Node binary (Node 26.10.0 for darwin-arm64, pinned by sha256 in
+  `scripts/delivery/node-runtime.json`; a developer build copies the operator's Node only when its sha256 matches the
+  pin) into `Desk Terminal.app/Contents/MacOS/desk-node` with an `Info.plist` (`CFBundleIdentifier`
+  `com.noctusoft.desk.terminal`, `LSUIElement`, and no Desk version) and signs the bundle ad hoc with that identifier
   (`CodeSigning.adHocSign`). Chrome disclaims privacy responsibility for native hosts [RC], so the host and the daemon
   answer for themselves; as their own signed bundle, prompts and grants name Desk Terminal instead of attaching to the
   Node.js signature that every `node` shares (inferred; M9). Grants are asked again when Desk moves to a new Node
-  version. Desk's processes no longer depend on nvm keeping that version. Linux (container): `node/desk-node`, unsigned.
-- Writes `files.sha256`; the content hash is the build id; the target is `~/.desk/app/<build>/` (0700).
-- Launchers (`~/.local/bin/desk`, `~/.desk/bin/desk-nmhost`) exec only that build through
-  `env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE`; only `desk` sets `DESK_ALLOW_GUI=1`.
-- Prunes builds that no running process uses (`ptyd.lock` and `watch.lock` name their build) and keeps the newest two.
+  version, not when Desk itself updates (inferred; M19). Desk's processes no longer depend on nvm keeping that version.
+  Linux (container): `node/desk-node`, unsigned.
+- Writes `version.json` (§23.4) and `files.sha256`; the build id is the sha256 of `files.sha256`; the target is
+  `~/.desk/app/<version>/` (0700), complete and immutable once installed.
+- Launchers (`~/.local/bin/desk`, `~/.desk/bin/desk-nmhost`) resolve `~/.desk/app/current` once and exec that version
+  through `env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE`; only `desk` sets `DESK_ALLOW_GUI=1`.
+- After you confirm, switches `current` with one `rename(2)`, then keeps three versions and never one a running process
+  uses, native hosts included (§23.5).
 - Writes the native host manifest and the skills; then, each after consent: the web-access rule step, the tmux line
   (file and running server), `~/Applications/Desk.app` (runs `desk`; for Spotlight and the Dock), and an opt-in login
-  LaunchAgent that runs `desk` at login.
-- Updating is installing a new build: the next `desk` reloads the extension; the running daemon keeps its shells
-  (§7.2) until you choose "Restart now".
+  LaunchAgent that runs `desk` at login. On an existing install, `desk install --from` runs only the version steps
+  (runtime, `current`, launchers, host manifest, unedited skills) and asks again only for consent steps whose result
+  is missing.
+- Updating is installing and switching to a new version (§23.5): the next `desk` reloads the extension and replaces
+  `desk watch` with the new version's; the running daemon keeps its shells (§7.2) until you choose "Restart now".
 
 ### 15.2 Doctor
 
@@ -937,8 +975,13 @@ passwords, by hand: export a CSV from the main Chrome's Password Manager, import
 `~/.desk` and the Desk native-host manifest, never stops the daemon, and asks before anything else.
 
 - Chrome ≥ 155; when Chrome's major version changed since the last run: "run checklist U" (MANUAL-CHECKS).
-- The installed build matches `files.sha256`; Desk Terminal runs; the launchers point at it; `desk` is on PATH in a
-  login shell.
+- The current version matches `files.sha256`; `app/current` points at a version directory inside `~/.desk/app`;
+  Desk Terminal runs; the launchers resolve `current`; `desk` is on PATH in a login shell.
+- The version block (§23.4): version, channel, commit, build time, the provenance recorded at install (`release.yml`
+  on its tag, `edge.yml` on `main`, or a dev build, with `dirty` named), the versions kept, and the newest release the
+  last `desk update --check` found (doctor itself never goes online). A current version that is a dev build (dirty or
+  not) or an edge build is a warning: code nobody released (§23.8).
+- `gh` (local, `gh --version`): missing or older than 2.102.0 means `desk update` will refuse (§23.5).
 - The Desk native-host manifest is exact; copied third-party manifests still match their vendors'.
 - The extension is loaded (over CDP or by a Developer-mode install of the Desk id); the Desk profile has no other
   unpacked extension (`DeskExtension.otherUnpacked()`).
@@ -946,7 +989,8 @@ passwords, by hand: export a CSV from the main Chrome's Password Manager, import
 - `background_mode.enabled` is false where it exists; `confirm_to_quit` (Local State); the screen-lock-before-filling
   pref where it can be read.
 - The main Chrome's remote debugging is off (its `Local State`, read only).
-- Daemon and watch are running, and their builds and protocol ranges are compatible with the installed one.
+- Daemon and watch are running, and their versions and protocol ranges are compatible with the current one; a
+  `desk watch` older than `current` is named (the next `desk` replaces it, §6.1 step 13).
 - `~/.desk` and `run/` ownership and modes, no symlinks; the profile and `~/.desk` are not under iCloud Drive, Dropbox,
   Google Drive, or `~/Library/CloudStorage`.
 - `agent-browser.json` has no forbidden key; `agent-policy.json` exists, and its mode.
@@ -988,7 +1032,9 @@ you agree; deletes the profile only with `--profile` and a second confirmation.
 | tmux environment | tmux sessions | the agent-variable gate | slices 1c, 4b |
 | Agent commands (prompt injection) | web pages, through the model | narrow `allowed-tools`; the policy; pause; the guarded endpoint; the skill; the `-desk-` state alarm | slice 4b |
 | Files and logs | same-user processes | 0600 and 0700; typed log events; no titles | canary test |
-| Installed runtime and launchers | same-user processes | versioned copy; sha256 check before the daemon starts; `env -u NODE_*` | slice 5 |
+| Installed runtime and launchers | same-user processes | versioned copies, immutable once installed; `current` switched with one `rename(2)`; sha256 check before the daemon starts; `env -u NODE_*` | slices 1c, 5, D2 |
+| Updates (`desk update`, `install.sh`) | GitHub, the network, anyone with write access to the repository (agents included) | TLS; sha256 against `SHA256SUMS`; `gh release verify-asset`; `gh attestation verify` (`gh` ≥ 2.102.0) with the exact signer identity `release.yml@refs/tags/vX.Y.Z` (`edge.yml@refs/heads/main`), the source ref and commit, and no self-hosted runner; the commit on `main`; an exact `vMAJOR.MINOR.PATCH` tag; never an older version on its own; immutable releases; staging before install; consent | slice D2 |
+| Repository, tags, workflows | whoever can push or open PRs (the owner, agents through the owner's `gh`), Dependabot, the release App | the `main` ruleset (PRs, `pr-title` and `ci-ok`, no bypass actor); checks a PR cannot weaken (the base branch judges titles, workflow files, and docs-only); owner-merge paths and the draft release PR, merged by the owner by hand; only the release App creates tags or touches the release branch; actions pinned by SHA and checked against their tags; least-privilege tokens; the App key only in the `release-please` environment (`main`); `publish` waits for the owner's approval. Residual risk (D50): agents on the owner's classic token can merge anything and change settings; the fine-grained agent token (D51) narrows that | slice D1 (`lint:workflows`, `pr-title`, `github-setup --check`) |
 | Consent prompts | anything that types into your terminal | interactive TTY only; audit line | slices 3a, 8 |
 
 Consent and incident handling: SPEC §6.3 and §6.5.
@@ -1001,7 +1047,7 @@ Consent and incident handling: SPEC §6.3 and §6.5.
 |---|---|---|---|
 | Unit | core with fakes | Mac, CI | `npm test` |
 | Adapter | packages with stub executables, the in-memory CDP transport, temp directories, Unix sockets in temp directories; no PTY, no browser; the node-pty adapter is never imported here (lint) | Mac, CI | `npm test` |
-| Live | the whole stack: branded Chrome under Xvfb, extension, host, daemon, the node-pty package, zsh, tmux, agent-browser, Puppeteer and Playwright cores, a `node:http` fixture | the Colima VM only | `npm run test:live` |
+| Live | the whole stack: branded Chrome under Xvfb, extension, host, daemon, the node-pty package, zsh, tmux, agent-browser, Puppeteer and Playwright cores, a `node:http` fixture | the test container only: in the Colima VM on the Mac, or on GitHub's `ubuntu-24.04-arm` runner in CI (§17.3) | `npm run test:live` (`-- --ci` in CI) |
 | Manual | macOS with your real account | your Mac, when you choose | MANUAL-CHECKS.md |
 
 ### 17.2 Isolation and the GUI guard
@@ -1019,15 +1065,24 @@ test wrote into that `~/.desk`.
   pinned by sha256 `7a6353f63eb3…` [VMLAB Dockerfile]; agent-browser 0.38.1 (`npm --ignore-scripts`; its bundled
   linux-arm64 binary); xvfb, tmux, zsh, procps, lsof, fonts; puppeteer-core and playwright-core; user `lab`. Debian's
   Chromium is not used: it is 154, below the manifest's minimum [VMLAB]. Google prunes old builds from its pool, so the
-  runner keeps the `.deb` in a Colima volume (`desk-live-cache`) by sha256; a bump is a one-line change.
-- `scripts/live.mjs` is the only thing that runs on the Mac, and it only drives `docker --context colima`. Phase 1
+  runner keeps the `.deb` by sha256: in a Colima volume (`desk-live-cache`) on the Mac, in an Actions cache keyed by
+  the same sha256 in CI; a bump is a one-line change. GitHub evicts a cache entry unused for 7 days, the weekly run's
+  interval, so `live.yml` restores the entry every three days as well, and only runs on `main` save it (tag and PR
+  runs can read `main`'s entries). No copy of Chrome lives anywhere else, such as a container registry (D60). When
+  Google has pruned the pinned build and no cache holds it, the run fails naming the bump.
+- `scripts/live.mjs` runs in two places only. On the Mac it is the only thing that runs, and it drives
+  `docker --context colima` and nothing else. In CI (`--ci`, accepted only when `GITHUB_ACTIONS=true` on a Linux
+  arm64 runner) it drives the runner's own Docker engine on `ubuntu-24.04-arm`, with the same phases, flags, seccomp
+  profile, and sandboxed Chrome; if Ubuntu 24.04's AppArmor limit on unprivileged user namespaces stops Chrome's
+  sandbox there, the job lifts that limit on the runner (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`), and
+  never passes `--no-sandbox` (§21). Anywhere else it refuses (§23.7, D47). Phase 1
   (network on): copy the allowlisted repo files into a volume keyed by the package-lock hash and run
   `npm ci --ignore-scripts` there, so linux-arm64 modules never touch the Mac's `node_modules`. Phase 2:
   `docker run --rm --network none --shm-size=1g --memory 3g --cpus 3 --security-opt seccomp=test/live/chrome-seccomp.json`
-  with the repo mounted read-only (it must be under `/Users/admin`, the only tree Colima shares [VMLAB `run.sh`]) and
-  the dependency volume; results come out with `docker cp` into `test-results/` (gitignored). It removes leftover
-  `desk-live-*` containers. The VM is shared with other projects; tests never restart it. Inside, the suite refuses to
-  run unless `DESK_IN_CONTAINER=1` and Linux.
+  with the repo mounted read-only (on the Mac it must be under `/Users/admin`, the only tree Colima shares [VMLAB
+  `run.sh`]) and the dependency volume; results come out with `docker cp` into `test-results/` (gitignored). It
+  removes leftover `desk-live-*` containers. On the Mac the VM is shared with other projects, and tests never restart
+  it. Inside, the suite refuses to run unless `DESK_IN_CONTAINER=1` and Linux.
 - Chrome's sandbox stays on under the lab's seccomp profile ("adequately sandboxed" [VMLAB smoke]). Xvfb `:99` at
   1440×900×24. WebGL2 is absent without SwiftShader, so the VM exercises the DOM renderer [VMLAB].
 - The test build exposes `globalThis.deskTest.screen(paneId)` (buffer text); production builds drop it, and a build
@@ -1051,24 +1106,40 @@ enables it. Results are recorded as a structured pass or fail file with no free 
 
 ## 18. CI
 
-`.github/workflows/ci.yml`, `permissions: contents: read`, every action pinned to a commit SHA:
+Every workflow, its triggers, permissions, and the rules `lint:workflows` enforces: §23.7. Slice 1a's `ci.yml` (`check`
+on Node 22.22.2 and 26.10.0, `gitleaks`) is the start; slice D1 gives it this shape. `.github/workflows/ci.yml`,
+`permissions: contents: read`, every action pinned to a commit SHA:
 
-- `check` on `ubuntu-latest`, Node 22 and 26: `npm ci --ignore-scripts`, `npm audit signatures`, `lint:imports`,
-  `lint:extension`, `lint:listen`, `lint:install-scripts`, `secrets:scan` (code, docs, and tests; specific fake values
-  are allowlisted, never paths), `test`, `typecheck`, `build` (the bundles build; the id derived from the manifest key
-  matches the constant in the host manifest).
-- `gitleaks` 8.24.3 with `--redact`; the tarball's sha256 is verified before use; Tyto's rules plus Desk's; no path
-  allowlist for `docs/`, `*.md`, or tests (Tyto's has one, which would leave the checklist results unscanned).
-- `live`: weekly on a schedule and on `workflow_dispatch`, on `ubuntu-24.04-arm`; runs the live image, so a Chrome
-  change that breaks loading over the port, `triggerAction`, or the side-panel prefs shows up within a week. No
-  secrets; never on fork PRs. Default CI never installs a browser.
+- `changes`: on a PR, the PR's file list classified by the base commit's `scripts/delivery/ci-changes.mjs`; docs-only
+  means `docs/**`, root Markdown other than `CLAUDE.md` and `AGENTS.md`, and `LICENSE`, and anything else is code. On
+  `main`, everything is code.
+- `check` on `ubuntu-24.04`, Node 22.22.2 and 26.10.0: `npm ci --ignore-scripts`, `npm audit signatures`,
+  `lint:imports`, `lint:extension`, `lint:listen`, `lint:install-scripts`, `lint:workflows` (from slice D1),
+  `secrets:scan` (code, docs, and tests; specific fake values are allowlisted, never paths), `test`, `typecheck`,
+  `build` (the bundles build; the id derived from the manifest key matches the constant in the host manifest).
+- `scan`, on every PR including docs-only ones: `secrets:scan` and `gitleaks` 8.24.3 with `--redact`; the tarball's
+  sha256 is verified before use; Tyto's rules plus Desk's; no path allowlist for `docs/`, `*.md`, or tests (Tyto's has
+  one, which would leave the checklist results unscanned).
+- `macos` (PRs that change code): `build-darwin.yml` on `macos-26` checks, stamps, and packs the darwin-arm64
+  runtime of the PR's head commit (§23.6) with `DESK_NO_GUI=1`, in separate `test` and `pack` jobs, and never launches
+  the Chrome the runner image ships.
+- `ci-ok`: the one required build check, which also lets a docs-only PR skip `check` and `macos` (§23.7).
+- `pr-title` (`pr-title.yml`, the other required check) and `owner-merge` (`owner-merge.yml`) run the base branch's
+  scripts on `pull_request_target`; neither checks out or runs anything from the PR (§23.7).
+- `live` (`live.yml`, through `live-run.yml`): weekly on a schedule, on `workflow_dispatch`, on PRs labeled `live`
+  (the release PR always is), and as the release gate, on `ubuntu-24.04-arm` with the runner's Docker (§17.3); runs
+  the live image, so a Chrome change that breaks loading over the port, `triggerAction`, or the side-panel prefs shows
+  up within a week. No secrets; never on fork PRs. Default CI never installs a browser.
 - `.dockerignore` is an allowlist (`*`, then `!packages/**`, `!package*.json`, `!tsconfig*.json`, `!test/**`, `!scripts/**`);
   `test-results/` is in `.gitignore`.
 
 ## 19. Slices
 
-Each slice: tests first, then code; `npm run check` green; `npm run test:live` green when it has live tests; one PR.
-Tests marked live run in the VM.
+Each slice: tests first, then code; `npm run check` green; `npm run test:live` green when it has live tests; one PR
+from a `slice-<id>/<topic>` branch, titled `<type>(slice-<id>): …`, which merges itself when its checks pass, or which
+the owner merges when it touches an owner-merge path (§23.1). Until slice D1's rulesets are applied, every PR merges
+by the interim rule (§23.1). Tests marked live run in the VM. Order: 1a, D1, 1b, 1c, 2a, 2b, 3a, 3b, 4a, 4b, 5 with
+D2, 6, 7, 8; X1 when the user approves.
 
 ### Slice 1a — Scaffold, laws, pure core, CI
 
@@ -1099,6 +1170,78 @@ test isolation and the GUI guard; core: config, `chromeArgs`, env policy, codecs
 
 Done when: check green on the Mac and in CI; esbuild and the node-pty candidates install with `--ignore-scripts`.
 
+### Slice D1 — Delivery pipeline (right after 1a)
+
+§23 before any runtime exists: `core/release/` (semver, `classifyBuild`, and the latest-flag rule); `scripts/delivery/`
+(the stamp and its git-facts adapter, `check-pr.mjs` and the workflow rules, `ci-changes.mjs`, `owner-merge.mjs` and
+`owner-paths.json`, `automerge-decision.mjs`, the publish steps, `github-setup.mjs`); `pr-title.yml`,
+`owner-merge.yml`, and `dependabot-auto-merge.yml`; `ci.yml` with change detection, `scan`, `macos`, and `ci-ok`;
+`build-darwin.yml`; `edge.yml` and `release.yml`, which build, stamp, and report but attest and publish nothing until
+slice 1c's `npm run pack` produces a runtime; `release-please.yml`, its config and manifest; `live.yml` and
+`live-run.yml`, which run the suite from slice 1b on; `.github/dependabot.yml`; `lint:workflows`; the PR template; the
+root package.json's `version` at `0.0.0`; and links to RELEASING and CONTRIBUTING from the README, CLAUDE.md, and
+AGENTS.md, whose agent rules gain §23.1's. The D1 PR is all owner-merge paths, and `main` has no ruleset yet: the owner
+merges it by the interim rule (§23.1).
+
+- `classifyBuild makes a v-tag on main whose version matches package.json a stable build`
+- `classifyBuild decides <channel or refusal> for <event> on <ref>` (it.each: push or workflow_dispatch on a v-tag → stable; push, workflow_dispatch or schedule on main → edge; pull_request from this repository or from a fork → pr; workflow_dispatch on another branch → unsupported-ref)
+- `classifyBuild makes a release dry run on main a stable-shaped build that publishes nothing`
+- `classifyBuild refuses a tag that is not on main`
+- `classifyBuild refuses a tag whose version differs from package.json`
+- `classifyBuild refuses <tag> as not vMAJOR.MINOR.PATCH` (it.each: `v1.2`, `1.2.3`, `v1.2.3-rc.1`, `v01.2.3`, `V1.2.3`)
+- `classifyBuild refuses a base version that is not MAJOR.MINOR.PATCH`
+- `classifyBuild refuses a tree with no 40-hex commit`
+- `classifyBuild makes a push to main an edge build of the next patch with its run number and short commit`
+- `classifyBuild makes a pull request a pr build of its head commit that is never published`
+- `classifyBuild makes a local checkout a dev build named after its branch`
+- `classifyBuild refuses a dirty tree unless allowDirty, and versions an allowed one .dirty with its build time`
+- `classifyBuild refuses allowDirty, and any ref but main, a v-tag or a pull request, in CI`
+- `classifyBuild gates stable builds on the live suite, runs it for same-repository pr builds on the live label, and never for forks, edge or dev`
+- `branchSlug turns <branch> into <slug>` (it.each: `slice-1c/walking-skeleton`, `Fix/ÜBER_wide`, an empty name, `007`)
+- `a prerelease classifyBuild returns sorts after its base version and before the next patch, and a stable version equals its base`
+- `the stamp writes version.json into the build output and never into the repo`
+- `the stamp fetches main and decides tagOnMain with merge-base --is-ancestor, and any git error means not on main` (stub `git`)
+- `the stamp takes a pull request's head commit, branch and fork flag from the event`
+- `a tag build records branch main only when the tag is on main`
+- `dirty means tracked changes or untracked files that are not ignored, and CI fails naming them`
+- `the PR check accepts <title>` and `the PR check refuses <title>` (it.each; the release PR's and Dependabot's titles accepted, including Dependabot's over 72 characters)
+- `the PR check requires a slice branch's id as the title's scope`
+- `the PR check refuses a branch outside the naming scheme, accepts the bots' branches, and checks only the title of a fork's branch`
+- `the PR check applies the base branch's workflow rules to the PR's workflow files, read through the API as data`
+- `the PR check fails a PR that adds a job named ci-ok or pr-title outside their workflows`
+- `the PR check fails when a pinned action's SHA is not the commit its tag comment names`
+- `change detection calls a PR docs-only only when it touches nothing but docs/, root Markdown other than CLAUDE.md and AGENTS.md, and LICENSE`
+- `change detection calls a PR that changes ci-changes.mjs, a workflow, a package file or an agent rule code`
+- `owner-merge labels a PR that touches <path> and turns its auto-merge off` (it.each over `owner-paths.json`, and the release PR's branch)
+- `owner-merge removes its label when no owner-merge path remains`
+- `ci-ok fails when a needed job failed or was cancelled, when code changed and check or macos did not succeed, or on the release PR while runtime is false`
+- `lint:workflows fails on <violation>` (it.each: an action not pinned to a 40-character SHA with its tag in a comment; no top-level permissions; a job without timeout-minutes; a checkout without persist-credentials false; `${{ }}` other than matrix or runner inside run; pull_request_target outside its three workflows, or one that checks out the pull request; workflow_run, issue_comment, pull_request_review or repository_dispatch; id-token, contents or pull-requests write outside their jobs; npm ci or npm install without --ignore-scripts; a cache in a pull_request_target, pack, attest or publish job; env, printenv, set -x or ACTIONS_STEP_DEBUG in a job with a secret or a write scope; a secret outside its environment's job; a publish job outside the publish environment; concurrency in a workflow_call workflow; a second job named pr-title or ci-ok; a runner label ending in -latest)
+- `the auto-merge decision allows only patch updates of @types, typescript, vitest and yaml as development dependencies` (it.each over ecosystem, dependency type, update type, and package, esbuild included)
+- `the auto-merge decision refuses a group with any member outside the allowed class`
+- `publish refuses a draft whose assets are not exactly the tarball, install.sh and SHA256SUMS with the digests SHA256SUMS names`
+- `publish goes straight to verify when an earlier attempt already published matching assets`
+- `publish marks a release latest only when its version is the highest published`
+- `the release-please config opens the release PR as a draft labeled live`
+- `the release-please config tags vX.Y.Z, drafts each release with its tag, starts at 0.1.0 with feat bumping the patch before 1.0, and hides docs, test, build, ci and chore`
+- `the release-please config bumps only the root package.json and package-lock.json`
+- `github-setup plans squash-only merges with the PR title and body as the commit, auto-merge and branch deletion`
+- `github-setup's main ruleset requires pr-title and ci-ok from GitHub Actions, signed linear history and a PR with 0 approvals, and has no bypass actor`
+- `github-setup's tags and release branch rulesets let only the release App create, move or delete, and have no bypass actor until the App exists`
+- `github-setup's release-please environment deploys only main, and publish deploys only v tags after the owner approves`
+- `github-setup makes every outside contributor's PR wait for approval before workflows run`
+- `github-setup --check changes nothing and exits 1 naming each setting that differs`
+- `github-setup --apply asks on a TTY, changes only what differs, and a second run changes nothing`
+- `github-setup never runs gh auth status and never reads a secret's value`
+
+Done when: check green, and `ci.yml` green on the D1 PR, which the owner merged by the interim rule (`pr-title` runs
+from `main`'s copy, so it starts with the next PR); the operator ran `github-setup --apply` and `--check` is clean;
+PRs that were open before then were edited or pushed to, so `pr-title` ran on them; a docs-only PR merges itself with
+`pr-title` and `ci-ok` green and no build job run; an agent PR merges itself after `gh pr merge --auto --squash`; a PR
+that touches an owner-merge path got the label and lost its auto-merge; once the release App exists (RELEASING.md),
+a draft release PR is open with its checks run (`ci-ok` red until slice 1c, on purpose); `edge.yml` and a
+`release.yml` dry run ran. The first Dependabot PR that merges itself is a follow-up, since the 7-day cooldown can hold
+it for weeks; the decision's tests stand in for it.
+
 ### Slice 1b — Live harness: port the lab
 
 Port the lab's Dockerfile, `run.sh`, `smoke.mjs`, and `pty.mjs` as the first `test:live`; the cache volume; phases;
@@ -1112,16 +1255,18 @@ results out. Settles §21's image rows on day one.
 - live `the PTY package starts a login, interactive zsh on a real tty and resizes it` (the chosen node-pty package)
 - live `a tmux session survives SIGKILL of the PTY attached to it`
 - live `agent-browser 0.38.1 opens, snapshots and creates a tab over the port`
-- `the live runner refuses to run anywhere but Colima, and the suite anywhere but the Linux container`
+- `the live runner runs only through Colima on a Mac or the runner's Docker in GitHub Actions on linux-arm64, and the suite only inside the Linux container`
 
-Done when: live green; the node-pty choice and §21's image rows are recorded in the PR.
+Done when: live green on the Mac and in `live.yml`; the node-pty choice and §21's image rows are recorded in the PR.
 
 ### Slice 1c — Walking skeleton: one shell, one agent, in the left panel
 
 A minimal `desk install` into `DESK_HOME` (runtime build with Desk Terminal, launchers, host manifest); `desk` fresh
 launch (§6.1 steps 1–3, 5, 7–10, 12, 14; classification launches only when no singleton is alive, else exit 75); the
 worker's native connection; a one-pane panel; the host relay; a daemon with one pane (no mirror yet); the agent config
-(raw `cdp` until slice 4b) and the agent-variable gate. Reuses PROTO's panel, host, and launch sequence.
+(raw `cdp` until slice 4b) and the agent-variable gate; `npm run pack`, `npm run deploy`, and `desk --version`
+(§23.4, §23.5), so the operator can try each build from slice 1c on, and the edge and release workflows leave dry
+run. Reuses PROTO's panel, host, and launch sequence.
 
 - `launch waits for /json/version before connecting`
 - `launch refuses an extension id that differs from the key's id`
@@ -1134,12 +1279,23 @@ worker's native connection; a one-pane panel; the host relay; a daemon with one 
 - `pane env omits the agent variables while tmux lacks the update-environment line`
 - `the agent-browser config has no <key>` (it.each: restore, sessionName, state, namespace, profile, executablePath, autoConnect)
 - `the runtime build signs Desk Terminal ad hoc with its own identifier` (stub `codesign`)
+- `npm run pack writes the release-shaped tarball with version.json, files.sha256, the PTY package and Desk Terminal`
+- `the runtime build refuses a Node binary whose sha256 differs from the pinned one`
+- `every package esbuild bundles into desk.mjs or the extension is a dependency, never a devDependency, of its workspace` (esbuild's metafile)
+- `npm run deploy refuses a dirty tree unless --allow-dirty`
+- `npm run deploy asks on a TTY, installs into DESK_HOME/app/<version>, switches current and never starts Chrome` (it injects darwin, arm64, and an environment without CI or VITEST; `DESK_HOME` is the run's fresh one, and the real home stays refused)
+- `npm run deploy refuses <CI, VITEST, linux, x64>` (it.each: its guards take `{env, platform, arch}` from the caller)
+- `the launchers resolve current once and exec that version's Desk Terminal`
+- `desk --version prints the version, channel, commit and build time from version.json`
+- `the rendered manifest's version is MAJOR.MINOR.PATCH.<render serial> and its version_name the full Desk version`
 - live `typing echo desk-ok in the panel prints desk-ok`
 - live `agent-browser open <fixture> typed in the pane opens a tab in the Desk window`
 - live `the service worker is still connected to the daemon after 5 minutes idle`
 - live `the panel opens in the window whose tab target the action was triggered on`
 
-Done when: live green; the cold-launch-to-shell time is in the PR as the baseline for SPEC §8; nothing ran on the Mac.
+Done when: live green; the cold-launch-to-shell time is in the PR as the baseline for SPEC §8; nothing ran on the Mac
+during development; `build-darwin.yml` packs a runtime, `edge.yml` attests it, and the operator can install it with
+`npm run deploy`.
 
 ### Slice 2a — Protocol and daemon lifecycle
 
@@ -1226,6 +1382,7 @@ Done when: latency, throughput, and show time meet SPEC §8, or the gap is filed
 - `desk watch reopens the panel only where one was open and never focuses the terminal`
 - `desk watch relaunches Chrome after a crash at most twice in 10 minutes`
 - `desk watch never relaunches after desk quit`
+- `desk replaces a desk watch that runs another version and never stops the daemon`
 - `desk watch quits Chrome after 10 minutes without a window`
 - `desk watch raises the terminal-attached alert when a Desk extension target becomes attached`
 - `desk watch reopens a crashed panel`
@@ -1292,14 +1449,14 @@ server; config keys that flags cannot override).
 
 The full installed runtime (§15.1), consent steps, Desk.app and the login agent, doctor, and uninstall.
 
-- `install builds the runtime into ~/.desk/app/<build> with files.sha256`
-- `install writes launchers that reference ~/.desk/app/<build> and never the source tree`
+- `install puts the runtime into ~/.desk/app/<version> with version.json and files.sha256`
+- `install writes launchers that resolve ~/.desk/app/current and never the source tree`
 - `the launchers unset NODE_OPTIONS, NODE_PATH and NODE_REPL_EXTERNAL_MODULE`
 - `the host refuses to start a daemon whose files do not match files.sha256`
 - `install writes the native host manifest with the Desk origin as its only allowed origin`
 - `install keeps a skill the user edited`
 - `install adds the desk step to the web-access rules once, after consent`
-- `install prunes builds no running process uses and keeps the newest two`
+- `install --from on an existing install runs only the version steps and asks again only for consent steps whose result is missing`
 - `install adds Desk.app and the login agent only after consent`
 - `doctor reports <problem> and names its fix` (it.each over §15.2)
 - `doctor --fix rewrites the agent config, the policy and the host manifest and never stops the daemon`
@@ -1307,7 +1464,52 @@ The full installed runtime (§15.1), consent steps, Desk.app and the login agent
 - `uninstall removes only what install recorded and keeps edited skills`
 - `uninstall deletes the profile only with --profile and a second confirmation`
 - live `a fresh HOME goes from desk install to a working panel with one desk`
-- live `installing a newer build while panes run keeps every pane attached with the same shell pid`
+- live `installing a newer version while panes run keeps every pane attached with the same shell pid`
+
+### Slice D2 — Updates from releases (alongside slice 5)
+
+`desk update`, `desk versions`, `desk use`, `desk rollback`, retention, the provenance check, `install.sh`, and their
+doctor rows (§23.5); the ports `release-feed.ts`, `provenance.ts`, `file-digest.ts`, and `app-versions.ts`, and
+`ProcessInfo.executablesUnder`; core's update plan and retention. Adapters are tested with a fake release feed and stub
+`gh`, `codesign`, `tar`, `ps`, and `uname` executables that record argv, in Tyto's style.
+
+- `desk update installs the newest stable release after its sha256 matches SHA256SUMS, verify-asset passes, and its provenance names release.yml on its tag and commit`
+- `the provenance check passes --cert-identity, --source-ref, --source-digest and --deny-self-hosted-runners for <channel>` (it.each: stable, edge; stub `gh` records argv)
+- `desk update installs nothing when the sha256 differs from SHA256SUMS` (exit 65)
+- `desk update installs nothing when provenance or verify-asset is refused` (exit 65)
+- `desk update refuses a release tag that is not exactly vMAJOR.MINOR.PATCH` (it.each: `V0.4.0`, `v0.4.0-rc.1`, `v0.4`, `v00.4.0`)
+- `desk update refuses a release or edge run whose commit is not on main`
+- `desk update installs nothing when gh is missing, signed out, or older than 2.102.0` (exit 69)
+- `desk update never installs an older version unless --version names it, and the prompt calls that a downgrade`
+- `desk update --channel edge takes the newest successful edge.yml run on main that has the artifact, and verifies edge.yml on refs/heads/main and the run's commit`
+- `desk update --channel edge refuses a run that does not sort after the current version`
+- `desk update refuses a download whose version.json names another version, channel or commit`
+- `desk update asks on a TTY before it changes anything and installs nothing when declined`
+- `desk update never stops the daemon or desk watch`
+- `desk update --check prints the newest version per channel and changes nothing`
+- `desk update on a dev version names npm run deploy and --channel stable`
+- `a version that is already installed is never downloaded again`
+- `an install stages, verifies and then renames the version into place, and a failed one leaves nothing behind`
+- `desk use switches current atomically and records the previous version`
+- `desk use refuses a version whose state schemas are older than the files on disk`
+- `an older Desk keeps the installed.json keys it does not know when it writes the file`
+- `desk rollback returns to the previous version`
+- `desk versions marks current, previous and the versions the daemon, desk watch and native hosts run`
+- `retention keeps current, previous and the most recently installed other version, and never one a running process uses`
+- `retention never removes a version a running host uses`
+- `the host starts the daemon from the current version`
+- `install clones files identical to the current version's instead of copying them`
+- `install.sh refuses anything but macOS on arm64 or a gh older than 2.102.0, installs the version it was given, and verifies the tarball before it extracts anything`
+- `doctor reports <problem> and names its fix` (it.each: an unverified or damaged current version; a dev, dirty, or edge current version, as a warning; a desk watch older than current; a daemon on a version without a common protocol; gh missing or older than 2.102.0)
+- live `desk update from a fake release feed while panes run keeps every pane attached with the same shell pid, and so does desk rollback`
+
+The live test runs inside the container (§17.3): a `node:http` fixture serves a release-shaped API and a second
+linux-arm64 pack with its `SHA256SUMS`; a stub `gh` on PATH answers `attestation verify` and `release verify-asset`;
+`desk update` takes its API base from `DESK_RELEASE_API` and accepts a linux-arm64 pack only when
+`DESK_IN_CONTAINER=1` (refused everywhere else, as `guiAllowed` is).
+
+Done when: check and live green; the operator updated to a release with `desk update`, rolled back once, and
+recorded M19.
 
 ### Slice 6 — Terminal UI
 
@@ -1396,7 +1598,16 @@ the extension · Desk-managed tmux around panes · exporting `AGENT_BROWSER_CDP`
 daemon · a listener without `httpGuard` or bound beyond 127.0.0.1 · `--yes` · titles, terminal output, keystrokes,
 cookie values, URLs, or CDP payloads in logs or files · logging a parser's `err.message` · a pasted control character
 reaching the PTY · launchers that run the source tree · anything on the Mac's screen from tests or agents · a god port
-or god fake · re-implementing agent-browser.
+or god fake · re-implementing agent-browser · a commit pushed to `main` or a tag pushed by hand · `gh pr merge
+--admin` · `gh pr merge --auto` before the rulesets exist · auto-merge on the release PR, or `gh pr ready` on it by an
+agent · an agent merging an `owner-merge` PR, turning its auto-merge on, or removing its label · an agent approving a
+deployment · editing package.json's version, package-lock.json's root version, `.release-please-manifest.json`, or
+`CHANGELOG.md` by hand · an action referenced by tag instead of commit
+SHA · a `pull_request_target` workflow that checks out or runs anything from the pull request · `${{ }}` interpolated
+into a `run:` script · a secret in a job outside the environment that holds it · a cache in a job whose output is
+attested · a dev tool running while the runtime is packed · installing a version that failed its sha256 or provenance
+check · an update that moves to an older version on its own · a running process loading code through `current` · an
+agent running `npm run deploy`, `desk update`, `desk use`, or `desk rollback`.
 
 ## 21. Unverified register
 
@@ -1431,11 +1642,26 @@ or god fake · re-implementing agent-browser.
 | The approval-mode Allow flow against the real main Chrome | pending-connection state verified [RC] | no | M11 |
 | Links from other apps open in the main Chrome | unknown | no | M13 |
 | Logout and restart: no Desk Chrome relaunched with its flags; state survives | unverified | no | M14 |
+| The release App can be the only bypass actor of the `tags` and `release branch` rulesets (GitHub Apps can be; the GitHub Actions app only in organization repositories, which this is) | documented | — | slice D1 (`github-setup --apply`) |
+| A tag that release-please creates through the API with the App's token (`force-tag-creation`) starts `release.yml`'s `push` trigger | inferred | — | the first release |
+| GitHub signs the squash commits auto-merge makes, so `required_signatures` never blocks a merge | inferred | — | slice D1 (the first auto-merges) |
+| `environment: {deployment: false}` keeps the `release-please` environment's branch policy (GitHub, 2026-03) | documented | — | slice D1 |
+| Chrome's sandbox works inside the live container on GitHub's `ubuntu-24.04-arm` (Ubuntu 24.04's AppArmor limits unprivileged user namespaces; §17.3 lifts the limit on the runner, never `--no-sandbox`) | unverified | yes (CI) | slices D1, 1b |
+| `gh attestation verify` with `--cert-identity` `…/release.yml@refs/tags/vX.Y.Z` (`…/edge.yml@refs/heads/main`), `--source-ref`, and `--source-digest` accepts this repository's attestations; `gh` before 2.102.0 matched `--signer-workflow` as a prefix and `--source-ref` without case (GHSA-wjmr-j3rp-mh2g, GHSA-4mq3-hpgx-9cx8; read in gh's advisories and source) | documented | yes (CI) | slices D1, D2 |
+| `gh pr merge --auto` merges at once, without turning auto-merge on, when the PR is `CLEAN`, `HAS_HOOKS`, or `UNSTABLE` | verified (gh source, `merge.go`) | — | — |
+| A `pull_request_target` run's `pr-title` check satisfies the `main` ruleset on the PR's head commit | inferred (common practice) | — | slice D1 |
+| `GITHUB_TOKEN` with `pull-requests: write` can turn a PR's auto-merge off (`disablePullRequestAutoMerge`) | inferred | — | slice D1 |
+| A draft PR can be neither merged nor auto-merged, and release-please keeps its release PR a draft across updates (`draft-pull-request`) | documented / inferred | — | slice D1 |
+| Release assets report a `digest` in the REST API, which `publish` compares with `SHA256SUMS` | documented | — | the first release |
+| A required reviewer on the `publish` environment holds a job started by a tag push until the owner approves | documented | — | the first release |
+| Desk Terminal's ad hoc signature is the same across Desk versions with the same Node, so macOS privacy grants survive Desk updates | inferred | no | slice D2, M19 |
+| Files that `gh`, Node's `fetch`, and `curl` download carry no quarantine attribute, so Gatekeeper never assesses the ad hoc signed Desk Terminal | inferred | no | slice D2, M19 |
 
 ## 22. Decisions
 
 Review of 2026-10-06 (security, persistence and UX, testability). Every blocker and major issue is resolved in the
-sections above; these entries record choices, deviations, and rejections.
+sections above; these entries record choices, deviations, and rejections. D28–D33 come from slice 1a; D34–D61 from
+the delivery design and its security and operability review, the same day.
 
 | # | Decision | Why |
 |---|---|---|
@@ -1472,3 +1698,617 @@ sections above; these entries record choices, deviations, and rejections.
 | D31 | CI runs Node 22.22.2 and 26.10.0 exactly | The engines floor for Node 22, which catches APIs newer than the floor, and `.nvmrc`. A runner's cached 22.x can be older than the floor, which `engine-strict` refuses |
 | D32 | `NodePortProbe` connects to 127.0.0.1 before it binds there (slice 1a review) | macOS lets a 127.0.0.1 bind share a port another program holds on 0.0.0.0 or ::, so a bind alone called that port free, and Desk's Chrome or gateway would take the other program's loopback traffic. A loopback connect finds such a holder on every platform. Binding 0.0.0.0 to find out instead would be a listener beyond loopback (§20) and can raise the macOS firewall prompt, so neither the probe nor its tests ever listen beyond loopback: the test checks that the probe's connection reaches a 127.0.0.1 holder |
 | D33 | The NDJSON line codec lands in slice 1a, beside the native-messaging codec (slice 1a review) | §19 lists codecs for 1a and §2 names both; slice 1c's host relay already turns native messages into NDJSON lines with the 1 MiB cap. Both decoders work on bytes and never parse, copy what they keep (a caller may reuse its read buffer), deliver the messages that arrived before a refusal, and take linear time however the stream is chunked |
+| D34 | Delivery (2026-10-06, §23): `main` is a ruleset with no bypass actor: pull requests only, squash only, signed linear history, required checks `pr-title` and `ci-ok` from GitHub Actions, 0 approvals; agent PRs and the allowed Dependabot PRs merge themselves through auto-merge, except PRs that touch an owner-merge path (D50) and the release PR (D53) | GitHub never lets an author approve their own PR, and agents open PRs as the owner, so a required approval would block every PR. With nobody on the bypass list, "never `--admin`" is enforced rather than remembered. One aggregate check keeps the ruleset stable while jobs change, and lets a docs-only PR skip build jobs: GitHub keeps a skipped workflow's checks pending but reports a skipped job as passed |
+| D35 | Required checks are not strict (a PR need not be up to date with `main`), and there is no merge queue in v1 | Auto-merge does not update branches, so strict checks would turn parallel agent PRs into a queue of rebases, and `GITHUB_TOKEN` cannot add PRs to a merge queue; `ci.yml` runs again on `main` after every merge. Revisit if parallel merges break `main` |
+| D36 | Release automation runs as a GitHub App (Desk Release) instead of `GITHUB_TOKEN`. Its private key is the only secret v1 has. It lives in the `release-please` environment, which deploys only from `main`, and only `release-please.yml`'s job uses it: a job that checks out nothing, runs pinned actions only, and mints a token for this repository with contents, pull requests, and issues and nothing else | Events made with `GITHUB_TOKEN` start no workflows, so its release PR would never get the required checks and its tags would never start `release.yml`; a `workflow_dispatch` run does not satisfy required checks (GitHub's docs). The App is also the one actor the `tags` and `release branch` rulesets let through. It has no Workflows or Administration permission, and a job that runs no repository code cannot hand its key to a merged change (D52) |
+| D37 | A release is drafted with its tag (release-please `draft` and `force-tag-creation`); its build is attested, its assets are attached and checked, and then it is published, after the owner approves (D53); immutable releases are on | GitHub's recommended order for immutable releases: nothing can be attached after publishing, and a published tag can never move or be reused. A failed build leaves an unpublished draft nobody can install; the fix ships as the next patch |
+| D38 | The live suite gates every release (on `ubuntu-24.04-arm`) and runs on the release PR (release-please's `extra-label: live`), weekly on `main`, and on PRs labeled `live`, never on every push | The persistence promises are the product (SPEC §1), so a release must pass them, preferably before its tag exists, since a failure after the tag costs the version (D37); running them on every merge would make each one wait on Chrome |
+| D39 | Edge builds are attested workflow artifacts of `main`, kept 30 days, not a rolling prerelease | Under immutable releases a deleted release's tag can never be reused, so a rolling `edge` release cannot exist, and a prerelease per commit would bury the real releases; edge users have `gh`. Edge provenance proves where a build was made, not that anyone reviewed it (D50) |
+| D40 | Provenance is required for every version not built on this Mac: `desk update` and `install.sh` need `gh` 2.102.0 or later, signed in, and no flag skips the check. The check pins exactly: `--cert-identity` with the signing workflow and its ref (`release.yml@refs/tags/vX.Y.Z`, `edge.yml@refs/heads/main`), `--source-ref`, `--source-digest` with the commit GitHub reports, `--deny-self-hosted-runners`, `gh release verify-asset` for release assets, the commit on `main`, and a tag that is exactly `vMAJOR.MINOR.PATCH` (adapts the review's `--signer-workflow …@<ref>`) | `SHA256SUMS` ships in the same release as the tarball, so it catches corruption, not a forged upload; only the attestation ties the bytes to this repository's workflow, and only an exact identity does it. `gh` up to 2.101.0 matched `--signer-workflow` as a prefix and `--source-ref` without case (GHSA-wjmr-j3rp-mh2g, GHSA-4mq3-hpgx-9cx8), so a workflow named `release.yml.x.yml` or a branch named `Main`, which anyone with write access can create, would have passed. `--cert-identity` is an exact match in every version; a `--signer-workflow` value with a ref is one only from 2.102.0 on. The fallback is building the tag with `npm run deploy` |
+| D41 | Stable versions are `X.Y.Z`; edge, PR, and dev builds are prereleases of the next patch (`edge.<run>`, `pr.<number>.<run>`, `dev.<branch>`) with `+<sha7>`; a release dry run is `X.Y.Z+dryrun.<run>`; the rendered MV3 manifest uses `X.Y.Z.<render serial>` and `version_name` | They sort after the release they follow and before the next one, and any semver library reads them; an MV3 `version` takes only integers |
+| D42 | Installs are versioned directories with an atomic `current` link; three are kept; launchers resolve `current` once (supersedes §15.1's content-hash directories and "the newest two") | Rollback needs the previous version on disk; a version name tells the operator what runs; a process that loaded chunks through a moving link could mix two versions |
+| D43 | `desk update`, `desk use`, `desk rollback`, and `npm run deploy` are consent operations on an interactive terminal | They change what runs with access to the Desk. The prompt stops accidental runs; a same-user process can answer it (SPEC §6.1), so agents stay out by rule (CONTRIBUTING), and `desk doctor` names a current version nobody released (dev, dirty, or edge) |
+| D44 | Dependabot PRs merge themselves only for patch updates of allowlisted development tools (`@types/*`, `typescript`, `vitest`, `yaml`), every member of a group included, decided on `pull_request_target` by the base branch's script; GitHub Actions updates arrive as one weekly group that the owner merges (an owner-merge path); everything else waits for the owner (runtime and bundled packages, esbuild, majors, the live image's base). Version updates wait out a 7-day cooldown (30 days for majors); security updates follow the same class rule, with no cooldown. This narrows the "Actions SHA bumps auto-merge" proposal | A dependency's type proves nothing about what ships, so the class is a list of tools that run only in tests and type checks; slice 1c checks that every bundled package is a runtime dependency, and `pack` runs no dev tool (§15.1). GitHub refuses workflow-file changes merged with `GITHUB_TOKEN`, which can never hold the Workflows permission, and a bot holding it could rewrite its own privileged workflows. Dependabot's `pull_request` runs get a read-only token, so the workflow uses `pull_request_target`, which also keeps the PR from changing the decision. Telling a security update apart would need a token beyond `GITHUB_TOKEN` (fetch-metadata's `alert-lookup`). Merges that `GITHUB_TOKEN` enabled start no `push` workflows; for dev-only patches the next merge runs them |
+| D45 | Checks a PR cannot weaken: the base branch's scripts judge the title and branch, the PR's workflow files (every rule of §23.7, and each pinned SHA against its tag), docs-only, owner-merge paths, and the Dependabot class. All are in-repo scripts, not `amannn/action-semantic-pull-request` or `dorny/paths-filter`; attestations use `actions/attest`, which `actions/attest-build-provenance` v4 only wraps | A `pull_request` workflow runs the PR's own copy, so a check there can be rewritten by the PR it judges, and the ruleset tells checks apart only by name and app. `pull_request_target` runs the base branch's copy and reads the PR as data. Fewer third-party actions holding repository tokens; spec-sentence tests; agents run the same check before `gh pr create` |
+| D46 | Before 1.0, `feat` bumps the patch and a breaking change the minor (TermGrid's settings); the first release is 0.1.0; 1.0.0 follows checklist Run B after slice 8, through a `Release-As: 1.0.0` footer | Mirrors TermGrid; 1.0 then means the checklist passed on the operator's Mac |
+| D47 | The live runner has a CI mode on GitHub's `ubuntu-24.04-arm` with the runner's Docker, besides Colima on the Mac (amends §17.3 and slice 1b) | Weekly runs and the release gate need no Mac, and GitHub's arm64 runners are free for public repositories; the suite still refuses to run outside its container |
+| D48 | `desk use` and `desk rollback` never cross a state-schema change, and every change to a state file's shape bumps its `version`. `installed.json` instead only ever gains optional keys: every Desk writes back the keys it does not know, and its `version` stays 1 | An older Desk moves a newer state file aside and starts from defaults (§4.3), which would change the ports agents use. `installed.json` is what rollback itself reads, so every version must be able to read and rewrite it |
+| D49 | Desk Terminal comes from the pinned Node 26.10.0 for darwin-arm64 in every build; a developer build copies the operator's Node only when its sha256 matches the pin; `Info.plist` names no Desk version (supersedes "made from your Node 26 at install") | Dev and release builds then carry the same Desk Terminal, whose ad hoc signature, and the macOS privacy grants tied to it, survive Desk updates |
+| D50 | Owner-merge paths (§23.1): a PR that touches the delivery pipeline or the agent rules is merged by the owner by hand, after reading its diff; `owner-merge.yml` labels it and turns its auto-merge off, again whenever someone turns it on. `pr-title` stays green on such a PR (rejects making it fail: with no bypass actor the owner could not merge it either). Accepted risk (2026-10-06): against an agent holding the owner's classic token this is a rule, not a control; `main` takes agent code nobody reviewed, so an edge build is unreviewed code; and that token can disable a ruleset through the API | Agents use the owner's `gh`, so GitHub sees one person: no approval, label, or comment can come only from the owner, and a green PR merges at once on `gh pr merge` without any event a guard could see. What remains is the release review (§23.8, D53), the agent rules, and the fine-grained token (D51) |
+| D51 | Agents should use a fine-grained token instead of the owner's classic one (a recommendation; the owner decides): this repository only; Contents and Pull requests read and write; Actions and Metadata read; no Workflows, Administration, Environments, Secrets, Variables, or Deployments permission | Agents keep everything the auto-merge flow needs, but can no longer push a change under `.github/workflows/`, change settings or rulesets, read secrets, or approve the `publish` deployment, which turns the workflow part of D50 and the publish gate of D53 into controls. The owner pushes workflow changes, slice D1's included, with their own `gh` |
+| D52 | Three environments, and one secret in v1: `release-please` (the App key; deployments from `main` only), `publish` (no secret; deployments from `v*` tags only; the owner as required reviewer), and later `signing` (Apple's secrets; `v*` tags; the owner as reviewer; one dedicated `sign` job). This replaces a single `release` environment | An environment's secrets reach every job that names it. `release-please.yml` runs after every merge to `main`, so its job gets only the App key and runs no repository code; signing secrets never reach a job that runs `npm ci`, tests, or repository scripts, and the signed bytes are what gets attested |
+| D53 | The release PR opens as a draft (release-please `draft-pull-request`); the owner marks it ready and merges it with `--match-head-commit`; `publish` waits for the owner's approval of the `publish` environment (settles the question of a second manual gate) | `gh pr merge --auto` merges a PR that is already green at once, without the `auto_merge_enabled` event a guard watches, so no guard keeps a stray merge off a green release PR; a draft can be neither merged nor auto-merged. A stray merge still only drafts a release: nothing is published, and nothing becomes immutable, until the owner approves. Two clicks per release |
+| D54 | Until `github-setup --check` is clean, no PR merges with `--auto`: `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>` | With no ruleset requiring a check, `gh pr merge --auto` merges a PR whose checks are still running or failing (`UNSTABLE`) at once |
+| D55 | Updates never move backwards on their own: plain `desk update` installs only a version that sorts after the current one, and edge only a later run whose commit is not an ancestor of the current one; a downgrade takes `--version` or `desk use`, and the prompt names it. `publish` marks a release latest only when it is the highest published version | Anyone with write access can move `releases/latest`, and re-running an old release's failed `publish` after a newer release shipped would otherwise make the old one latest for every Mac |
+| D56 | `desk` replaces a `desk watch` of another version; the native host starts the daemon from `current`; retention counts every running Desk Terminal, native hosts included, and keeps the most recently installed other version (amends "no update stops `desk watch`") | Otherwise the old watch would run the guarded endpoint, the focus guard, and crash relaunch until logout, and lose `ext.call` once the daemon moved past its protocol; a host Chrome started before an update would start an old daemon, or load a chunk from a removed version |
+| D57 | The changelog shows `feat`, `fix`, `perf`, `refactor`, and `revert`, and hides `docs`, `test`, `build`, `ci`, and `chore` (corrects "a lone `docs:` commit starts no release") | release-please opens a release PR whenever its changelog would not be empty, so every visible type proposes a release; documents ship in the repository, not in the runtime |
+| D58 | Release dry runs: `release.yml` dispatched on `main` runs `plan`, the build, and the live gate as a stable-shaped build, and stops before any tag, release, or attestation. No release before slice 1c: `ci-ok` fails on the release PR while the build reports no runtime | Before 1c a merged release PR would burn its version on an empty draft (D37), and the release path would get no rehearsal before the first real release |
+| D59 | `installed.json` is written only under `install.lock`; the manifest render serial moves to its own `render.json`, written only under `launch.lock` | A launch bumped the serial under `launch.lock` while an install wrote `current` under `install.lock`, so one could lose the other's write |
+| D60 | No copy of Google Chrome outside the Actions cache and the Mac's Colima volume (rejects keeping the pinned `.deb` or the live image in a container registry). The cache is restored every three days so GitHub never evicts it, and the release PR's live run finds a pruned pin before a tag exists | A registry image would redistribute Google Chrome. With the keep-alive, a pruned pin costs a bump PR, not a release (§23.9) |
+| D61 | Delivery scripts and the Node pin live under `scripts/delivery/`, an owner-merge path | One glob keeps every script a privileged job runs, the stamp, and the scripts added later under the owner's review |
+
+## 23. Delivery: branches, versions, deploy paths, releases
+
+Every change reaches `main` through a pull request that merges itself once its checks pass, except changes to the
+delivery pipeline and the agent rules, which the owner merges by hand. Every build says what it is (`version.json`).
+The operator's Mac runs only versions that CI built and GitHub attested, or that the operator deployed from a checkout.
+A release happens when the owner merges the release PR and approves its publication, never on its own, and installing,
+updating, or rolling back Desk never stops a shell. Conventions follow TermGrid's `RELEASING.md` (Conventional Commit
+PR titles, squash merges, release-please) and cloud-agents' `npm run deploy` (a stamped `version.json`). Runbooks:
+[`RELEASING.md`](./RELEASING.md) and [`CONTRIBUTING.md`](./CONTRIBUTING.md). Slices D1 and D2 build this section
+(§19).
+
+### 23.1 Branches, pull requests, merges
+
+| Branch | For | PR title |
+|---|---|---|
+| `slice-<id>/<topic>` | one slice of §19 (`slice-1c/walking-skeleton`, `slice-d1/delivery`) | `<type>(slice-<id>): <summary>`; product slices use `feat` |
+| `feat/<topic>` · `fix/<topic>` | a change outside a slice | `feat: …` · `fix: …`, any scope |
+| `docs/<topic>` · `ci/<topic>` · `chore/<topic>` | documents, workflows, tooling | `docs: …` · `ci: …` · `chore: …` |
+| `dependabot/…` · `release-please--branches--main` | the bots | written by the bot |
+
+- Topics are lowercase `[a-z0-9-]`, at most 50 characters. Nobody commits to `main` or pushes a tag. A fork's branch
+  (`patch-1`, even `main`) is outside the scheme; only its title is checked.
+- A PR title is a Conventional Commit: a lowercase type (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`,
+  `ci`, `chore`, `revert`), an optional scope `[a-z0-9-]+` that a `slice-` branch must set to its slice id, `!` for a
+  breaking change, and a subject with no trailing period, at most 72 characters on people's branches (the bots' titles
+  run longer: Dependabot writes full scoped names and `in /test/live`). The squash commit takes the PR title as its
+  title and the PR body as its body, so `BREAKING CHANGE:` and `Release-As:` footers reach `main`, where release-please
+  reads them.
+- Merges are squash only, with linear history; the branch is deleted on merge.
+- Two required checks, both from GitHub Actions (app id 15368): `pr-title` and `ci-ok`. A PR needs 0 approvals:
+  GitHub never lets an author approve their own PR, and agents open PRs as the owner. A PR need not be up to date with
+  `main`; `ci.yml` runs again on `main` after each merge. No merge queue in v1 (D35).
+- No ruleset has a bypass actor, so `gh pr merge --admin` fails for everyone, the owner included.
+- `gh pr merge --auto` merges at once, without turning auto-merge on, when GitHub already calls the PR mergeable
+  (`CLEAN`, `HAS_HOOKS`, or `UNSTABLE`, which includes checks that are failing but not required) [gh source]. Two
+  rules follow:
+  - **Interim rule.** Until `github-setup --check` is clean (today no ruleset requires any check), nobody passes
+    `--auto`. Merge with `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>`
+    (D54).
+  - A guard that turns auto-merge off cannot stop a merge of a PR that is already green. The release PR is therefore a
+    draft (§23.8), and the owner-merge rule below holds only as long as agents keep it.
+
+**Owner-merge paths** (`scripts/delivery/owner-paths.json`, always read from the base branch): `.github/**`,
+`scripts/delivery/**` (every script a workflow runs with a write token, the stamp, `github-setup`, and the Node pin),
+`scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`,
+`release-please-config.json`, `.release-please-manifest.json`, `CLAUDE.md`, `AGENTS.md`, `.claude/**`, and
+`.cursor/**`. A PR that touches one changes the pipeline or what every later agent obeys, so the owner reads its diff
+and merges it by hand. `owner-merge.yml` labels such a PR `owner-merge`, turns its auto-merge off, and says so in one
+comment, and does it again whenever someone turns auto-merge back on. Agents never merge it, never turn its auto-merge
+on, and never remove the label. Against an agent that holds the owner's classic token this is a rule, not a control
+(D50); with the fine-grained agent token (D51) no agent push can change `.github/workflows/` at all.
+
+| Pull request | Who turns on auto-merge | It merges when |
+|---|---|---|
+| An agent's, opened with the operator's `gh` | the agent: `gh pr merge --auto --squash`, right after `gh pr create` (after the interim rule ends) | `pr-title` and `ci-ok` pass |
+| Any PR that touches an owner-merge path | nobody: `owner-merge.yml` turns it off | the owner merges it by hand after reading the diff |
+| Dependabot: a patch update of an allowlisted dev tool (§23.7) | `dependabot-auto-merge.yml` | the checks pass |
+| Dependabot: the weekly GitHub Actions group (an owner-merge path) | nobody | the owner merges it after reading the new SHAs and the tags they claim (D44) |
+| Dependabot: anything else (runtime or bundled packages, esbuild, majors, the live image's base) | nobody | the owner decides |
+| The release PR, `chore(main): release X.Y.Z` | nobody: it opens as a draft, and `owner-merge.yml` turns auto-merge off | the owner marks it ready and merges it by hand to release (§23.8) |
+
+### 23.2 Repository settings (`scripts/delivery/github-setup.mjs`)
+
+One idempotent script holds every repository setting; nothing is set by hand in the web UI. `--check`, the default,
+reads each setting through `gh api`, prints desired and actual values by name, exits 1 on any difference, and changes
+nothing. `--apply` asks on an interactive terminal (no `--yes`), changes only what differs, reads it back, and prints
+the same table; a second `--apply` changes nothing. It runs `gh` with argv arrays, never runs `gh auth status`, never
+reads a secret's value (only names, from `gh secret list`), and names the signed-in account with
+`gh api user --jq .login`. The operator runs `--apply` once after slice D1 merges, and again whenever `--check`
+reports drift. The release App's slug is a constant in the script, `null` until the App exists (RELEASING.md). Until
+then the `tags` and `release branch` rulesets have no bypass actor, so nobody can create a tag or a release branch,
+and `--check` is still clean.
+
+| Area | Desired | REST |
+|---|---|---|
+| Merging | squash only; auto-merge on; delete the branch on merge; squash commit title `PR_TITLE` and message `PR_BODY` (today `COMMIT_OR_PR_TITLE` and `COMMIT_MESSAGES`, which let a one-commit PR's commit title replace its PR title); update-branch suggested | `PATCH /repos/{o}/{r}` |
+| Actions | GitHub-owned actions plus `googleapis/release-please-action@*` and `dependabot/fetch-metadata@*`; full-length SHA pinning required; `GITHUB_TOKEN` read-only by default and unable to approve PRs; workflows on a PR from any outside contributor wait for approval (today only first-time contributors wait) | `PUT …/actions/permissions` (`sha_pinning_required`), `…/actions/permissions/selected-actions`, `…/actions/permissions/workflow`, `…/actions/permissions/fork-pr-contributor-approval` (`all_external_contributors`) |
+| Releases | immutable | `PUT …/immutable-releases` |
+| Security | secret scanning with push protection; Dependabot alerts and security updates; private vulnerability reporting | `PATCH /repos/{o}/{r}` (`security_and_analysis`), `PUT …/vulnerability-alerts`, `…/automated-security-fixes`, `…/private-vulnerability-reporting` |
+| Environment `release-please` | deployments only from `main`; variable `RELEASE_APP_CLIENT_ID`; secret `RELEASE_APP_PRIVATE_KEY`, checked by name, the only secret v1 has (D52) | `PUT …/environments/release-please`, `POST …/deployment-branch-policies` |
+| Environment `publish` | deployments only from `v*` tags; the owner (resolved with `gh api user --jq .id`) as required reviewer, self-review allowed; no secrets | `PUT …/environments/publish` (`reviewers`, `prevent_self_review: false`), `POST …/deployment-branch-policies` (`type: tag`) |
+| Labels | `live` (runs the live suite on a PR); `owner-merge` (§23.1) | `POST …/labels` |
+| Rulesets | `main`, `tags`, and `release branch`, below, matched by name | `POST …/rulesets`, `PUT …/rulesets/{id}` |
+
+The `main` ruleset:
+
+```json
+{ "name": "main", "target": "branch", "enforcement": "active", "bypass_actors": [],
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [ { "type": "deletion" }, { "type": "non_fast_forward" }, { "type": "required_linear_history" },
+             { "type": "required_signatures" },
+             { "type": "pull_request", "parameters": {
+                 "required_approving_review_count": 0, "dismiss_stale_reviews_on_push": false,
+                 "require_code_owner_review": false, "require_last_push_approval": false,
+                 "required_review_thread_resolution": false, "allowed_merge_methods": ["squash"] } },
+             { "type": "required_status_checks", "parameters": {
+                 "strict_required_status_checks_policy": false, "do_not_enforce_on_create": false,
+                 "required_status_checks": [ { "context": "pr-title", "integration_id": 15368 },
+                                             { "context": "ci-ok", "integration_id": 15368 } ] } } ] }
+```
+
+The `tags` ruleset covers every tag, not only `v*`. Only the release App (§23.8; the id below is fake) creates, moves,
+or deletes one, and immutable releases lock a published release's tag on top of that:
+
+```json
+{ "name": "tags", "target": "tag", "enforcement": "active",
+  "bypass_actors": [ { "actor_id": 1234567, "actor_type": "Integration", "bypass_mode": "always" } ],
+  "conditions": { "ref_name": { "include": ["~ALL"], "exclude": [] } },
+  "rules": [ { "type": "creation" }, { "type": "update", "parameters": { "update_allows_fetch_and_merge": false } },
+             { "type": "deletion" }, { "type": "non_fast_forward" } ] }
+```
+
+The `release branch` ruleset gives the release PR's branch the same single writer, so the release PR holds only what
+release-please wrote. The branch outlives its merge (only the App may delete it), and release-please reuses it:
+
+```json
+{ "name": "release branch", "target": "branch", "enforcement": "active",
+  "bypass_actors": [ { "actor_id": 1234567, "actor_type": "Integration", "bypass_mode": "always" } ],
+  "conditions": { "ref_name": { "include": ["refs/heads/release-please--**"], "exclude": [] } },
+  "rules": [ { "type": "creation" }, { "type": "update", "parameters": { "update_allows_fetch_and_merge": false } },
+             { "type": "deletion" }, { "type": "non_fast_forward" } ] }
+```
+
+### 23.3 Versions and branch detection (`core/release/`)
+
+The root package.json's `version` is the base, `X.Y.Z`: Desk's version. release-please owns it, together with
+package-lock.json's root `version`, `.release-please-manifest.json`, and `CHANGELOG.md`; nobody edits them by hand.
+The workspace packages are private, keep their fixed `0.1.0` with exact internal pins, and nothing reads their
+versions. One pure function decides what a build is. `scripts/delivery/stamp.mjs` gathers its inputs (below) and
+writes its answer into the build (§23.4); `npm run pack`, `npm run deploy`, and every CI build job call that script.
+
+```ts
+classifyBuild({ event: "push", ref: "refs/tags/v0.3.0", refType: "tag", branch: "main", tagOnMain: true,
+                sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", dirty: false, allowDirty: false, dryRun: false,
+                headRepoIsFork: false, baseVersion: "0.3.0", prNumber: null, runNumber: 57,
+                builtAt: "2026-10-06T18:00:00Z" })
+// → { channel: "stable", version: "0.3.0", label: "v0.3.0", publish: "release", live: "gate", refusals: [] }
+```
+
+| Build | Channel | Version | Publish | Live suite |
+|---|---|---|---|---|
+| a `v*` tag (`push`, or `workflow_dispatch` on the tag) | `stable` | `X.Y.Z`, the tag's | the draft release, then published after the owner approves (§23.8) | `gate`: before publishing |
+| a release dry run (`release.yml` dispatched on `main`, `dryRun`) | `stable` | `X.Y.Z+dryrun.<run>`, package.json's | `none`: a workflow artifact, 1 day | `gate` |
+| `main` (`push`, `workflow_dispatch`, `schedule`) | `edge` | `X.Y.(Z+1)-edge.<run>+<sha7>` | an attested workflow artifact, 30 days | `off`: weekly runs cover `main` |
+| `pull_request` | `pr` | `X.Y.(Z+1)-pr.<number>.<run>+<sha7>` | a workflow artifact, 7 days, never installable | `on-label`: the `live` label, same-repository PRs only; `off` for a fork's |
+| `local`, a checkout | `dev` | `X.Y.(Z+1)-dev.<branch slug>+<sha7>`; with `allowDirty`, `+<sha7>.dirty.<yyyymmddthhmmssz>` | this Mac, by `npm run deploy` | `off`: the developer runs `npm run test:live` |
+
+`<sha7>` is the head commit's (for a pull request, its head, which `build-darwin.yml` checks out, never GitHub's test
+merge); `<run>` is the workflow's run number. A prerelease of the next patch sorts after the release it follows and
+before the next one; a stable version equals its base. The branch slug is lowercase; every run of characters outside
+`[a-z0-9]` becomes `-`; it is trimmed of `-`, cut to 40 characters, `detached` when empty, and prefixed `b` when all
+digits. A dirty build carries its build time, so two never share a version.
+
+| Refusal | When |
+|---|---|
+| `tag-not-semver` | the tag is not exactly `vMAJOR.MINOR.PATCH` (lowercase `v`, no prerelease, no leading zeros) |
+| `tag-not-on-main` | the tagged commit is not an ancestor of `main`, or the stamp could not tell |
+| `version-mismatch` | the tag's version differs from package.json's |
+| `bad-base-version` | package.json's version is not `MAJOR.MINOR.PATCH` |
+| `dirty-tree` | uncommitted changes, unless `local` with `allowDirty` |
+| `allow-dirty-in-ci` | `allowDirty` on any CI event |
+| `unsupported-ref` | CI on a ref that is not `main`, a `v*` tag, or a pull request |
+| `no-commit` | no 40-hex commit (not a git checkout) |
+
+Any refusal stops the build before anything is published or installed: a failed job in CI, exit 65 locally, each
+refusal named.
+
+Where the inputs come from (`scripts/delivery/git-facts.mjs`, tested with a stub `git` in Tyto's style):
+- `sha`: `git rev-parse HEAD`, else `no-commit`.
+- `dirty`: tracked changes (`git status --porcelain --untracked-files=no`) or untracked files that are not ignored
+  (`git ls-files --others --exclude-standard`); in CI the job fails and names them.
+- `tagOnMain`: the stamp fetches `main` (`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`; build
+  checkouts use `fetch-depth: 0`) and asks `git merge-base --is-ancestor <tag commit> origin/main`; any error counts as
+  not on `main`.
+- `branch`: the checked-out branch locally; for a tag build, `main` only when `tagOnMain`; for a PR build, the head
+  branch from the event.
+- `event`, `ref`, `prNumber`, the PR's head commit, `headRepoIsFork`, and `runNumber` come from the event payload and
+  `GITHUB_*` variables through `env`; `dryRun` from `release.yml` on `main`. `build-darwin.yml` checks out exactly the
+  commit it stamps.
+
+An MV3 manifest's `version` takes one to four dot-separated integers, so the manifest rendered at launch (§6.1 step 5)
+carries `version` `X.Y.Z.<render serial>`, the serial in `render.json` counting renders that changed the extension
+(wrapping below 65,536), and `version_name` the full Desk version. §6.1 step 9 compares that `version`.
+
+### 23.4 `version.json`
+
+Every build carries one, written by the stamp into the build output (`dist/`, gitignored), never into the repo, and
+covered by `files.sha256`:
+
+```json
+{ "version": "0.3.1-edge.57+a1b2c3d", "channel": "edge", "branch": "main",
+  "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", "dirty": false, "builtAt": "2026-10-06T18:00:00Z",
+  "node": "26.10.0",
+  "compat": { "protocol": [1, 1], "state": { "config": 1, "layout": 1, "panes": 1, "installed": 1 } } }
+```
+
+- `desk --version` prints one line in cloud-agents' style,
+  `desk 0.3.1-edge.57+a1b2c3d (edge, a1b2c3d4e5f6 on main, built 2026-10-06T18:00:00Z)`, adding `dirty` for a dirty
+  dev build; `--json` prints the file. `desk doctor` prints the same fields as a block, with the provenance recorded at
+  install (§23.5) and the versions the daemon and `desk watch` run, and warns when the current version is a dev or edge
+  build; `desk status` names the current version and the daemon's.
+- `node` names Desk Terminal's Node. `compat` names the protocol range (§7.2) and the state-file versions (§4.2) this
+  version reads, which `desk use` checks (§23.5). The `build` fields of `hello` and of the locks carry `version`, and
+  `TERM_PROGRAM_VERSION` is the daemon's.
+- Desk reads only the installed copy; a missing or malformed `version.json` is a damaged install (§9's banner;
+  `desk doctor` names it).
+
+### 23.5 Installs on the Mac
+
+```
+~/.desk/app/                                    0700
+  0.3.0/                                        a stable version; complete and immutable once installed
+  0.3.1-edge.57+a1b2c3d/                        the current version
+  0.3.1-dev.slice-1c-walking-skeleton+a1b2c3d/  a dev version from npm run deploy
+  current -> 0.3.1-edge.57+a1b2c3d              a relative symlink, replaced with rename(2)
+  .staging-k2m9q3x7ab/                          a version being verified; removed if verification fails
+```
+
+`installed.json` records them (fake values):
+
+```json
+{ "version": 1, "current": "0.3.1-edge.57+a1b2c3d", "previous": "0.3.0",
+  "versions": {
+    "0.3.0": { "channel": "stable", "build": "9f8e7d6c…", "provenance": "release.yml@refs/tags/v0.3.0",
+               "commit": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c", "installedAt": "2026-10-04T09:00:00Z" },
+    "0.3.1-edge.57+a1b2c3d": { "channel": "edge", "build": "1a2b3c4d…", "provenance": "edge.yml@refs/heads/main",
+                               "commit": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+                               "installedAt": "2026-10-06T18:20:00Z" } },
+  "files": [] }
+```
+
+Rules, whichever path installs:
+
+1. One install at a time holds `run/install.lock`, and only it writes `installed.json`. A version is built or
+   downloaded into `.staging-<id>/`, verified, then renamed into `app/<version>/`. Installing an installed version does
+   nothing.
+2. Verified means: `files.sha256` matches; `version.json` names the version, channel, and commit that were asked for
+   (for a release, the tag and the commit GitHub reports for it); `codesign --verify --strict` passes on Desk
+   Terminal; and a download passed its sha256 and provenance checks before anything was extracted.
+3. `current` changes only after the operator confirms (SPEC §6.3), by renaming a new link over it; `installed.json`
+   then records `previous`.
+4. The launchers (§15.1) resolve `current` once and exec that version, so a running process never loads a chunk from
+   another version.
+5. No install, update, `use`, or `rollback` stops the terminal daemon or a shell. The next `desk` renders and reloads
+   the extension from the new version, replaces a `desk watch` that runs another version (§6.1 step 13; agents
+   reconnect on their next command), and its panels negotiate with the running daemon (§7.2); with no common protocol
+   version the panel offers "Restart now" (tmux sessions survive). A native host starts a daemon from `current` (§8).
+6. `desk use` refuses a version whose `compat.state` is older than a state file on disk (exit 65, naming the file): an
+   older reader would move the newer file aside and start from defaults (§4.3), changing the ports agents use. Every
+   change to a state file's shape bumps its `version`, except `installed.json`, which only gains optional keys, and
+   whose unknown keys every Desk writes back (D48).
+7. After a switch, `current`, `previous`, and the most recently installed other version (by `installedAt`) stay, and
+   no version a running Desk process uses is removed: those `ptyd.lock` and `watch.lock` name, and any whose Desk
+   Terminal a process runs (`ProcessInfo.executablesUnder`, which finds native hosts). Files identical to the current
+   version's are cloned (APFS copy-on-write), so three versions cost about one Desk Terminal.
+8. Desk Terminal's `Info.plist` names no Desk version, so its ad hoc signature, and the macOS privacy grants tied to
+   it, stay the same across Desk versions with the same Node (inferred; M19).
+9. Nothing moves backwards on its own (D55): plain `desk update` installs only a version that sorts after the current
+   one; a downgrade takes `--version` or `desk use`, and the prompt names it as one.
+
+| Path | Run by | Source | Checked | Channel | Slice |
+|---|---|---|---|---|---|
+| `npm run deploy [-- --allow-dirty]` | the operator, in a checkout | this checkout | rule 2 | dev | 1c |
+| `desk update [--channel stable] [--version X.Y.Z]` | the operator | GitHub Releases, REST without a token | the tag, the commit on `main`, `SHA256SUMS`, `verify-asset`, provenance from `release.yml` on the tag, rule 2 | stable | D2 |
+| `desk update --channel edge` | the operator | the newest successful `edge.yml` run on `main` with an artifact, through `gh` | the commit on `main`, provenance from `edge.yml` on `refs/heads/main`, rule 2 | edge | D2 |
+| `desk versions` · `desk use <version>` · `desk rollback` | the operator | installed versions | rules 2 and 6 | any | D2 |
+| `install.sh`, a release asset | a fresh Mac | GitHub Releases, through `gh` | as `desk update` | stable | D2 |
+
+**`npm run deploy`** (slice 1c). In a checkout on the operator's Mac: `classifyBuild` (`local`); `npm run pack`
+(bundles, the PTY package, Desk Terminal, `version.json`, and `files.sha256` into `dist/`); then the packed runtime's
+own `desk install --from dist/desk-<version>`, which asks, installs, switches `current`, and keeps three (rules 1–7).
+It prints `Installed 0.3.1-dev.slice-1c-walking-skeleton+a1b2c3d; run desk`. It refuses a dirty tree without
+`--allow-dirty`, a missing interactive terminal, anything but macOS on arm64, `CI` or `VITEST` in the environment, and
+a Node that is not the pinned 26.10.0; its guards take `{env, platform, arch}` from the caller, so tests inject each
+value. It never starts Chrome and never runs the installed `desk`. Agents never run it: it changes the operator's
+`~/.desk` (§0). Its prompt stops accidental runs, but a same-user process can answer it (SPEC §6.1), so the rule, not
+the terminal, keeps agents out. Agents run `npm run pack`, which writes only `dist/`.
+
+**`desk update`** (slice D2).
+- The channel is the current version's; on a dev version it refuses and names `npm run deploy` and
+  `--channel stable`. `--channel` switches; `--version X.Y.Z` picks a stable release.
+- Never backwards (rule 9): when `releases/latest` sorts before the current version, it prints
+  `releases/latest (v0.2.9) is older than what you run (0.3.0); nothing changed` and exits 0. Edge refuses a run that
+  does not sort after the current version or whose commit is an ancestor of the current one. `--version` may name an
+  older release; the prompt calls it a downgrade.
+- Stable: `GET https://api.github.com/repos/YOLOVibeCode/tyto-desk/releases/latest` (or `…/releases/tags/vX.Y.Z`)
+  without a token. The tag must be exactly `vMAJOR.MINOR.PATCH`; the commit GitHub reports for it
+  (`GET …/commits/vX.Y.Z`) must be on `main` (`GET …/compare/<commit>...main` says `ahead` or `identical`); then the
+  tarball and `SHA256SUMS` from the release's assets (30 s per call, 300 MB at most). Edge:
+  `gh run list --repo YOLOVibeCode/tyto-desk --workflow edge.yml --branch main --status success --limit 20`, the newest
+  run that has the `desk-edge-darwin-arm64` artifact (none has one before slice 1c), its head commit on `main` as
+  above, then `gh run download <id> --name desk-edge-darwin-arm64`.
+- `gh` must be 2.102.0 or later and signed in: older versions match `--signer-workflow` as a prefix and `--source-ref`
+  without case (GHSA-wjmr-j3rp-mh2g, GHSA-4mq3-hpgx-9cx8). An older `gh` is exit 69, naming `brew upgrade gh`.
+- Before extracting: the tarball's sha256 against `SHA256SUMS`; for a release, `gh release verify-asset vX.Y.Z` on
+  both files; then
+
+  ```bash
+  gh attestation verify desk-0.3.0-darwin-arm64.tar.gz --repo YOLOVibeCode/tyto-desk \
+    --cert-identity https://github.com/YOLOVibeCode/tyto-desk/.github/workflows/release.yml@refs/tags/v0.3.0 \
+    --source-ref refs/tags/v0.3.0 --source-digest 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c \
+    --deny-self-hosted-runners
+  ```
+
+  (edge: `…/edge.yml@refs/heads/main`, `--source-ref refs/heads/main`, and the run's head commit). `--cert-identity`
+  matches the signing workflow and its ref exactly. Then rules 1–7.
+- Provenance is required: no flag skips the check (D40). Without `gh`, install it, or check out the tag and
+  `npm run deploy`, which installs the same commit as a dev version.
+- `--check` prints the current version and the newest per channel and changes nothing; `desk doctor` shows the last
+  result and never goes online itself.
+- Exit codes: 0 updated, already newest, or nothing newer · 65 a check failed and nothing was installed · 69 `gh`
+  missing, signed out, or too old · 75 GitHub unreachable · 77 you declined.
+
+**`desk versions`, `desk use <version>`, `desk rollback`** (slice D2). `versions` lists each installed version with
+its channel, provenance, and install date, and marks `current`, `previous`, and the versions the daemon, `desk watch`,
+and native hosts run. `use` switches to an installed version after you confirm (rules 3–7), naming a downgrade as one;
+`rollback` is `use <previous>`.
+
+**A fresh Mac** (slice D2). It needs Google Chrome ≥ 155, tmux, agent-browser ≥ 0.38.1, and `gh` 2.102.0 or later,
+signed in; it does not need Node. `install.sh` is a release asset, attested like the tarball. The snippet resolves the
+release first, then checks the installer as strictly as `desk update` checks a tarball (`--cert-identity` is exact
+even on an older `gh`):
+
+```bash
+t=$(gh release view --repo YOLOVibeCode/tyto-desk --json tagName --jq .tagName) \
+  && printf '%s\n' "$t" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
+  && d=$(mktemp -d) \
+  && gh release download "$t" --repo YOLOVibeCode/tyto-desk --pattern install.sh --dir "$d" \
+  && gh release verify-asset "$t" "$d/install.sh" --repo YOLOVibeCode/tyto-desk \
+  && gh attestation verify "$d/install.sh" --repo YOLOVibeCode/tyto-desk \
+       --cert-identity "https://github.com/YOLOVibeCode/tyto-desk/.github/workflows/release.yml@refs/tags/$t" \
+       --source-ref "refs/tags/$t" --deny-self-hosted-runners \
+  && bash "$d/install.sh" --version "${t#v}"
+```
+
+`install.sh` refuses anything but macOS on arm64 and a `gh` older than 2.102.0, installs exactly the release it was
+verified with (`--version`), checks that release's tarball and `SHA256SUMS` as `desk update` does (the commit on
+`main`, `verify-asset`, `--source-digest`), extracts them into a temporary directory, and runs that runtime's
+`desk install --from <dir>`, which asks for each step (§15.1). Never `curl | bash`.
+
+### 23.6 Release artifacts (macOS on Apple silicon only)
+
+| Asset | Contents |
+|---|---|
+| `desk-X.Y.Z-darwin-arm64.tar.gz` | `desk-X.Y.Z/`: `version.json`, `files.sha256`, `desk.mjs` and its chunks, `extension/` (its manifest is rendered at launch), the PTY package with its darwin-arm64 prebuild and `spawn-helper` (§2), and `Desk Terminal.app` |
+| `install.sh` | the fresh-Mac installer (§23.5) |
+| `SHA256SUMS` | the sha256 of the two files above |
+
+- Desk Terminal is Node 26.10.0 for darwin-arm64 from nodejs.org, pinned in `scripts/delivery/node-runtime.json` by
+  the tarball's sha256 and its `bin/node`'s, copied into `Desk Terminal.app`, and signed ad hoc as
+  `com.noctusoft.desk.terminal` on the runner (§15.1, D49).
+- Attestations: build provenance from `release.yml` for every file in `SHA256SUMS` (`actions/attest` with
+  `subject-checksums`), and GitHub's own release attestation for the immutable release (`gh release verify`,
+  `gh release verify-asset`).
+- Built on `macos-26` (arm64), never `macos-latest`, whose image moves under it. No Intel, universal, or Linux
+  artifacts (SPEC §7); Linux builds exist only inside the test container.
+- Edge artifacts hold the same tarball and `SHA256SUMS`, without `install.sh`, attested by `edge.yml`. PR artifacts
+  hold the tarball only, unattested, and nothing installs them; neither do dry-run artifacts.
+- Until slice 1c, `npm run pack` has no runtime to pack: `build-darwin.yml` builds, stamps, and reports
+  `runtime: false`; `edge.yml` and `release.yml` attest and publish nothing; and `ci-ok` fails on the release PR, so
+  no release can be cut (D58).
+
+### 23.7 Workflows
+
+| File | Runs on | Jobs | Token |
+|---|---|---|---|
+| `pr-title.yml` | `pull_request_target`: opened, edited, synchronize, reopened | `pr-title` (`ubuntu-24.04`): checks out the base branch, `npm ci --ignore-scripts` from the base's lockfile (no cache), and runs the base's `scripts/delivery/check-pr.mjs`: the title and head branch (through `env`), then the PR's workflow files, read through the REST API at the head commit as data and checked against the base's workflow rules, including that each pinned SHA is the commit its tag names. It never checks out or runs anything from the PR | `contents: read`, `pull-requests: read` |
+| `owner-merge.yml` | `pull_request_target`: opened, reopened, synchronize, ready_for_review, auto_merge_enabled, unlabeled | `owner-merge` (`ubuntu-24.04`): the base's dependency-free `scripts/delivery/owner-merge.mjs` reads the PR's file list and head branch through the API; for the release PR or an owner-merge path it adds the `owner-merge` label, runs `gh pr merge --disable-auto`, and comments once; otherwise it removes the label. Not a required check | `contents: read`, `pull-requests: write` |
+| `ci.yml` | `pull_request`; `push` to `main`; `workflow_dispatch` | `changes` (on a PR, its file list classified by the base commit's `scripts/delivery/ci-changes.mjs`; on `main`, code); `scan` (`secrets:scan` and gitleaks, always); `check` (Node 22.22.2 and 26.10.0, when code changed); `macos` (PRs that change code: `build-darwin.yml`, channel `pr`, at the PR's head); `ci-ok` | `contents: read` |
+| `build-darwin.yml` | `workflow_call` (channel, ref) | `test` (`macos-26`): `npm ci --ignore-scripts`, `npm audit signatures`, `npm run check`, with `DESK_NO_GUI=1`. `pack` (`macos-26`, no cache): `npm ci --ignore-scripts`, the stamp, `npm run pack` (esbuild and the repo's own scripts; no dev tool runs), the packed `desk --version --json` in a temporary HOME with `DESK_NO_GUI=1`, `codesign --verify`, `SHA256SUMS`, the artifact; output `runtime`. Neither starts the Chrome the runner image ships | `contents: read` |
+| `live.yml` | weekly; every three days (the cache keep-alive only); `workflow_dispatch`; `pull_request` (opened, reopened, synchronize, labeled) carrying the `live` label, same-repository PRs only | `live`: calls `live-run.yml`. `keep-alive` (`ubuntu-24.04-arm`): restores the Chrome `.deb` cache entry and nothing else | `contents: read` |
+| `live-run.yml` | `workflow_call` (ref) | `live` (`ubuntu-24.04-arm`): `npm run test:live -- --ci` (§17.3); results as an artifact | `contents: read` |
+| `edge.yml` | `push` to `main` that is not docs-only; `workflow_dispatch` | `build-darwin.yml` (`edge`), then `attest` (`ubuntu-24.04`), only when `test` and `pack` succeeded and `runtime` is true | `attest`: `id-token: write`, `attestations: write`, `contents: read` |
+| `release-please.yml` | `push` to `main`; `workflow_dispatch` | `release-please` (`ubuntu-24.04`, environment `release-please` with `deployment: false`; checks out nothing; pinned actions only): mints the App's token with `actions/create-github-app-token` (this repository only; contents, pull requests, and issues write), then runs release-please; without the App it stops with a notice | `GITHUB_TOKEN`: none; the App's token as minted |
+| `release.yml` | `push` of a `v*` tag, which only the App creates; `workflow_dispatch` (on a tag: that release; on `main`: a dry run) | `plan` (`classifyBuild`: stable, or a dry run on `main`; the tag's release exists), `build` (`build-darwin.yml`, `stable`), `live` (`live-run.yml`); a dry run stops here. `publish` (environment `publish`: waits for the owner's approval; resumable, §23.8), then `verify` | `publish`: `contents: write`, `id-token: write`, `attestations: write`; the rest `contents: read` |
+| `dependabot-auto-merge.yml` | `pull_request_target` (opened, reopened, synchronize), only when the author is `dependabot[bot]` and the head repository is this one | `automerge` (`ubuntu-24.04`): `dependabot/fetch-metadata` (never `skip-verification`), then the base's dependency-free `scripts/delivery/automerge-decision.mjs` on `updated-dependencies-json` (through `env`), then `gh pr merge --auto --squash` for the allowed class, or a comment naming why the owner must merge. No `npm ci`, no PR checkout | `contents: write`, `pull-requests: write` |
+
+The Dependabot class that merges itself (`automerge-decision.mjs`): an npm `direct:development` update of `@types/*`,
+`typescript`, `vitest`, or `yaml`, of type `version-update:semver-patch`; a group passes only when every member does.
+These tools run in tests and type checks, never while the runtime is packed, and nothing they provide ships (§15.1).
+Everything else waits for the owner, esbuild above all, which writes every byte Desk ships. Security updates follow
+the same rule; Dependabot applies no cooldown to them.
+
+Concurrency is declared only in top-level workflows (a `workflow_call` file declares none, so a caller and its callee
+never share a group): `pr-title-<PR>`, `owner-merge-<PR>`, and `automerge-<PR>`, cancelling; `ci-<PR>`, cancelling,
+and `ci-<commit>` on `main`; `live-<PR or run id>`, cancelling for PRs; `edge`, cancelling; `release-please`, queued;
+`release-<tag or ref>`, queued.
+
+`ci-ok` runs with `if: always()` after `changes`, `scan`, `check`, and `macos`, and fails when any of them failed or
+was cancelled, when `changes` found code and `check` (or, on a PR, `macos`) did not succeed, or when the PR is the
+release PR and `macos` reports `runtime: false`. A docs-only PR (`docs/**`, root `*.md` other than `CLAUDE.md` and
+`AGENTS.md`, `LICENSE`) runs `pr-title`, `scan`, and `ci-ok` only; everything else, agent rules and package files
+included, is code. GitHub keeps a workflow that path filters skipped pending forever, but reports a skipped job as
+passed: the filter is therefore a job, and the required check is one aggregate job. `pr-title` lives in its own
+workflow because it also runs when a title is edited, and a re-run that skipped `ci.yml`'s jobs would report them as
+passed over an earlier failure. `ci.yml` is the PR's own copy, so a PR could rewrite `ci-ok`; such a PR touches
+`.github/**`, an owner-merge path, and the base's `pr-title` refuses a second job named `ci-ok` or `pr-title` anywhere.
+
+Rules for every workflow (`scripts/delivery/workflow-rules.mjs`, run by `lint:workflows` in `check` and by the base's
+`pr-title` on every PR; YAML parsed with `yaml`, a dev dependency pinned exactly, with no install script):
+- Top-level `permissions: {}`; each job asks for what it needs. `id-token: write` only in `release.yml`'s `publish` and
+  `edge.yml`'s `attest`; `contents: write` only in `publish` and `dependabot-auto-merge.yml`; `pull-requests: write`
+  only in `owner-merge.yml` and `dependabot-auto-merge.yml`.
+- Triggers per file: `pull_request_target` only in `pr-title.yml`, `owner-merge.yml`, and
+  `dependabot-auto-merge.yml`; never `workflow_run`, `issue_comment`, `pull_request_review`,
+  `pull_request_review_comment`, or `repository_dispatch`.
+- Every `uses:` names a 40-character commit SHA with its tag in a comment, and `pr-title` checks online that the SHA is
+  the commit that tag names (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`); local reusable workflows go by
+  path.
+- Every checkout sets `persist-credentials: false`. A `pull_request_target` workflow checks out only the base and reads
+  the PR through the API, as data.
+- No `${{ … }}` inside a `run:` script except `matrix.*` and `runner.*`; event text, inputs, and step or job outputs
+  reach scripts through `env`.
+- Every `npm ci` or `npm install` passes `--ignore-scripts` itself; `.npmrc` alone does not count, since a PR can edit
+  it.
+- No cache (`actions/cache`, or setup-node's) in a `pull_request_target` job or in a job whose output is attested or
+  published (`pack`, `attest`, `publish`).
+- No `env`, `printenv`, `set -x`, or `ACTIONS_STEP_DEBUG` in a job that holds a secret, the App's token, or a write
+  scope: a public repository's workflow logs are public.
+- `timeout-minutes` on every job; runners by fixed label (`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-26`), never
+  `-latest`.
+- No job outside `ci.yml` and `pr-title.yml` is named `ci-ok` or `pr-title`.
+- Secrets appear only in jobs that run in the environment that holds them (`release-please`; later `signing`), and
+  `release.yml`'s `publish` runs in the `publish` environment.
+- `concurrency` only in workflows without `workflow_call`.
+- Later, if wanted: zizmor, pinned by sha256, as a second opinion; these rules stay the contract.
+
+Pinned actions, looked up with `gh api` on 2026-10-06 and checked against their tags the same day (each runs on Node
+24):
+
+| Action | Release | Commit |
+|---|---|---|
+| `actions/checkout` | v7.0.1 | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| `actions/setup-node` | v7.0.0 | `820762786026740c76f36085b0efc47a31fe5020` |
+| `actions/upload-artifact` | v7.0.1 | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
+| `actions/download-artifact` | v8.0.1 | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
+| `actions/attest` | v4.2.2 | `1e69f48acb82d1966a394da916b4c1698aa569d6` |
+| `actions/cache` | v6.1.0 | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` |
+| `actions/create-github-app-token` | v3.2.0 | `bcd2ba49218906704ab6c1aa796996da409d3eb1` |
+| `googleapis/release-please-action` | v5.0.0 | `45996ed1f6d02564a971a2fa1b5860e934307cf7` |
+| `dependabot/fetch-metadata` | v3.1.0 | `25dd0e34f4fe68f24cc83900b1fe3fe149efef98` |
+
+Considered and not used (D45): `amannn/action-semantic-pull-request` v6.1.1
+(`48f256284bd46cdaab1048c3721360e808335d50`), `dorny/paths-filter` v4.0.3
+(`ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d`), and `actions/attest-build-provenance` v4.2.2
+(`4d101475d8b20a2381f78447822ac1eab6504dd8`), which since v4 only wraps `actions/attest`.
+
+`.github/dependabot.yml` (Dependabot's commit prefix becomes the PR title; `pr-title` checks only the type and scope of
+a bot's title):
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7, semver-major-days: 30 }
+    commit-message: { prefix: fix, prefix-development: chore, include: scope }   # fix(deps): …, chore(deps-dev): …
+    groups:
+      dev-tools: { dependency-type: development, update-types: [patch],
+                   patterns: ["@types/*", "typescript", "vitest", "yaml"] }
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    commit-message: { prefix: ci, include: scope }                                # ci(deps): …
+    groups:
+      actions: { patterns: ["*"], update-types: [minor, patch] }
+  - package-ecosystem: docker                                                     # from slice 1b
+    directory: "/test/live"
+    schedule: { interval: weekly, day: monday }
+    cooldown: { default-days: 7 }
+    commit-message: { prefix: test, include: scope }                              # test(deps): …
+```
+
+### 23.8 Releases
+
+```
+ feat/fix PRs ──auto-merge──▶ main ──push──▶ release-please.yml (the release App's token)
+                                              │ opens or updates the draft PR "chore(main): release X.Y.Z",
+                                              │ labeled live; CI and the live suite run on it
+                                              ▼
+                       the owner reads what changed, marks the PR ready, and merges it
+                                              │
+                                              ▼
+                  release-please: a draft release vX.Y.Z and its tag (force-tag-creation)
+                                              │ the tag push starts release.yml
+                                              ▼
+  plan ─▶ build-darwin (macos-26) ─▶ live gate (ubuntu-24.04-arm) ─▶ publish, once the owner approves:
+                                                                     check sha256, attest, upload to the
+                                                                     draft, check the assets, publish
+                                                                     (immutable) ─▶ verify
+                                              │
+                                              ▼
+                              the Mac: desk update (a fresh Mac: install.sh)
+```
+
+- The release App, "Desk Release" (owned by YOLOVibeCode, installed only on this repository), has Contents, Pull
+  requests, and Issues write and Metadata read, and nothing else: no Workflows, no Administration. Its client id is a
+  variable of the `release-please` environment and its private key a secret there, kept in 1Password, read into a
+  shell variable with `op read`, and piped to `gh secret set`, never printed (RELEASING.md, one-time setup).
+- `release-please-config.json` (`.release-please-manifest.json` starts as `{}`; the root package.json's `version`
+  starts at `0.0.0`, and only release PRs change it; if the first release PR proposes anything but 0.1.0, a
+  `Release-As: 0.1.0` footer in a PR body settles it). `release-type` `node` with the single package `.` bumps only the
+  root package.json and package-lock.json:
+
+```json
+{ "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node", "include-component-in-tag": false, "initial-version": "0.1.0",
+  "bump-minor-pre-major": true, "bump-patch-for-minor-pre-major": true,
+  "draft": true, "force-tag-creation": true, "prerelease": false,
+  "draft-pull-request": true, "extra-label": "live",
+  "pull-request-header": "Merging this PR releases Desk for macOS on Apple silicon. It stays a draft and never merges itself: read RELEASING.md's pre-flight, then mark it ready and merge it yourself.",
+  "packages": { ".": { "package-name": "tyto-desk", "changelog-path": "CHANGELOG.md" } },
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" }, { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance" }, { "type": "refactor", "section": "Refactor" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "docs", "section": "Docs", "hidden": true }, { "type": "build", "section": "Build", "hidden": true },
+    { "type": "ci", "section": "CI", "hidden": true }, { "type": "chore", "section": "Chore", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true } ] }
+```
+
+- release-please opens a release PR whenever its changelog would not be empty, so a `feat`, `fix`, `perf`,
+  `refactor`, or `revert` commit, or a breaking change, proposes a release, and `docs`, `test`, `build`, `ci`, and
+  `chore` never do (D57).
+- `publish` runs in the `publish` environment, so it starts only after the owner approves it (the run's "Review
+  deployments", or `gh api` on its `pending_deployments`); agents never approve a deployment. It resumes where an
+  earlier attempt stopped:
+  1. Download the build's artifact and run `sha256sum --check --strict SHA256SUMS`.
+  2. If the tag's release is already published (an earlier attempt), compare its assets' API `digest`s with
+     `SHA256SUMS`: equal goes straight to `verify`, anything else fails.
+  3. Attest with `subject-checksums: SHA256SUMS`, then `gh release upload vX.Y.Z <assets> --clobber` (allowed on a
+     draft).
+  4. List the draft's assets and refuse unless they are exactly the tarball, `install.sh`, and `SHA256SUMS`, each with
+     the `digest` its line in `SHA256SUMS` names.
+  5. `gh release edit vX.Y.Z --draft=false --latest=<true only when X.Y.Z is the highest published version>` (D55).
+  From then on the release's assets and tag never change.
+- `verify`, a separate job with no write scope, checks the result: `gh release verify vX.Y.Z`,
+  `gh release verify-asset` for each asset, and `gh attestation verify` as `desk update` runs it, with the runner's
+  `gh` at 2.102.0 or later.
+- A published release's notes and its pre-release and latest flags can still change; that is how a bad release
+  leaves `releases/latest` (§23.9), and why `desk update` never moves backwards on its own.
+- What the release review covers. Agent PRs merge without review, so an edge build is whatever `main` holds, and its
+  provenance proves where it was built, not that anyone read it. The release is the human step: before merging the
+  release PR, the owner reads the commits since the last release and the diff of every owner-merge path
+  (RELEASING.md, pre-flight), never the changelog alone, which release-please writes from PR titles and from
+  `BEGIN_COMMIT_OVERRIDE` blocks that any PR body can carry.
+- Before slice 1c there is nothing to release (D58): `ci-ok` fails on the release PR while `macos` reports
+  `runtime: false`. `release.yml` dispatched on `main` rehearses `plan`, the build, and the live gate as a dry run,
+  and stops before any tag, release, or attestation.
+
+### 23.9 Recovery
+
+| Symptom | Action |
+|---|---|
+| No release PR | Only a `feat`, `fix`, `perf`, `refactor`, or `revert` commit, or a breaking change, starts one (D57); or the release App is missing (`release-please.yml` says so) |
+| The changelog files an entry under the wrong section | Add a `BEGIN_COMMIT_OVERRIDE` … `END_COMMIT_OVERRIDE` block with the right Conventional Commit to the merged PR's body, then run `release-please.yml`; never edit the release PR |
+| The release PR's checks are red | Fix on `main`; release-please updates its PR. Before slice 1c `ci-ok` is red on purpose |
+| The release PR merged, but there is no `vX.Y.Z` tag or draft | `release-please.yml` failed (the App's token, an outage): `gh workflow run release-please.yml` |
+| `release.yml` failed in `plan` | A refusal (§23.3) names the cause: a tag off `main`, a version mismatch, or no release for the tag |
+| `release.yml` failed in `build`, `live`, `publish`, or `verify` for a passing reason (runner, network, Sigstore) | `gh run rerun <run-id> --failed`. The draft and its tag wait; `publish` resumes, and a release an earlier attempt already published with matching digests goes straight to `verify` |
+| The live gate failed because Google pruned the pinned Chrome and no cache holds it | Bump the pin in a PR (§17.3); leave that tag a draft and release the next patch. The release PR's own live run should have caught it first |
+| `release.yml` failed because of the code | Fix forward: a `fix:` PR, then the next release PR (X.Y.Z+1). The failed version stays an unpublished draft that nothing installs; delete the draft if you like. Its tag stays, and nobody moves it |
+| `verify` failed after the release was published | Run its commands by hand to see why; if the release itself is wrong, `gh release edit vX.Y.Z --prerelease` and ship the next patch |
+| `release.yml` did not start after the release PR merged | `gh workflow run release.yml --ref vX.Y.Z` |
+| A published release is bad | `gh release edit vX.Y.Z --prerelease` takes it out of `releases/latest` (its assets stay); `desk rollback` on the Mac; the fix ships as the next patch |
+| `desk update` refuses provenance | Install nothing; read `gh attestation verify`'s output. If the signer workflow was renamed, `desk` and this section change together |
+| `main` is red after a merge | Fix forward in a PR; nobody bypasses the rulesets. If GitHub itself is broken, the owner may set a ruleset's enforcement to `disabled` in the web UI and back, never an agent |
+
+### 23.10 Signed and notarized builds (later, if wanted)
+
+v1 signs Desk Terminal ad hoc, which is enough on the operator's Mac: `gh`, Node's `fetch`, and `curl` set no
+quarantine attribute, so Gatekeeper never assesses it (inferred; M19). To ship Desk to other Macs, or to keep privacy
+grants across Node upgrades too, add a third environment, `signing` (D52): YOLOTerm's secrets
+(`MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PWD`, `KEYCHAIN_PASSWORD`, `NOTARIZATION_APPLE_ID`, `NOTARIZATION_TEAM_ID`,
+`NOTARIZATION_PASSWORD`), deployments only from `v*` tags, and the owner as required reviewer. Only a dedicated `sign`
+job in `release.yml` uses it, between `live` and `publish`: it downloads the `pack` artifact, signs Desk Terminal with a
+Developer ID and the hardened runtime, with the entitlements Node needs (`allow-jit`,
+`allow-unsigned-executable-memory`, and `disable-library-validation` for the PTY prebuild), notarizes it with
+`notarytool`, and staples the ticket, in a temporary keychain it deletes; it runs no `npm` and no repository script (it
+reads only the entitlements file at the tag) and hands the signed tarball and a new `SHA256SUMS` to `publish`, so the
+provenance covers what ships. Signing secrets never reach `build-darwin.yml`, which runs `npm ci` and the tests.
+`desk doctor` then names the signer through `CodeSigning.teamId`. A Developer ID gives Desk Terminal a designated
+requirement that survives new Node versions, and with it the grants.
