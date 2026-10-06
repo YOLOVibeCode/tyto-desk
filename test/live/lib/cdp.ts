@@ -108,9 +108,13 @@ export async function evaluate<T>(cdp: Cdp, sessionId: string, expression: strin
   return answer.result.value as T;
 }
 
+/** Thrown by a `waitFor` probe when waiting longer cannot help (the process it waits for exited): `waitFor` stops at once. */
+export class GiveUp extends Error {}
+
 /**
- * Polls an observed condition until it holds and returns what it saw; a probe that throws counts as not yet. Fails with
- * the label and the last error after `timeoutMs`. Never a sleep as the success condition: the probe decides.
+ * Polls an observed condition until it holds and returns what it saw; a probe that throws counts as not yet, except with
+ * `GiveUp`, which fails at once. Fails with the label and the last error after `timeoutMs`. Never a sleep as the success
+ * condition: the probe decides.
  */
 export async function waitFor<T>(
   probe: () => T | null | undefined | false | Promise<T | null | undefined | false>,
@@ -123,6 +127,7 @@ export async function waitFor<T>(
       const value = await probe();
       if (value !== null && value !== undefined && value !== false) return value;
     } catch (err) {
+      if (err instanceof GiveUp) throw err;
       last = err;
     }
     if (Date.now() >= deadline) {

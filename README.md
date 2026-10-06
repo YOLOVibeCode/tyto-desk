@@ -28,10 +28,13 @@ npm run test:live                     # the live suite, in a Linux container in 
 
 `npm run test:live` needs [Colima](https://github.com/abiosoft/colima) running (`colima start`, arm64) and a checkout
 under your home directory. It drives only `docker --context colima`: it never starts or restarts the VM, never touches
-containers it did not start, and runs at most two of its own at once. Branded Chrome, the PTYs and agent-browser run
-inside the container on a private Xvfb display with no network, so nothing opens on your screen. The first run builds
-the `desk-live` image and installs the dependencies into a volume (a few minutes); later runs take seconds. Results
-land in `test-results/live/` (docs/IMPLEMENTATION.md §17.3).
+containers it did not start, and runs at most two of its own at once, one on a VM with less than 7.5 GiB of memory.
+Branded Chrome, the PTYs and agent-browser run inside the container on a private Xvfb display with no network, so
+nothing opens on your screen. The first run builds the `desk-live` image and installs the dependencies into a volume
+(a few minutes); later runs take seconds, and a rebuild removes the older images it leaves. Results land in
+`test-results/live/`; Ctrl+C stops the suite and still copies its results out, and a second Ctrl+C abandons them. In
+GitHub Actions, `npm run test:live -- --ci` drives the linux-arm64 runner's own Docker instead (docs/IMPLEMENTATION.md
+§17.3).
 
 | Path | Role |
 |---|---|

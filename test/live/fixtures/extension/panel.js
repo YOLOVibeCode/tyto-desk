@@ -1,4 +1,6 @@
-// The fixture panel shows where it is and its size, so the screenshot in test-results/ says which side it opened on.
+// The fixture panel prints the side Chrome reports (chrome.sidePanel.getLayout(), which reads back the pref the test
+// seeded) and its size. Where the panel is actually drawn is in extension-screen.png, the whole Xvfb screen, which the
+// test checks by the panel's #111 background.
 const status = document.getElementById("status");
 let side = "?";
 const show = () => {

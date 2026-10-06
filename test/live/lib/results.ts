@@ -19,6 +19,11 @@ export async function saveResult(name: string, data: unknown): Promise<void> {
 
 /** Writes `<name>.png` from a CDP `Page.captureScreenshot` answer. */
 export async function saveScreenshot(name: string, base64: string): Promise<void> {
+  await saveFile(`${name}.png`, Buffer.from(base64, "base64"));
+}
+
+/** Writes `file`, a plain file name, among the results. */
+export async function saveFile(file: string, bytes: Uint8Array): Promise<void> {
   await mkdir(resultsDir(), { recursive: true });
-  await writeFile(join(resultsDir(), `${name}.png`), Buffer.from(base64, "base64"));
+  await writeFile(join(resultsDir(), file), bytes);
 }

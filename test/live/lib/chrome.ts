@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { chromeArgs, chromeDefaultDirs, guiAllowed, newDeskConfig } from "../../../packages/core/src/index.ts";
-import { Cdp, attach, evaluate, waitFor } from "./cdp.ts";
+import { Cdp, GiveUp, attach, evaluate, waitFor } from "./cdp.ts";
 import { resultsDir } from "./results.ts";
 
 const run = promisify(execFile);
@@ -79,10 +79,47 @@ export async function browserVersion(port: number): Promise<VersionInfo> {
   return { browser: body.Browser, webSocketDebuggerUrl: body.webSocketDebuggerUrl };
 }
 
+/** Whether anything answers /json/version on the port. */
+async function answers(port: number): Promise<boolean> {
+  return browserVersion(port).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * Requires that the Chrome answering on the port is the process this test started: the browser process CDP reports
+ * (`SystemInfo.getProcessInfo`) has the pid it spawned (the `google-chrome-stable` wrapper execs the binary in place).
+ * Chrome writes `DevToolsActivePort` only for an ephemeral port (`--remote-debugging-port=0`), never Desk's fixed one,
+ * which the lab also recorded, so the file cannot say.
+ */
+async function assertOwnBrowser(cdp: Cdp, pid: number, port: number): Promise<void> {
+  const { processInfo } = await cdp.send<{ processInfo: { type: string; id: number }[] }>("SystemInfo.getProcessInfo");
+  const browser = processInfo.find((p) => p.type === "browser");
+  if (browser?.id !== pid) {
+    throw new Error(`the Chrome answering on port ${port} is pid ${browser?.id ?? "unknown"}, not the ${pid} this test started`);
+  }
+}
+
+/**
+ * Closes the Chrome this test started after one of its checks failed: `Browser.close` over whatever answers on the port
+ * (never a signal), then its exit within 10 s, so the port is free again. Quiet when nothing answers.
+ */
+async function closeAfterFailure(port: number, exit: Promise<Exit>): Promise<void> {
+  const version = await browserVersion(port).catch(() => null);
+  if (version === null) return;
+  const cdp = await Cdp.connect(version.webSocketDebuggerUrl).catch(() => null);
+  await cdp?.send("Browser.close").catch(() => undefined);
+  await exitWithin(exit, 10_000, "Chrome after Browser.close").catch(() => undefined);
+  cdp?.close();
+}
+
 /**
  * Starts the installed Chrome the way Desk will: arguments from core's `chromeArgs` for a fresh Desk config on a fixed
- * port (plus the window geometry as the user's extraArgs), in a fresh profile and HOME, after the GUI guard. Waits for
- * /json/version (polled every 100 ms for up to 20 s, §6.6), then connects to the browser WebSocket.
+ * port (plus the window geometry as the user's extraArgs), in a fresh profile and HOME, after the GUI guard. It refuses
+ * a port that already answers (a Chrome an earlier test failed to close), waits for /json/version (polled every 100 ms
+ * for up to 20 s, §6.6; at once a failure when Chrome exits), connects to the browser WebSocket, and requires that the
+ * browser behind it is the process it started. A Chrome that started but failed a check is closed with `Browser.close`.
  */
 export async function startDeskChrome(options: {
   name: string;
@@ -93,6 +130,9 @@ export async function startDeskChrome(options: {
   beforeLaunch?: (userDataDir: string) => Promise<void>;
 }): Promise<LiveChrome> {
   assertGuiAllowed();
+  if (await answers(options.port)) {
+    throw new Error(`port ${options.port} is held by a Chrome from an earlier test; each live file has its own port`);
+  }
   const home = await mkdtemp(join(tmpdir(), `${options.name}-home-`));
   const config = newDeskConfig({ home, platform: "linux", chromePort: options.port, gatewayPort: options.port + 1 });
   const chrome = { ...config.chrome, extraArgs: WINDOW };
@@ -112,15 +152,26 @@ export async function startDeskChrome(options: {
 
   const started = Date.now();
   const proc = await launch(options.name, chrome.app, [...args.args, ...(options.urls ?? [])], home);
-  const version = await waitFor(
-    async () => {
-      if (proc.exited()) throw new Error(`Chrome exited before answering (see chrome-${options.name}.log)`);
-      return browserVersion(options.port);
-    },
-    { label: `/json/version on port ${options.port}`, timeoutMs: 20_000, intervalMs: 100 },
-  );
-  const readyMs = Date.now() - started;
-  const cdp = await Cdp.connect(version.webSocketDebuggerUrl);
+  let readyMs: number;
+  let cdp: Cdp;
+  try {
+    const version = await waitFor(
+      async () => {
+        if (proc.exited()) throw new GiveUp(`Chrome exited before answering (see chrome-${options.name}.log)`);
+        return browserVersion(options.port);
+      },
+      { label: `/json/version on port ${options.port}`, timeoutMs: 20_000, intervalMs: 100 },
+    );
+    readyMs = Date.now() - started;
+    cdp = await Cdp.connect(version.webSocketDebuggerUrl);
+    await assertOwnBrowser(cdp, proc.pid, options.port).catch((err: unknown) => {
+      cdp.close();
+      throw err;
+    });
+  } catch (err) {
+    if (!proc.exited()) await closeAfterFailure(options.port, proc.exit);
+    throw err;
+  }
   return {
     pid: proc.pid,
     userDataDir: chrome.userDataDir,

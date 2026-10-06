@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 import { targets } from "./lib/cdp.ts";
 import { startDeskChrome } from "./lib/chrome.ts";
 import { startFixtureServer } from "./lib/fixture-server.ts";
+import { LIVE_PORTS } from "./lib/ports.ts";
 import { saveResult } from "./lib/results.ts";
 
 const run = promisify(execFile);
-const PORT = 9417;
+const PORT = LIVE_PORTS.agentBrowser;
 
 type Step = { args: string[]; ok: boolean; ms: number; out: string };
 

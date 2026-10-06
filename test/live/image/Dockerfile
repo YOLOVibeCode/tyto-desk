@@ -1,16 +1,17 @@
 # The Desk live-test image (docs/IMPLEMENTATION.md §17.3), ported from the 2026-10-06 Colima lab. scripts/live.mjs
-# builds it in the Colima VM only, and only when a file in test/live/image changes. Branded Google Chrome on a private
-# Xvfb display, Node 26, zsh and tmux, agent-browser, and the Puppeteer and Playwright cores. Nothing here can reach the
-# Mac's screen: the display is a virtual framebuffer inside the container, and the suite runs with no network.
+# builds it in the Colima VM on the Mac, or on the runner's own Docker engine in GitHub Actions (--ci), and only when a
+# file in test/live/image changes. Branded Google Chrome on a private Xvfb display, Node 26, zsh and tmux,
+# agent-browser, and the Puppeteer and Playwright cores. Nothing here can reach the Mac's screen: the display is a
+# virtual framebuffer inside the container, and the suite runs with no network.
 #
 # Bumping Chrome: change CHROME_DEB and CHROME_SHA256 together, from
 # https://dl.google.com/linux/chrome/deb/dists/stable/main/binary-arm64/Packages. The runner downloads the .deb once
-# into the desk-live-cache volume (Google prunes old builds from its pool) and streams it into this build's context.
+# into its cache (the desk-live-cache volume, or the Actions cache directory; Google prunes old builds from its pool)
+# and streams it into this build's context. The base image is named literally, pinned by digest, so Dependabot's docker
+# updater (directory /test/live/image) can read and bump it.
 
-ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
-
-# Stage 1: what the runner needs to fill the cache volume and stream the build context (curl, the verified download).
-FROM ${DEBIAN_IMAGE} AS fetch
+# Stage 1: what the runner needs to fill the cache and stream the build context (curl, the verified download).
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f AS fetch
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     TZ=UTC

@@ -2,9 +2,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineConfig } from "vitest/config";
 
-// The live suite (docs/IMPLEMENTATION.md §17.3). It runs only inside the Desk test container in the Colima VM, which
-// `npm run test:live` (scripts/live.mjs) starts; test/live/setup/container-guard.ts refuses anywhere else, before any
-// test file loads. test/setup/global-setup.ts still gives the run a fresh HOME, DESK_HOME and TMPDIR.
+// The live suite (docs/IMPLEMENTATION.md §17.3). It runs only inside the Desk test container, in the Colima VM or on
+// a GitHub Actions linux-arm64 runner, which `npm run test:live` (scripts/live.mjs) starts;
+// test/live/setup/container-guard.ts refuses anywhere else, before any test file loads. test/setup/global-setup.ts
+// still gives the run a fresh HOME, DESK_HOME and TMPDIR.
 // One file at a time: each starts its own Chrome or PTYs, and the container has 3 CPUs.
 // The container sets DESK_LIVE_RESULTS; without it (a refused run on the Mac) nothing is written anywhere.
 const results = process.env.DESK_LIVE_RESULTS;

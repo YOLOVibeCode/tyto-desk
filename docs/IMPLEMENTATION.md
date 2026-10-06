@@ -21,8 +21,8 @@ Keychain), *vm* (Colima lab), *inferred*, *unverified* (§21 names the slice or 
 
 **TDD.** A failing spec-sentence test exists before production code, one behavior per `it` (tables use `it.each`).
 `npm test` is offline: no browser, no Chrome binary, no network, no keys, no real PTY. Live tests live in
-`packages/*/test/live/` and run only inside the Desk test container (`npm run test:live`). A known gap is an `it.fails`
-naming its issue, never an `it.skip`.
+`packages/*/test/live/`, and the repo-level suites in `test/live/` (D71), and run only inside the Desk test container
+(`npm run test:live`). A known gap is an `it.fails` naming its issue, never an `it.skip`.
 
 **ISP.** One port per file in `packages/core/src/ports/` (§3). Core plans depend on role ports, never on raw CDP.
 Adapters implement ports. Separate fakes in `@desk/core/testing`; no god port, no god fake. A port that is hard to fake
@@ -116,7 +116,7 @@ After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:lis
 | @types/node · @types/chrome | 26.6.4 · 0.3.4 | dev |
 | @xterm/xterm 6.0.0, addon-webgl 0.19.0, fit 0.11.0, search 0.16.0, web-links 0.12.0, unicode11 0.9.0 [ST] | exact | extension |
 | @xterm/headless 6.0.0, @xterm/addon-serialize 0.14.0 | exact | ptyd |
-| @lydell/node-pty 1.2.0-beta.15, or node-pty 1.2.0-beta.15 (rule below) | exact | ptyd |
+| @lydell/node-pty 1.2.0-beta.15 (D62) | exact | ptyd; until slice 2a, the live suite only |
 | ws | 8.22.0 | gateway |
 | puppeteer-core, playwright-core | pinned in the live image only | live tests |
 
@@ -132,11 +132,11 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
   lists `esbuild@0.28.2`, whose postinstall merely verifies its platform binary, and `fsevents@2.3.3`, flagged by
   registry metadata only (esbuild and the node-pty package work through their platform optional dependencies; checked
   in slice 1a, D28). CI also runs `npm audit signatures`.
-- node-pty (settled in slice 1b): Microsoft's `node-pty@1.2.0-beta.15` if its tarball has darwin-arm64 and
-  linux-arm64 prebuilds with an executable `spawn-helper`; otherwise `@lydell/node-pty@1.2.0-beta.15` with its
-  platform packages pinned by integrity. Never node-pty 1.1.0 as shipped (`spawn-helper` mode 644, no Linux prebuilds)
-  [SP, ST, CR]; if both betas fail, 1.1.0 with `chmod +x` on `spawn-helper` at install, compiled in the image as the
-  VM lab did [VMLAB]. The installed runtime records the native module's sha256.
+- node-pty (settled in slice 1b, D62): `@lydell/node-pty@1.2.0-beta.15`, its platform packages pinned by integrity
+  in package-lock. Microsoft's `node-pty@1.2.0-beta.15` ships the same darwin-arm64 and linux-arm64 prebuilds and an
+  executable `spawn-helper`, but declares `install` and `postinstall` scripts and ships sources to build. Never
+  node-pty 1.1.0 as shipped (`spawn-helper` mode 644, no Linux prebuilds) [SP, ST, CR]. The installed runtime records
+  the native module's sha256.
 
 ## 3. Ports (`packages/core/src/ports/`)
 
@@ -1062,60 +1062,99 @@ test wrote into that `~/.desk`.
 ### 17.3 The live container
 
 - Image `test/live/image/Dockerfile` (slice 1b), tagged `desk-live:<sha256 of test/live/image, 16 hex>`, so it is
-  rebuilt only when a file there changes: `debian:trixie-slim@sha256:a29215f6a35e…` (the 2026-10-05 build); branded
-  `google-chrome-stable_155.0.8059.39-1_arm64.deb` pinned by sha256 `3556494580a7…` and Node 26.10.0 for linux-arm64
-  pinned by sha256 `7a6353f63eb3…` [VMLAB Dockerfile]; agent-browser 0.38.1 (its bundled glibc linux-arm64 binary,
-  made executable and linked by the image itself), puppeteer-core 25.12.0 and playwright-core 1.63.0, all from
-  `test/live/image/tools/package-lock.json` with `npm ci --ignore-scripts` (D65); xvfb, xdotool, tmux, zsh, procps,
-  lsof, tini, fonts; user `lab` (uid 1000). Debian's Chromium is not used: it is 154, below the manifest's minimum
-  [VMLAB]. Google prunes old builds from its pool, so the runner keeps the `.deb` by sha256: in a Colima volume
-  (`desk-live-cache`, at `chrome/<sha256>/`) on the Mac, in an Actions cache keyed by the same sha256 in CI. On the
-  Mac the image's `fetch` stage downloads it once with `fetch-verified` (https only; it lands only when its sha256
-  matches), a helper container streams the build context (the image directory and the `.deb`, checked again) into
+  rebuilt only when a file there changes: `debian:trixie-slim@sha256:a29215f6a35e…` (the 2026-10-05 build), named in
+  a literal `FROM` so Dependabot's docker updater can read and bump it (its directory is `/test/live/image`, D69);
+  branded `google-chrome-stable_155.0.8059.39-1_arm64.deb` pinned by sha256 `3556494580a7…` and Node 26.10.0 for
+  linux-arm64 pinned by sha256 `7a6353f63eb3…` [VMLAB Dockerfile]; agent-browser 0.38.1 (its bundled glibc
+  linux-arm64 binary, made executable and linked by the image itself), puppeteer-core 25.12.0 and playwright-core
+  1.63.0, all from `test/live/image/tools/package-lock.json` with `npm ci --ignore-scripts` (D65); xvfb, xdotool, tmux,
+  zsh, procps, lsof, tini, fonts; user `lab` (uid 1000). Debian's Chromium is not used: it is 154, below the
+  manifest's minimum [VMLAB]. Google prunes old builds from its pool, so the runner keeps the `.deb` by sha256, at
+  `chrome/<sha256>/` of its cache: the Colima volume `desk-live-cache` on the Mac, and in CI the directory
+  `~/.cache/desk-live` on the runner, which `live.yml` restores from and saves to an Actions cache keyed by the same
+  sha256 (path `~/.cache/desk-live/chrome`). The image's `fetch` stage downloads it once with `fetch-verified` (https
+  only; it lands only when its sha256 matches, and a stale `.part` of a download cut short is removed after an hour),
+  a helper container streams the build context (the image directory and the `.deb`, checked again) into
   `docker build -`, and the Dockerfile checks it a third time (D63). A bump changes the `CHROME_DEB` and
   `CHROME_SHA256` lines together. Debian's own packages are not pinned. GitHub evicts a cache entry unused for 7 days,
   the weekly run's interval, so `live.yml` restores the entry every three days as well, and only runs on `main` save
   it (tag and PR runs can read `main`'s entries). No copy of Chrome lives anywhere else, such as a container registry
-  (D60). When Google has pruned the pinned build and no cache holds it, the run fails naming the bump.
+  (D60). When Google has pruned the pinned build and no cache holds it, the run fails naming the bump. After a build
+  the runner removes older `desk-live` and `desk-live-fetch` images that carry a harness label, keeping the newest
+  other one for another checkout (D68).
 - `scripts/live.mjs` runs in two places only. On the Mac it is the only thing that runs, and it drives
   `docker --context colima` and nothing else. In CI (`--ci`, accepted only when `GITHUB_ACTIONS=true` on a Linux
   arm64 runner) it drives the runner's own Docker engine on `ubuntu-24.04-arm`, with the same phases, flags, seccomp
   profile, and sandboxed Chrome; if Ubuntu 24.04's AppArmor limit on unprivileged user namespaces stops Chrome's
   sandbox there, the job lifts that limit on the runner (`sysctl kernel.apparmor_restrict_unprivileged_userns=0`), and
-  never passes `--no-sandbox` (§21). Anywhere else it refuses (§23.7, D47).
-- On the Mac, `scripts/live.mjs` (`npm run test:live [-- <vitest filters>]`) drives only `docker --context colima`,
-  with an environment that never carries `DOCKER_HOST` or `DOCKER_CONTEXT`. It refuses unless the `colima` context is a Colima profile's socket (`unix://<~/.colima, ~/.config/colima or
-  $COLIMA_HOME>/<profile>/docker.sock`), the daemon behind it answers as a Colima VM on arm64, and the checkout is under
-  the home directory, the only tree Colima shares [VMLAB `run.sh`]. It never starts, stops or restarts the VM, which
-  also runs the operator's own containers. Every container it starts is named `desk-live-<role>-<run>` and labelled
-  `com.noctusoft.desk-live=1` and `com.noctusoft.desk-live.runner=<host>:<pid>` (images and volumes carry only
-  `com.noctusoft.desk-live.resource=1`, since an image's labels reach its containers). It first removes leftovers,
-  stopped ones and running ones whose runner on this host is gone, never a container without both labels, and it never
-  runs a third Desk container. Phase 1 (network on, once per lockfile): the dependency volume
-  `desk-live-deps-<sha256 of package-lock.json, 16 hex>`; `test/live/harness/install.mjs` copies `package.json`,
-  `package-lock.json`, `.npmrc` and the workspaces' `package.json` from the read-only repo into `/work` and runs
-  `npm ci --ignore-scripts` there with the volume as `/work/node_modules` (npm's cache in `desk-live-cache`), so
-  linux-arm64 modules never touch the Mac's `node_modules`; `.desk-live-ready` marks it complete. Phase 2:
-  `docker run --rm --interactive --network none --shm-size 1g --memory 3g --cpus 3
-  --security-opt seccomp=<repo>/test/live/chrome-seccomp.json` with the repo read-only at `/src` and the dependency
-  volume read-only at `/work/node_modules`. Results come out with `docker cp` into `test-results/live/` (gitignored)
-  while the container still runs: `test/live/harness/run.mjs` prints `::desk-live-done:: <code>` when the suite ends
-  and waits for stdin, the runner's lifeline, to close; a container whose runner died ends itself, and `--rm` removes
-  it (D63). Inside, `run.mjs` and the live config's first global setup refuse unless `DESK_IN_CONTAINER=1` and Linux;
-  `run.mjs` copies the allowlisted repo files into `/work` (`repoPathAllowed` in `scripts/lib/live.mjs`, which
-  `.dockerignore` mirrors), starts Xvfb, records the versions it runs against in `environment.json`, and runs
-  `vitest.live.config.ts` one file at a time, with `--configLoader native` because node_modules is read-only.
+  never passes `--no-sandbox` (§21). Anywhere else it refuses (§23.7, D47). Slice 1b lands `--ci` with offline tests
+  against a stub `docker`; its first real run is `live.yml`'s, from slice D1 (D66).
+- The runner (`scripts/lib/live-runner.mjs`; `npm run test:live [-- <vitest filters>]`, plus `--ci` in CI, which never
+  reaches vitest) takes every input from its caller (argv, environment, platform, paths, the docker CLI, output), so
+  the offline tests drive it against a stub `docker`. Before any docker command it refuses inside the test container,
+  a checkout path that `--mount` cannot carry, `--ci` outside GitHub Actions or off linux-arm64, and, without `--ci`,
+  anything but a Mac with the checkout under the home directory, the only tree Colima shares [VMLAB `run.sh`]. It then
+  refuses unless the engine answers: on the Mac the `colima` context must be a Colima profile's socket
+  (`unix://<~/.colima, ~/.config/colima or $COLIMA_HOME>/<profile>/docker.sock`) and the daemon a Colima VM on
+  arm64; in CI the default context's engine must be linux-arm64. Its docker environment never carries `DOCKER_HOST`
+  or `DOCKER_CONTEXT`, and every command names its context. It never starts, stops or restarts the VM, which also runs
+  the operator's own containers. A missing docker CLI or a timeout is one `test:live:` line, never a stack trace.
+- Every container the runner starts is named `desk-live-<role>-<run>` and labelled `com.noctusoft.desk-live=1`,
+  `com.noctusoft.desk-live.runner=<host>:<pid>` and `com.noctusoft.desk-live.started=<ms>`; images and volumes carry
+  only `com.noctusoft.desk-live.resource=1`, since an image's labels reach its containers, and docker sets a volume's
+  labels only when it creates it (volumes made before this label carry `com.noctusoft.desk-live=1`). It first removes
+  leftovers, never a container without the name and both labels: a container whose runner on this host is gone, in
+  any state, and a stopped one of another host's runner older than two hours; never one whose runner lives (between
+  `docker run`'s create and start it is `created`, and `--rm` removes it once it exits) or one docker is already
+  removing, and a removal that fails is a warning (D68). It runs at most two Desk containers, and one unless the VM's
+  memory (`docker info`'s MemTotal) holds two suites at their 3 GiB limit plus 1.5 GiB; the Colima VM's 5.77 GiB
+  allows one (D68). Every run uses `--pull never`, and binds use `--mount`, which fails on a missing source where
+  `--volume` would mount an empty directory.
+- Phase 1 (network on, once per change of the files npm ci reads): the dependency volume
+  `desk-live-deps-<sha256 of package.json, package-lock.json, .npmrc and the workspaces' package.json, 16 hex>`. Only
+  those files and phase 1's two scripts (`test/live/harness/install.mjs`, `scripts/lib/live.mjs`) are mounted, each
+  read-only. `install.mjs` runs under `flock` on a lock file in the cache, so two runs never install into one volume
+  at once; it copies the package files into `/work` and runs `npm ci --ignore-scripts` there with the volume as
+  `/work/node_modules` (npm's cache in the runner's cache), so linux-arm64 modules never touch the Mac's
+  `node_modules`; `.desk-live-ready` marks it complete, and a run that waited for the lock finds it and installs
+  nothing. Only `test -f`'s own "no" counts as not ready: an unfinished volume is installed again in place, never
+  removed, and a docker failure stops the run. After a new volume is installed the runner removes older
+  `desk-live-deps-*` volumes that carry a harness label, keeping the newest other one, never `desk-live-cache` (D68).
+- Phase 2: `docker run --rm --interactive --pull never --network none --shm-size 1g --memory 3g --cpus 3
+  --pids-limit 2048 --security-opt seccomp=<repo>/test/live/chrome-seccomp.json --security-opt no-new-privileges`
+  with the repo read-only at `/src` and the dependency volume read-only at `/work/node_modules` (D69). The runner first
+  deletes `test-results/live/`, so a run never reports another's results. `test/live/harness/run.mjs` refuses unless
+  `DESK_IN_CONTAINER=1` and Linux; copies the allowlisted repo files into `/work` (`repoPathAllowed` in
+  `scripts/lib/live.mjs`, which `.dockerignore` mirrors); starts Xvfb with its framebuffer mirrored to a file the
+  tests read; records the versions it runs against, and the cgroup's `memory.peak` and `pids.peak`, in
+  `environment.json`; and runs `vitest.live.config.ts` one file at a time, with `--configLoader native` because
+  node_modules is read-only. Whatever stops it after its guard, it writes `environment.json` (naming the failure),
+  prints `::desk-live-done:: <run> <code>` with the runner's random run id, which vitest's environment never holds,
+  and waits for stdin, the runner's lifeline, to close. On this run's done line the runner copies the results out
+  with `docker cp` into `test-results/live/` (gitignored), deletes them unread when they hold anything but plain files
+  and directories (`docker cp` keeps symbolic links), and closes stdin. The run's status is the container's exit
+  status; a run with no done line, or whose results could not be copied out, fails (D67). A container whose runner
+  died sees stdin close, stops the suite and ends itself, and `--rm` removes it (D63); so does one stopped before its
+  suite started. The runner's 30-minute limit and the first Ctrl+C in phase 2 stop the suite through the container
+  (`docker kill --signal SIGTERM`, which tini passes to `run.mjs`), so its results still come out, and a container
+  that has not stopped 2 minutes later is removed; a second Ctrl+C, or one before phase 2, removes this run's
+  containers at once. An interrupted run exits 130.
 - Chrome's sandbox stays on under the lab's seccomp profile, Docker's default plus `clone`, `setns` and `unshare`
-  ("You are adequately sandboxed", asserted live). `--cap-drop=ALL` breaks it (`sys_chroot` fails in the zygote), so
-  the container keeps Docker's default capabilities (measured 2026-10-06). Xvfb `:99` at 1440×900×24, no TCP. WebGL2
-  is absent without SwiftShader, so the VM exercises the DOM renderer [VMLAB].
+  ("You are adequately sandboxed", asserted live), with `no-new-privileges` (the namespace sandbox needs no setuid
+  helper; measured 2026-10-06). `--cap-drop=ALL` breaks it (`sys_chroot` fails in the zygote), so the container keeps
+  Docker's default capabilities (measured 2026-10-06). Xvfb `:99` at 1440×900×24, no TCP. WebGL2 is absent without
+  SwiftShader, so the VM exercises the DOM renderer [VMLAB].
 - The repo-level live suites (Chrome, the extension and its host, the PTY package, agent-browser) live in `test/live/`,
-  with fixtures in `test/live/fixtures/`; adapters' live tests join them in `packages/*/test/live/`. Live Chrome
-  starts only through `test/live/lib/chrome.ts`: arguments from core's `chromeArgs` for a fresh `newDeskConfig`, a
-  fresh profile and HOME, after `guiAllowed`; it quits with `Browser.close`. The one launch without Desk's flags (the
-  window-chrome baseline) has no CDP and quits with Ctrl+Shift+W through Xvfb's XTEST, never a signal (D64). Each run
-  writes `test-results/live/`: `vitest.json`, `environment.json`, one JSON file of measurements per test, Chrome's logs,
-  and the panel screenshot.
+  with fixtures in `test/live/fixtures/`; adapters' live tests join them in `packages/*/test/live/` (D71). Nothing
+  else imports the PTY package (`test/pty-boundary.test.ts`, §17.1's lint). Live Chrome starts only through
+  `test/live/lib/chrome.ts`: arguments from core's `chromeArgs` for a fresh `newDeskConfig`, a fresh profile and HOME,
+  after `guiAllowed`, on its file's own port (`test/live/lib/ports.ts`); it refuses a port that already answers,
+  requires the browser behind it to be the process it started (`SystemInfo.getProcessInfo`), and quits with
+  `Browser.close`. The one launch without Desk's flags (the window-chrome baseline) has no CDP and quits with
+  Ctrl+Shift+W through Xvfb's XTEST, never a signal (D64). Window chrome is compared once the window has settled, and
+  the side panel's side is checked on the screen itself (D70). Each run writes `test-results/live/`: `vitest.json`,
+  `environment.json`, one JSON file of measurements per test, Chrome's logs, the panel screenshot, and
+  `extension-screen.png`, the whole screen.
 - The test build exposes `globalThis.deskTest.screen(paneId)` (buffer text); production builds drop it, and a build
   test asserts the name is absent. Live tests type with CDP `Input.insertText` and `Input.dispatchKeyEvent` on the panel
   target, which reach it [RC], and each live UI test saves a panel screenshot (`Page.captureScreenshot` on the panel
@@ -1736,6 +1775,7 @@ provenance check · an update that moves to an older version on its own · a run
 Review of 2026-10-06 (security, persistence and UX, testability). Every blocker and major issue is resolved in the
 sections above; these entries record choices, deviations, and rejections. D28–D33 come from slice 1a; D34–D61 from
 the delivery design and its security and operability review, the same day; D62–D70 from slice D1 and its review;
+D62–D71 from slice 1b and its review;
 D81–D86 from the owner's decision on who merges owner-merge PRs and the hardening that followed slice D1's security
 reviews (PR #5) and the reviews of that hardening (PR #7).
 
@@ -1768,7 +1808,7 @@ reviews (PR #5) and the reviews of that hardening (PR #7).
 | D25 | `SystemInfo.getProcessInfo`, focused-window guessing over CDP, and `run/chrome.json` are dropped (accepts the review's simplification) | `ListenerInfo` verifies the port owner; the worker knows the focused window; `desk status` queries live state |
 | D26 | Crash relaunch and idle quit are on by default, with caps | Persistence is the first requirement; the port should not stay open behind a closed window; at most 2 relaunches in 10 minutes avoids a crash loop |
 | D27 | The visible screen first, then scrollback, only if slice 2b misses the show bar | A full 5,000-line snapshot is expected to fit the bar; the split adds protocol state |
-| D28 | `scripts/allowed-install-scripts.json` lists `esbuild@0.28.2` and `fsevents@2.3.3` (slice 1a; the plan said empty) | esbuild declares `postinstall: node install.js`, so `lint:install-scripts` cannot pass with an empty list. The script only verifies and relinks the `@esbuild/<platform>` binary; under `ignore-scripts` the JS API finds that optional dependency anyway (the neutral bundle test and `npm run build` use it). The lint also reads `package-lock.json`, whose `hasInstallScript` covers every platform: fsevents (a darwin-only optional dependency of vite and rollup) carries it from registry metadata alone, and its tarball ships a prebuilt `fsevents.node` with no `binding.gyp` or install hook. Entries are keyed by exact version, so a bump forces a new review. Of the PTY candidates, `@lydell/node-pty@1.2.0-beta.15` declares no install script; Microsoft's `node-pty@1.2.0-beta.15` declares `install` and `postinstall` and would need an entry (slice 1b decides) |
+| D28 | `scripts/allowed-install-scripts.json` lists `esbuild@0.28.2` and `fsevents@2.3.3` (slice 1a; the plan said empty) | esbuild declares `postinstall: node install.js`, so `lint:install-scripts` cannot pass with an empty list. The script only verifies and relinks the `@esbuild/<platform>` binary; under `ignore-scripts` the JS API finds that optional dependency anyway (the neutral bundle test and `npm run build` use it). The lint also reads `package-lock.json`, whose `hasInstallScript` covers every platform: fsevents (a darwin-only optional dependency of vite and rollup) carries it from registry metadata alone, and its tarball ships a prebuilt `fsevents.node` with no `binding.gyp` or install hook. Entries are keyed by exact version, so a bump forces a new review. Of the PTY candidates, `@lydell/node-pty@1.2.0-beta.15` declares no install script; Microsoft's `node-pty@1.2.0-beta.15` declares `install` and `postinstall` and would need an entry (slice 1b chose `@lydell/node-pty`, D62) |
 | D29 | The `~/.desk` meta-test is strict in slice 1a: every entry, `logs/` included, with directory timestamps (the first 1a commit skipped `logs/`; the slice review reverted that). How it treats a running Desk's own writes is **open for the operator** to decide before the first slice that runs Desk processes (`InstanceLock`): (1) the suite refuses to run while `run/ptyd.lock` or `run/watch.lock` names a live pid, and the check stays strict; or (2) while such a holder lives, the files §4.1 says Desk rewrites at run time (`panes.json`, `layout.json`, `agent-browser.json`, `run/*.lock`, `run/quit.marker`, the logs and their rotations) compare by existence and mode only, and everything else strictly | No Desk process exists in slice 1a, so nothing but a test can write `~/.desk` during the suite, and a backstop that can only fail closed costs nothing. The `logs/` exception hid the directory `FileLogSink` will write to, and it would not have kept a running Desk from tripping the check anyway (it rewrites `panes.json` and the locks too). Directory timestamps catch a file a test created and removed during the run |
 | D30 | `lint:listen` is real from slice 1a, and type-aware | `@desk/node`'s port probe already calls `listen()`. The TypeScript checker resolves each `.listen()` call and judges only Node's own `Server.listen`, so a port's `listen(onConnection)` (`MessageServer`) is not mistaken for one. It mirrors Node's own argument handling: a numeric string is a port, a port beside a `path` wins, and a spread or a non-literal can carry anything, so a socket path goes in as `{ path }` with a type that is always a string. Its slice 4a test sentence is written now |
 | D31 | CI runs Node 22.22.2 and 26.10.0 exactly | The engines floor for Node 22, which catches APIs newer than the floor, and `.nvmrc`. A runner's cached 22.x can be older than the floor, which `engine-strict` refuses |
@@ -1815,6 +1855,12 @@ reviews (PR #5) and the reviews of that hardening (PR #7).
 | D63 | The live harness keeps `--rm` and still copies results out with `docker cp`: the container prints a done line and waits for stdin, the runner's lifeline, to close; the image's build context comes out of the VM through a helper container | `--rm` alone removes the container before `docker cp` can run. With the lifeline a container whose runner died ends itself (measured: gone within about 1 s of the runner's SIGKILL; Ctrl+C stops the suite and exits 130), so leftovers are rare, and the runner still removes any it finds. `docker build` cannot read a volume, and the `.deb` lives in `desk-live-cache`, so a helper streams the image directory and the `.deb` into `docker build -`; it copies the directory to local disk first, because GNU tar reading the virtiofs mount exits 1 ("file changed as we read it") although nothing changed, which the lab's `repo-test` also hit. `.dockerignore` (generated from the same allowlist as the in-container copy, and checked by a test) adds `.npmrc` and `vitest*.config.ts` to §18's list and drops `node_modules`, `.git`, Desk and agent-browser state, test results, and `.env*` at any depth |
 | D64 | The window-chrome baseline is the same Chrome with `--no-first-run`, `--no-default-browser-check` and the same window, without the debugging port or the session flags, as the research measured it; it quits with Ctrl+Shift+W through XTEST | A launch with no flags at all would also run Chrome's first-run experience and default-browser check, which are not Desk's doing and which the research's baseline turned off too (inferred, not measured). Without a port the baseline has no CDP, `chrome://quit` handed to the running instance by a second launch does not quit it (2026-10-06), and the Chrome law rules out a signal; closing its only window quits it normally (exit 0 in about 60 ms). Both measured 87 px in the VM |
 | D65 | `lint:install-scripts` also reads `test/live/image/tools/package-lock.json`, and `agent-browser@0.38.1` is allowlisted | The live image installs agent-browser, puppeteer-core and playwright-core from that lockfile with `--ignore-scripts`, pinned by integrity like the repo's own tree; puppeteer-core and playwright-core are in the image now (§17.3) so slice 4a needs no rebuild. agent-browser's postinstall only makes its bundled binary executable (downloading it from GitHub only when absent) and relinks npm's global bin, which the image does itself; the other 26 packages declare no install script |
+| D66 | Slice 1b lands the live runner's CI mode (D47) without running it: `--ci` is accepted only when `GITHUB_ACTIONS=true` on linux-arm64, and never with `DESK_IN_CONTAINER=1`; it drives the runner's engine through `--context default` with the same phases, flags and seccomp profile, keeps the Chrome `.deb` under `~/.cache/desk-live/chrome/<sha256>/` for `live.yml` to restore and save; the flag itself never reaches vitest. Slice 1b's "live green in `live.yml`" waits for slice D1's `live.yml` (amends 1b's Done-when) | §19 orders D1 before 1b, but 1b was built first, on the Mac, while no D1 workflow exists, and this slice does not touch `.github/workflows`. The mode's refusals, argv and cache paths are tested offline against a stub `docker`; Chrome's sandbox on `ubuntu-24.04-arm` stays unverified (§21) until that first run |
+| D67 | A live run's status is the phase-2 container's exit status; the done line only says when to copy, and carries a random per-run id that only `run.mjs` receives. A run with no done line, or whose results could not be copied out or held anything but plain files and directories, fails; the runner deletes `test-results/live/` before phase 2; the 30-minute limit and the first Ctrl+C stop the suite through the container (`docker kill --signal SIGTERM`), so its results still come out, and a second Ctrl+C removes the run's containers (amends D63's Ctrl+C; slice 1b review) | The first line matching the marker decided the exit code, so a test's output could fake a green run or end the suite early; any failure before the done line reported the previous run's results as this run's; `docker cp` keeps symbolic links, so code in the container could leave one to a file in the operator's home for the runner to read and print. `run.mjs` now prints the done line after any failure past its guard, with `environment.json` naming the failure |
+| D68 | The VM is shared (slice 1b review): a Desk container whose runner on this host lives is never a leftover, in any state; another host's stopped container is one after two hours; a failed removal is a warning. A second Desk container runs only when the VM's MemTotal holds two 3 GiB suites plus 1.5 GiB; the Colima VM's 5.77 GiB holds one. Phase 1 runs under `flock` in the cache, installs an unfinished volume again in place instead of removing it, and keys the volume by every file `npm ci` reads. After a build or a new dependency volume, the runner removes the harness's older images and dependency volumes, keeping the newest other one, never the cache volume | The sweep removed a live runner's `created` container between create and start, and two runs could `npm ci` into one volume at once and mark a broken tree ready. Two 3 GiB limits (each covering its 1 GiB `/dev/shm`) exceed the VM's memory, so the VM's OOM killer, not a cgroup, would pick a victim, perhaps one of the operator's containers. Each image change left a 2.2 GB image in the operator's VM; the newest other one stays for another checkout, such as a worktree, of a different image. Docker sets a volume's labels only when it creates it, so pruning matches the resource label or the earlier owner label |
+| D69 | Hardening (slice 1b review): phase 1, the one container with the network, mounts only the package files and its two scripts, each read-only; phase 2 adds `--pids-limit 2048` and `--security-opt no-new-privileges` (measured: Chrome stays "adequately sandboxed", and the suite peaks at about 213 pids and 0.5 GB); binds use `--mount`, which fails on a missing source; every `docker run` passes `--pull never`; the Dockerfile names its Debian base in a literal `FROM`, so slice D1's Dependabot entry for it names `/test/live/image`, where the Dockerfile is (§23.7's sketch says `/test/live`) | Phase 1 mounted the whole checkout (`.git`, untracked files) into a container with the network on. A fork storm could exhaust the pids of the operator's containers. The image keeps setuid binaries (`chrome-sandbox`, `su`) that the namespace sandbox does not need. Dependabot does not read an `ARG` in `FROM`, so the digest pin would never have been bumped |
+| D70 | The live tests check what is on the screen (slice 1b review): the side panel's side on Xvfb's framebuffer (`-fbdir`, read as XWD; the whole screen is saved as `extension-screen.png`) once the panel has slid in, beside `chrome.sidePanel.getLayout()`, which only reads back the seeded pref; the window-chrome comparison uses the reading taken once the window settled (at least 3 s after load, two equal readings in a row) and requires a positive height. Each live file has its own Chrome port; `startDeskChrome` refuses a port that already answers, requires the browser behind it to be the process it started (`SystemInfo.getProcessInfo`), and closes a Chrome that failed a check with `Browser.close`; `waitFor` stops at once when the awaited process exited | A panel-target screenshot cannot show where the panel is drawn, and the panel slides in over a fraction of a second (a first capture caught it half in). A single reading at the load event could miss an infobar drawn later, and two empty readings compared equal. `DevToolsActivePort`, which the review proposed for ownership, is written only for an ephemeral port: with Desk's fixed port Chrome never writes it (the lab recorded it absent too). Measured 2026-10-06: the panel's 622 px background from x 9 to 630 of the 1400 px window; seeded right, from 769 to 1390; the window chrome 87 px in all 13 readings of both launches |
+| D71 | The repo-level live suites live in `test/live/`, as `.claude/rules/vitest.md` allows, and adapters' live suites in `packages/*/test/live/`; §0 names both. `CLAUDE.md` and `.claude/rules/tdd-isp.md` still name only `packages/*/test/live/`: agent rules on owner-merge paths, which the operator changes (slice 1b review). `test/pty-boundary.test.ts` fails when anything outside the live suites imports the PTY package (§17.1's lint, landed with the package) | The Chrome, extension, PTY and agent-browser suites belong to no package yet; slices 1c and 2a create those packages. An agent does not edit the rules agents obey (§23.1) |
 | D81 | Who merges an owner-merge PR (amends D50, §20, §23.1, CONTRIBUTING rule 6, `CLAUDE.md`, `AGENTS.md` and owner-merge's comment, which all state this rule in full). The owner's decision: asked directly on 2026-10-07 "who merges owner-merge PRs?", the owner answered "Merge after a security review (Recommended)": "I merge them with your gh login, but only after all checks pass AND a separate security-review agent reads the sensitive files' diff and signs off. A refusal stops the merge and I tell you why." So the owner merges one after reading its diff, or the agent session acting for the owner merges it with the owner's `gh` login, and only when (1) every check is green on the PR's exact head SHA; (2) at least two independent security-review agents, neither of them the PR's author, each read the full diff of every owner-merge path the PR changes and posted a verdict comment, APPROVE or APPROVE_WITH_NITS, that names the full 40-character head SHA and lists the owner-merge files it read; (3) only verdict comments posted by the owner's GitHub login count, checked by each comment's `user.login`, since the repository is public and anyone can post the same text; (4) a REFUSE stops the merge, and the session tells the owner which review refused and why before doing anything else; (5) a REFUSE keeps blocking, on its head and every later head, until a later approving review names each of its blocking reasons as resolved; (6) the merge names the reviewed commit, `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or `--admin`. Nits become follow-ups. Unchanged: only the operator runs `github-setup.mjs --apply`; the release PR is never auto-merged, and only the owner marks it ready and merges it (D53); no agent turns an owner-merge PR's auto-merge on or removes its label | The owner's choice, made directly when asked. Reviews that read the full diff of every owner-merge path stand in for the owner's own read of "the sensitive files' diff"; two of them, by agents that did not write the PR, each naming the full SHA, keep a push after the reviews from riding on them. Counting only the owner's login keeps a stranger's comment on a public repository from approving anything. A REFUSE that holds across heads until a later review resolves each of its blocking reasons keeps one more commit and two fresh approvals from burying it, and telling the owner first is the owner's "I tell you why". The rule's first text (PR #7) left out the read of the diff, the report to the owner, and whether a REFUSE outlives its head, and a review refused it for that. GitHub still sees one person (D50), so this is a rule agents keep, not a control |
 | D82 | Owner-merge paths cover the agent rules wherever agents read them (slice D1 hardening, PR #5's and PR #7's reviews): `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `.claude/`, `.cursor/`, `.cursorrules` and `.mcp.json` at any depth, and `docs/CONTRIBUTING.md`, which holds the agent rules `CLAUDE.md` points to. In `owner-paths.json` a `**` segment stands for any number of directories, none included. A path and a pattern compare after NFKC normalization, then without case (`foldName`), so `claude.md`, `AGENTſ.md` (U+017F, the long s), `pacKages/…` (U+212A, the Kelvin sign) and fullwidth spellings count. Change detection reads the same file and never calls an owner-merge path docs-only, so `docs/CLAUDE.md` or `docs/CONTRIBUTING.md` runs `check` and `macos`, and `edge.yml`'s path filter follows it for the names as spelled (GitHub's filter compares names exactly; a folded variant changes no runtime). The scripts refuse an `owner-paths.json` that is not a non-empty list of paths | Claude Code reads `CLAUDE.md` and `CLAUDE.local.md` in the directory it starts in and those above it, a subtree's `CLAUDE.md` and nested `.claude/` skills as it works there, and starts the MCP servers a `.mcp.json` names; Codex reads `AGENTS.override.md` before `AGENTS.md` in each directory, Codex and Cursor read nested `AGENTS.md`, and Cursor nested `.cursor/rules` and `.cursorrules`. macOS's file system ignores case and folds some letters beyond ASCII (`AGENTſ.md` opens `AGENTS.md` there), which an ASCII-only comparison missed (PR #7's review, confirmed by a probe); NFKC folds those letters and more (ligatures, fullwidth letters), so a name that only looks like an agent rule counts too, failing closed. Matched only at the root, a PR could change what agents obey without the owner's merge, and `docs/CLAUDE.md` was docs-only, merging on `scan` and `pr-title` alone. One list keeps owner-merge and docs-only from drifting apart |
 | D83 | Dependabot's auto-merge (amends D44, §23.7; slice D1 hardening): the job runs only when the event's sender, as well as the PR's author, is `dependabot[bot]`. The decision then reads every commit on the PR (`GET pulls/<n>/commits`, as many as the PR's `commits` count) and requires each to be authored by the account `dependabot[bot]` (`author.login`, and `author.id` 49699333) and committed by GitHub itself (`committer.login` `web-flow`, and `committer.id` 19864447: `GitHub <noreply@github.com>`) with a signature GitHub verified (`commit.verification.verified` true and its `reason` `valid`). The list must end at the head commit the event named, the PR's head must still be that commit, and none of its files may be an owner-merge path (or a file list the API cut short); a PR it cannot read is refused. Auto-merge goes on with `--match-head-commit` naming that head | fetch-metadata verifies only a PR's first commit, and the job turned auto-merge back on at every `synchronize` through `GITHUB_TOKEN`, whose events start no workflow, so `owner-merge.yml`'s `auto_merge_enabled` re-check never ran: a commit someone else pushed to an allowlisted Dependabot branch, an owner-merge path included, could merge itself. GitHub checks a commit's signature against its committer's keys, never its author's: a commit that carries Dependabot's author email but that any account committed and signed with its own registered key is `verified` too, and the check's first version (author and `verified` alone) accepted it (PR #7's reviews, confirmed by a probe). With `web-flow` as the committer only GitHub's own key verifies, so GitHub wrote the commit, with `dependabot[bot]` as its author, as it writes Dependabot's updates and rebases. Naming the head keeps a push made while the decision runs from getting auto-merge; a later push to an owner-merge path loses it to `owner-merge.yml`'s `synchronize` run |

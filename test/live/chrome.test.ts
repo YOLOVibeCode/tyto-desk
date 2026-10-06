@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MIN_CHROME_MAJOR } from "../../packages/core/src/index.ts";
 import { browserVersion, chromeBinaryMachine, sandboxVerdict, startBaselineChrome, startDeskChrome } from "./lib/chrome.ts";
-import { startFixtureServer } from "./lib/fixture-server.ts";
+import { SETTLE_MS, startFixtureServer } from "./lib/fixture-server.ts";
+import { LIVE_PORTS } from "./lib/ports.ts";
 import { saveResult } from "./lib/results.ts";
 
-/** A fixed port in Desk's range; the container has its own network namespace, so nothing else holds it. */
-const PORT = 9417;
+const PORT = LIVE_PORTS.chrome;
 
 describe("branded Chrome in the live container", () => {
   it("branded Chrome 155 for linux-arm64 starts sandboxed and answers /json/version on a fixed port", async () => {
@@ -29,13 +29,18 @@ describe("branded Chrome in the live container", () => {
     const fixture = await startFixtureServer();
     try {
       const desk = await startDeskChrome({ name: "chrome-desk-flags", port: PORT, urls: [`${fixture.origin}/measure?tag=desk`] });
-      const deskReport = await fixture.waitForReport("desk").finally(() => desk.close());
+      const deskMeasured = await fixture.waitForSettled("desk").finally(() => desk.close());
       const baseline = await startBaselineChrome({ name: "chrome-no-desk-flags", urls: [`${fixture.origin}/measure?tag=baseline`] });
-      const baselineReport = await fixture.waitForReport("baseline").finally(() => baseline.closeWindow());
-      await saveResult("chrome-webdriver-and-height", { desk: deskReport, baseline: baselineReport });
+      const baselineMeasured = await fixture.waitForSettled("baseline").finally(() => baseline.closeWindow());
+      await saveResult("chrome-webdriver-and-height", { desk: deskMeasured, baseline: baselineMeasured });
+      const deskReading = deskMeasured.settled;
+      const baselineReading = baselineMeasured.settled;
 
-      expect(deskReport.webdriver).toBe("false");
-      expect(deskReport.chromeHeight).toBe(baselineReport.chromeHeight);
+      expect(deskReading.webdriver).toBe("false");
+      expect(deskReading.atMs).toBeGreaterThanOrEqual(SETTLE_MS);
+      expect(baselineReading.atMs).toBeGreaterThanOrEqual(SETTLE_MS);
+      expect(baselineReading.chromeHeight).toMatch(/^[1-9]\d*$/);
+      expect(deskReading.chromeHeight).toBe(baselineReading.chromeHeight);
     } finally {
       await fixture.close();
     }

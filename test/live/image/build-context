@@ -1,8 +1,8 @@
 #!/bin/bash
 # build-context <chrome sha256> <chrome deb>: write the live image's build context to stdout as a tar: the image
-# directory (mounted read-only at /context) and the pinned Chrome .deb from the desk-live-cache volume (mounted
-# read-only at /cache). It copies /context to local disk first: GNU tar reading the virtiofs mount directly exits 1
-# ("file changed as we read it") although nothing changed.
+# directory (mounted read-only at /context) and the pinned Chrome .deb from the runner's cache (the desk-live-cache
+# volume, or the Actions cache directory, mounted read-only at /cache). It copies /context to local disk first: GNU tar
+# reading the virtiofs mount directly exits 1 ("file changed as we read it") although nothing changed.
 set -euo pipefail
 usage="usage: build-context <sha256> <deb>"
 sum="${1:?$usage}"
