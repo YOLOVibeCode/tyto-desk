@@ -71,7 +71,7 @@ terminal, and backups made by Desk itself (§6.4).
 | `desk import cookies` · `desk import native-hosts --host <name>` | One-time imports from your main Chrome, each only on an interactive terminal after you confirm (§5.5). |
 | `desk install` · `desk doctor` · `desk uninstall` | Setup, with consent for every step outside `~/.desk`; checks that each name their fix; removal of everything install recorded. |
 | `desk daemon restart` | Restarts the terminal daemon after you confirm, without waiting for its own pane. Plain shells end; tmux sessions survive and re-attach. |
-| `desk config toggle-key <key>` · `new-port` · `agent-policy strict\|open` | The panel shortcut (Chrome forgets changes made at chrome://extensions/shortcuts at its next start); a new guarded-endpoint port; whether agents may read cookies, storage, and saved state through agent-browser (`open` asks you first). |
+| `desk config toggle-key <key>` · `new-port` · `agent-policy strict\|open` | The panel shortcut (Chrome forgets changes made at chrome://extensions/shortcuts at its next start); a new guarded-endpoint port; whether agents may read cookies, storage, and saved state through agent-browser (`open` by default; going back to `open` after `strict` asks you first). |
 
 One shortcut shows, focuses, and hides the panel (§5.3). Cmd+Q in the Desk Chrome asks before quitting: "Warn before
 quitting" is on unless you turned it off [source], and `desk doctor` reports it.
@@ -134,9 +134,9 @@ affect Desk, which runs its own copy (§6.2).
   pipe, which Desk never uses [RC]. Puppeteer and Playwright list only web pages on the guarded endpoint; on the raw
   port they list the terminal first, and the panel shows a red banner whenever anything is attached to the terminal.
 - Desk's agent-browser config has no restore key, never saves state, wraps page text in content boundaries, and
-  disconnects sessions idle for 15 minutes. Its policy refuses agent-browser commands that read or write cookies,
-  storage, saved state, or credentials unless you choose `desk config agent-policy open`; `desk agents pause` refuses
-  everything. Raw CDP is never filtered by this policy. Desk's defaults never read or write your
+  disconnects sessions idle for 15 minutes. Its policy is open by default (your choice on 2026-10-06): agents read and write
+  cookies, storage, and saved state through agent-browser as DevTools can. `desk config agent-policy strict` refuses
+  those commands, and `desk agents pause` refuses everything. Raw CDP is never filtered by this policy. Desk's defaults never read or write your
   `~/.agent-browser/config.json` or its `main` state [AB, RF]; a flag typed by hand can (§6.1), and `desk watch`
   warns when a Desk session writes agent-browser state.
 - Claude Code: the desk skill pre-approves only reading and interacting with pages (snapshot, open, click, fill, type,
@@ -146,7 +146,7 @@ affect Desk, which runs its own copy (§6.2).
 - tmux: Desk shells carry the agent variables only when tmux will keep them out of other sessions, which one line in
   your tmux config ensures (`desk install` adds it with your consent and applies it to a running tmux server). Without
   it, the panel says agents cannot see the Desk. Sessions started from Termius never see Desk variables [RF].
-- tyto: `tyto open`, `brief`, and `find` act on the Desk tabs (under the default policy `brief` shows its cookie and
+- tyto: `tyto open`, `brief`, and `find` act on the Desk tabs (under the strict policy `brief` shows its cookie and
   storage sections as refused); `tyto run` replays keep running in Tyto's own sandboxed browser, because agent-browser
   refuses its domain allowlist with CDP [RF].
 - When Desk is down, agents fail loudly ("Desk is not running") and never fall back to another browser.
@@ -195,8 +195,11 @@ Also accepted, with these limits:
   check only keeps other extensions out.
 - agent-browser's per-session stream server listens on loopback without a token and accepts any localhost page; a
   local dev page that learns its port can inject input into the agent's tab and read its broadcasts [AB]. Desk
-  disconnects sessions idle for 15 minutes and refuses cookie commands so broadcasts carry no cookie values; a fix is
-  requested upstream, and a live test tracks the gap.
+  disconnects sessions idle for 15 minutes; under the default open policy a broadcast can carry cookie values an agent
+  read (the strict policy keeps them out). A fix is requested upstream, and a live test tracks the gap.
+- Agents can read every cookie and saved state of the Desk profile through agent-browser by default (your choice on
+  2026-10-06, over the security review's recommendation). A page that prompt-injects an agent can make it read and leak
+  session cookies. `desk config agent-policy strict` closes that path for agent-browser; the raw port stays open.
 - agent-browser accepts global flags after the subcommand, so an injected agent can append `--cdp`, `--restore`, or
   `--action-policy` to a pre-approved command [source]. Desk warns when a Desk session writes agent-browser state and
   asks upstream for config keys that flags cannot override.

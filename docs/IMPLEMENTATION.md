@@ -217,7 +217,7 @@ method they use. Node adapters are tested with stub executables (`fake-tmux.mjs`
   "terminal": { "shell": null, "tmux": null, "scrollback": 5000,
                 "fontFamily": "Menlo, 'SF Mono', monospace", "fontSize": 13, "macOptionIsMeta": false,
                 "closeOnExit": true, "osc52Write": false, "keymap": {} },
-  "agents": { "sessionPrefix": "desk", "policy": "strict", "idleTimeout": "15m" } }
+  "agents": { "sessionPrefix": "desk", "policy": "open", "idleTimeout": "15m" } }
 ```
 
 ```json
@@ -710,8 +710,8 @@ never deletes it [source `policy.rs`, `actions.rs:2809-2846`]:
 
 | Mode | Content | Set by |
 |---|---|---|
-| strict (default) | `{"default": "allow", "deny": ["cookies_get", "cookies_set", "cookies_clear", "storage_get", "storage_set", "storage_clear", "state_save", "state_load", "credentials_get", "auth_show", "har_start"]}` | install; `desk config agent-policy strict` |
-| open | `{"default": "allow"}` | `desk config agent-policy open` (consent) |
+| strict | `{"default": "allow", "deny": ["cookies_get", "cookies_set", "cookies_clear", "storage_get", "storage_set", "storage_clear", "state_save", "state_load", "credentials_get", "auth_show", "har_start"]}` | `desk config agent-policy strict` |
+| open (default) | `{"default": "allow"}` | install; `desk config agent-policy open` after strict (consent) |
 | paused | `{"default": "deny", "allow": ["close"]}` | `desk agents pause`; `desk agents resume` (consent) restores strict or open |
 
 The policy covers agent-browser actions only; raw CDP and the guarded endpoint never filter cookies. Under strict,
@@ -960,7 +960,7 @@ you agree; deletes the profile only with `--profile` and a second confirmation.
 | `ptyd.sock` | same-user processes | 0700 directory you own, 0600 socket, umask 077; verbs per client kind; 1 MiB lines; 32 connections; layout validation | slice 2a |
 | Native host | Chrome, for the Desk extension | origin check; 1 MiB frames | slices 1c, 2a |
 | Extension pages and worker | Desk; any client on the raw port | CSP; no web-accessible resources; empty `externally_connectable`; refuses to run in a tab; the attach alarm | build test; live alarm test |
-| agent-browser stream server, dashboard, inspect proxy | localhost pages, local processes | upstream issue; `idleTimeout`; strict policy keeps cookie values out of broadcasts; the skill never starts the dashboard | live `it.fails` known gap |
+| agent-browser stream server, dashboard, inspect proxy | localhost pages, local processes | upstream issue; `idleTimeout`; the opt-in strict policy keeps cookie values out of broadcasts; the skill never starts the dashboard | live `it.fails` known gap |
 | Clipboard paste and drop | web pages, through what you copy | `sanitizePaste`; multi-line confirmation | slice 2b |
 | Escape sequences in output (`cat`, `curl`, page text an agent echoes) | anything that prints | no window reports; OSC 52 never read; OSC 7 display-only; the mirror never answers; titles as text | slices 2b, 6 |
 | Terminal links | anything that prints | Cmd+click; http and https only; the real URL on hover | slice 6 |
@@ -1246,6 +1246,7 @@ tmux line, the focus-guard measurement, and two upstream issues for agent-browse
 server; config keys that flags cannot override).
 
 - `the agent-browser config points cdp at the guarded endpoint with restoreSave never, pinTab, contentBoundaries, idleTimeout 15m and Desk's policy`
+- `a new install writes the open policy`
 - `the strict policy denies cookie, storage, state, credential and HAR actions`
 - `desk agents pause writes a deny-all policy that still allows close`
 - `desk agents resume asks on a TTY and restores the previous mode`
@@ -1436,8 +1437,8 @@ sections above; these entries record choices, deviations, and rejections.
 | D18 | The extension asks for `debugger` (only `getTargets`) and `tabGroups` | Tab id to target id has no other API; agent tab groups survive restarts and show which tabs agents drive. Lint bans `chrome.debugger.attach` |
 | D19 | 5,000 lines of scrollback in both the panel and the mirror | Equal limits make what comes back predictable; memory stays bounded per pane |
 | D20 | The checklist runs once in full (Run B, after slice 8); Run A after slice 4a is optional | The user asked for one run; Run A finds macOS-only surprises earlier if the user wants it |
-| D21 | Strict agent policy by default | Cookie and state reads are where secrets leave; the cost is `tyto brief`'s cookie and storage sections |
-| D22 | Global flags on pre-approved commands and the stream server are mitigated, not blocked | Neither can be closed from Desk's side today. Mitigations: upstream issues (slice 4b), the `-desk-` state alarm, `idleTimeout`, the strict policy, and the skill |
+| D21 | Open agent policy by default; strict is one command away | The user's decision on 2026-10-06, over the security review's recommendation of strict: agents must reach everything DevTools can. Accepted risk: a prompt-injected agent can read and leak cookies (SPEC §6.1) |
+| D22 | Global flags on pre-approved commands and the stream server are mitigated, not blocked | Neither can be closed from Desk's side today. Mitigations: upstream issues (slice 4b), the `-desk-` state alarm, `idleTimeout`, the opt-in strict policy, and the skill |
 | D23 | OSC 133 prompt jumps deferred | Desk injects no shell integration, to keep `cc` identical to Termius |
 | D24 | The one-door exception is recorded in the new repo; claude-remote-control changes go as a PR there | The user's 2026-10-06 instruction; the farm cannot run this live suite |
 | D25 | `SystemInfo.getProcessInfo`, focused-window guessing over CDP, and `run/chrome.json` are dropped (accepts the review's simplification) | `ListenerInfo` verifies the port owner; the worker knows the focused window; `desk status` queries live state |
