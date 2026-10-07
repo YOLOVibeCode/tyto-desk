@@ -1,0 +1,42 @@
+/* The Desk panel: the banner above, the terminal filling the rest. The theme follows macOS light or dark mode. */
+:root {
+  color-scheme: light dark;
+  --desk-background: #ffffff;
+  --desk-foreground: #1d1d1f;
+  --desk-banner: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --desk-background: #111111;
+    --desk-foreground: #e5e5e5;
+    --desk-banner: #3a2f0b;
+  }
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--desk-background);
+  color: var(--desk-foreground);
+}
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#banner {
+  padding: 6px 10px;
+  background: var(--desk-banner);
+  font: 12px -apple-system, "Segoe UI", sans-serif;
+}
+#banner[hidden] {
+  display: none;
+}
+#terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 0 0 6px;
+}
+#terminal > div {
+  height: 100%;
+}

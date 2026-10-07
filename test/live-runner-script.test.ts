@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,8 @@ import {
   USERNS_LIMIT,
   chromeCacheFile,
   chromePin,
+  imageFileAllowed,
+  imageTag,
 } from "../scripts/lib/live.mjs";
 import { runLive } from "../scripts/lib/live-runner.mjs";
 
@@ -485,6 +487,39 @@ describe("the live runner script, driving a stub docker", () => {
       );
     },
   );
+
+  it("the live image's tag and build context leave out node_modules, so installing the image's tools locally never forces a rebuild", async () => {
+    const live = await harness((home) => ({ ...onTheMac(home), imageCached: false, phase2: { done: 0, exit: 0 } }));
+    const image = join(live.checkout, "test", "live", "image");
+    const files = (await readdir(image, { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name).slice(image.length + 1));
+    const tracked = await Promise.all(
+      files.filter((path) => imageFileAllowed(path)).map(async (path) => ({ path, bytes: await readFile(join(image, path)) })),
+    );
+    const modules = join(image, "tools", "node_modules");
+    await mkdir(join(modules, "agent-browser", "bin"), { recursive: true });
+    await writeFile(join(modules, "agent-browser", "package.json"), '{"name":"agent-browser"}\n');
+    await writeFile(join(modules, "agent-browser", "bin", "agent-browser-linux-arm64"), "binary\n");
+    await writeFile(join(modules, ".package-lock.json"), "{}\n");
+
+    expect((await live.run()).code).toBe(0);
+    const calls = (await live.calls()).map(withoutContext);
+    const helper = calls.find((call) => call.includes("build-context")) ?? [];
+    const contextMounts = helper
+      .filter((arg, i) => helper[i - 1] === "--mount" && arg.includes(",target=/context"))
+      .map((arg) => arg.replaceAll(live.checkout, "<repo>"));
+    const fetchBuild = calls.find((call) => call[0] === "build" && call.includes("fetch")) ?? [];
+
+    expect(calls.find((call) => call[0] === "image" && call[1] === "inspect")?.[2]).toBe(imageTag(tracked));
+    expect(contextMounts).toEqual(
+      ["Dockerfile", "build-context", "fetch-verified", "tools/package-lock.json", "tools/package.json"].map(
+        (file) => `type=bind,source=<repo>/test/live/image/${file},target=/context/${file},readonly`,
+      ),
+    );
+    expect(fetchBuild.at(-1)).toBe(image);
+    expect((await readFile(join(image, ".dockerignore"), "utf8")).split("\n")).toContain("**/node_modules");
+  });
 
   it("with --ci the live runner refuses before any docker command while Ubuntu's AppArmor limits unprivileged user namespaces", async () => {
     const live = await harness(inActions);

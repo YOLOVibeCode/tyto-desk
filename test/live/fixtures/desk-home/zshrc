@@ -1,0 +1,3 @@
+# Copied to the Desk live test's HOME as .zshrc: its presence keeps zsh-newuser-install away, and the prompt is what the
+# tests wait for.
+PROMPT='desk-live %# '

@@ -128,10 +128,19 @@ async function packageVersion(path) {
   }
 }
 
-/** The node-pty package the repo depends on, its platform package, and the sha256 of the native module it loads. */
+/**
+ * The node-pty package the repo depends on (the terminal daemon's, from slice 1c; the root's before), its platform
+ * package, and the sha256 of the native module it loads.
+ */
 async function ptyPackage() {
-  const manifest = JSON.parse(await readFile(join(WORK, "package.json"), "utf8"));
-  const name = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }).find((n) => /(^|\/)node-pty$/.test(n));
+  const root = JSON.parse(await readFile(join(WORK, "package.json"), "utf8"));
+  const workspaces = Array.isArray(root.workspaces) ? root.workspaces.filter((/** @type {unknown} */ w) => typeof w === "string") : [];
+  const manifests = [root];
+  for (const workspace of workspaces) {
+    manifests.push(await readFile(join(WORK, workspace, "package.json"), "utf8").then((text) => JSON.parse(text), () => ({})));
+  }
+  const names = manifests.flatMap((manifest) => Object.keys({ ...manifest.dependencies, ...manifest.devDependencies }));
+  const name = names.find((n) => /(^|\/)node-pty$/.test(n));
   if (name === undefined) return { name: "none" };
   const platformName = name.startsWith("@lydell/") ? `${name}-${process.platform}-${process.arch}` : name;
   const native = join(WORK, "node_modules", platformName, "prebuilds", `${process.platform}-${process.arch}`, "pty.node");

@@ -283,7 +283,7 @@ container. Windows: not supported.
 | Bar | Target | Measured |
 |---|---|---|
 | Nothing on your screen during development or tests | 0 windows: unit tests start no browser and no PTY; live tests run only in the Desk test container (the Colima VM, or GitHub's arm64 runner in CI); no test touches your `~/.desk` | GUI-guard and isolation tests (IMPLEMENTATION §0, §17) |
-| Cold `desk` until the panel shows a live shell | ≤ 2.5 s p50, ≤ 4 s p95 (confirmed or revised by the slice 1c baseline) | live VM; checklist |
+| Cold `desk` until the panel shows a live shell | ≤ 2.5 s p50, ≤ 4 s p95 (confirmed or revised by the slice 1c baseline) | live VM (slice 1c's baseline: 0.64 s and 0.72 s, two cold launches in Chrome 155 for linux-arm64); checklist |
 | `desk` with Chrome already running, until the panel is focused | ≤ 0.5 s | live VM |
 | Showing the hidden terminal until it takes input | ≤ 300 ms p95 with 4 visible panes | live VM; checklist |
 | Keystroke to echo (panel input to the echoed byte's write callback) | p50 ≤ 5 ms, p95 ≤ 15 ms | live VM recorded; a macOS spot check decides |

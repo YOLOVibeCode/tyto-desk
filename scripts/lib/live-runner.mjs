@@ -47,6 +47,7 @@ import {
   doneCode,
   engineRefusal,
   hostRefusal,
+  imageFileAllowed,
   imageTag,
   imagesToPrune,
   installInputs,
@@ -131,19 +132,27 @@ async function isFile(path) {
 }
 
 /**
- * The image directory's files, without dotfiles (a Finder .DS_Store must not force a rebuild).
+ * The image directory's files that go into the image's tag and its build context (imageFileAllowed): no dotfile, and
+ * nothing under node_modules, whose directories are never even entered. Paths are relative and `/`-separated.
  * @param {string} dir
  * @returns {Promise<{ path: string; bytes: Uint8Array }[]>}
  */
-async function filesUnder(dir) {
+async function imageFiles(dir) {
   /** @type {{ path: string; bytes: Uint8Array }[]} */
   const files = [];
-  for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
-    if (!entry.isFile() || entry.name.startsWith(".")) continue;
-    const path = join(entry.parentPath, entry.name);
-    files.push({ path: relative(dir, path), bytes: await readFile(path) });
-  }
-  return files;
+  /** @param {string} sub */
+  const walk = async (sub) => {
+    for (const entry of await readdir(join(dir, sub), { withFileTypes: true })) {
+      const path = sub === "" ? entry.name : `${sub}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (imageFileAllowed(`${path}/file`)) await walk(path);
+      } else if (entry.isFile() && imageFileAllowed(path)) {
+        files.push({ path, bytes: await readFile(join(dir, path)) });
+      }
+    }
+  };
+  await walk("");
+  return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /**
@@ -503,11 +512,14 @@ export async function runLive(options) {
   };
 
   /**
-   * Builds the image from a context that a helper container streams from the image directory and the cache: the
+   * Builds the image from a context that a helper container streams from the image directory's files, the same ones
+   * the tag hashes (each bound read-only on its own, so node_modules and dotfiles never reach it), and the cache: the
    * pinned Chrome .deb never leaves the cache except into the build. Nothing is downloaded when the .deb is cached.
+   * The fetch stage is built from the image directory itself, whose .dockerignore leaves node_modules out.
    * @param {string} tag
+   * @param {readonly { path: string }[]} files
    */
-  const buildImage = async (tag) => {
+  const buildImage = async (tag, files) => {
     const fetchTag = tag.replace(/^desk-live:/, "desk-live-fetch:");
     const pin = chromePin(await readFile(join(imageDir, "Dockerfile"), "utf8"));
     say(`building ${tag} (Chrome ${pin.deb})`);
@@ -538,7 +550,8 @@ export async function runLive(options) {
     await ensureCapacity();
     const contextArgs = onEngine([
       "run", "--rm", "--pull", "never", ...flagsFor("context"), "--network", "none", "--user", "1000:1000",
-      "--security-opt", "no-new-privileges", ...mountFlag("bind", imageDir, "/context", true),
+      "--security-opt", "no-new-privileges",
+      ...files.flatMap((file) => mountFlag("bind", join(imageDir, ...file.path.split("/")), `/context/${file.path}`, true)),
       ...cacheMount(cache, "/cache", true), fetchTag, "build-context", pin.sha256, pin.deb,
     ]);
     const helper = start(contextArgs, { stdin: "ignore", timeoutMs: 30 * MINUTE });
@@ -564,13 +577,13 @@ export async function runLive(options) {
     await pruneImages(tag);
   };
 
-  /** @param {string} tag */
-  const ensureImage = async (tag) => {
+  /** @param {string} tag @param {readonly { path: string }[]} files */
+  const ensureImage = async (tag, files) => {
     if ((await docker(["image", "inspect", tag], 20_000)).code === 0) {
       say(`image ${tag} is current`);
       return;
     }
-    await buildImage(tag);
+    await buildImage(tag, files);
   };
 
   /**
@@ -838,8 +851,9 @@ export async function runLive(options) {
     if (engineReason !== null) throw new RunFailure(engineReason);
     cap = deskContainerCap(facts.info?.memTotal ?? Number.NaN);
     await removeLeftovers();
-    const tag = imageTag(await filesUnder(imageDir));
-    await ensureImage(tag);
+    const files = await imageFiles(imageDir);
+    const tag = imageTag(files);
+    await ensureImage(tag, files);
     const depsVolume = await ensureDependencies(tag);
     return runSuite(tag, depsVolume);
   };

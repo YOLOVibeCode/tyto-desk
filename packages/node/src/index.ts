@@ -1,5 +1,11 @@
-export { readIfExists, writePrivate } from "./files.ts";
+export { NodeAppVersions, fileSha256 } from "./app-versions.ts";
+export { NodeCodeSigning } from "./code-signing.ts";
+export { ConfigFileError, FileConfigStore } from "./config-store.ts";
+export { readIfExists, writeAtomic, writePrivate } from "./files.ts";
+export { NodeInstanceLock } from "./instance-lock.ts";
 export { NodePortProbe } from "./port-probe.ts";
+export { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, SystemClock } from "./process.ts";
+export { runArgv, type RunResult } from "./run.ts";
 export {
   TestIsolationError,
   assertPathAllowed,
@@ -7,3 +13,5 @@ export {
   isReservedPort,
   type GuardEnv,
 } from "./test-guard.ts";
+export { NodeTextFiles } from "./text-files.ts";
+export { NodeTmux } from "./tmux.ts";

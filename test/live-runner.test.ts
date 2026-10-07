@@ -31,6 +31,7 @@ import {
   dockerignoreText,
   doneCode,
   doneLine,
+  imageFileAllowed,
   imageTag,
   imagesToPrune,
   installInputs,
@@ -830,6 +831,28 @@ describe("the live image and the files it sees", () => {
     ["a new file", [...files, { path: "extra", bytes: bytes("") }]],
   ])("the live image gets a new tag for %s", (_label, changed) => {
     expect(imageTag(changed)).not.toBe(imageTag(files));
+  });
+
+  it.each(["Dockerfile", "build-context", "fetch-verified", "tools/package.json", "tools/package-lock.json"])(
+    "the live image's tag and build context take %s",
+    (path) => {
+      expect(imageFileAllowed(path)).toBe(true);
+    },
+  );
+
+  it.each([
+    "tools/node_modules/agent-browser/package.json",
+    "tools/node_modules/.bin/agent-browser",
+    "node_modules/x/index.js",
+    "tools/node_modules",
+    ".DS_Store",
+    "tools/.npmrc",
+    ".git/config",
+    "",
+    "../Dockerfile",
+    "/etc/passwd",
+  ])("the live image's tag and build context leave out %j", (path) => {
+    expect(imageFileAllowed(path)).toBe(false);
   });
 
   it("the live image tag sorts paths by code unit, not by the machine's locale", () => {

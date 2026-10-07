@@ -1,0 +1,15 @@
+{
+  "name": "@desk/nmhost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "desk-nmhost, the native-messaging relay: Chrome's length-prefixed frames on stdio to NDJSON lines on the daemon's socket, starting the daemon when its socket is dead.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@desk/core": "0.1.0",
+    "@desk/node": "0.1.0"
+  }
+}

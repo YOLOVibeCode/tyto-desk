@@ -1,0 +1,378 @@
+import { describe, expect, it } from "vitest";
+import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type PaneShell } from "../src/index.ts";
+import { FakeClock, FakePtySpawner } from "../src/testing/index.ts";
+
+const PANE = "p_k2m9q3x7ab";
+const OTHER = "p_m9x1d4f6hz";
+
+/** A connection to the daemon that keeps what the daemon sent it. */
+type Peer = { sent: DaemonMessage[]; closed: boolean; send(line: object): void; hangUp(): void; last(): DaemonMessage | undefined };
+
+function setup(options: { notice?: string | null } = {}) {
+  const spawner = new FakePtySpawner();
+  const clock = new FakeClock();
+  const shutdowns: string[] = [];
+  const shells: string[] = [];
+  const daemon = new Daemon({
+    spawner,
+    clock,
+    build: "0.3.0",
+    shellFor: async (pane): Promise<PaneShell> => {
+      shells.push(pane);
+      return {
+        file: "/bin/zsh",
+        args: ["-l"],
+        cwd: "/Users/alex",
+        env: { HOME: "/Users/alex", DESK_PANE: pane },
+        notice: options.notice ?? null,
+      };
+    },
+    onShutdown: (mode) => shutdowns.push(mode),
+  });
+  const connect = (): Peer => {
+    const sent: DaemonMessage[] = [];
+    const peer = {
+      sent,
+      closed: false,
+      send: (line: object) => connection.receive(JSON.stringify(line)),
+      hangUp: () => connection.closed(),
+      last: () => sent.at(-1),
+    };
+    const connection = daemon.connect({
+      send: (message) => sent.push(message),
+      close: () => {
+        peer.closed = true;
+      },
+    });
+    return peer;
+  };
+  /** A client that said hello as `client`. */
+  const client = async (kind: string, extra: object = {}): Promise<Peer> => {
+    const peer = connect();
+    peer.send({ type: "hello", vMin: 1, vMax: 1, client: kind, build: "0.3.0", ...extra });
+    await settle();
+    return peer;
+  };
+  return { daemon, spawner, clock, shutdowns, shells, connect, client };
+}
+
+/** Lets the daemon's pending promises run. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await Promise.resolve();
+}
+
+describe("the terminal daemon", () => {
+  it("the daemon answers hello with the highest protocol version both sides support and its live panes", async () => {
+    const { connect } = setup();
+    const peer = connect();
+
+    peer.send({ type: "hello", vMin: 1, vMax: 3, client: "panel", build: "0.4.0", window: 7 });
+
+    expect(peer.sent).toEqual([{ type: "hello", v: 1, build: "0.3.0", panes: [], notices: [] }]);
+  });
+
+  it("hello with no common version gets E_STALE and the daemon keeps running", async () => {
+    const { connect, client } = setup();
+    const stale = connect();
+
+    stale.send({ type: "hello", vMin: 2, vMax: 3, client: "panel", build: "0.9.0" });
+    const fresh = await client("cli");
+
+    expect(stale.last()).toMatchObject({ type: "error", code: "E_STALE" });
+    expect(fresh.last()).toMatchObject({ type: "hello", v: 1 });
+  });
+
+  it("open starts the pane's login shell at the panel's size and makes the panel its owner", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(spawner.spawned.map((s) => s.options)).toEqual([
+      { file: "/bin/zsh", args: ["-l"], cwd: "/Users/alex", env: { HOME: "/Users/alex", DESK_PANE: PANE }, cols: 100, rows: 30 },
+    ]);
+    expect(panel.last()).toEqual({ type: "snapshot", pane: PANE, part: 0, last: true, cols: 100, rows: 30, data: "" });
+  });
+
+  it("the owner's input reaches the shell and the shell's output reaches only the owner", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    const other = await client("panel", { window: 8 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    panel.send({ type: "in", pane: PANE, data: "echo desk-ok\r" });
+    spawner.pty().print("desk-ok\r\n");
+
+    expect(spawner.pty().written).toEqual(["echo desk-ok\r"]);
+    expect(panel.last()).toEqual({ type: "out", pane: PANE, data: "desk-ok\r\n" });
+    expect(other.sent.filter((m) => m.type === "out")).toEqual([]);
+  });
+
+  it("input and resizes from a client that does not own the pane get E_NOPANE", async () => {
+    const { spawner, client } = setup();
+    const owner = await client("panel", { window: 7 });
+    const other = await client("panel", { window: 8 });
+    owner.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    other.send({ type: "in", pane: PANE, data: "rm -rf ~\r" });
+    other.send({ type: "resize", pane: PANE, cols: 20, rows: 5 });
+    other.send({ type: "in", pane: OTHER, data: "x" });
+
+    expect(spawner.pty().written).toEqual([]);
+    expect(spawner.pty().sizes).toEqual([]);
+    expect(other.sent.filter((m) => m.type === "error")).toEqual([
+      { type: "error", pane: PANE, code: "E_NOPANE", message: "no such pane, or not its owner" },
+      { type: "error", pane: PANE, code: "E_NOPANE", message: "no such pane, or not its owner" },
+      { type: "error", pane: OTHER, code: "E_NOPANE", message: "no such pane, or not its owner" },
+    ]);
+  });
+
+  it("only the owner's resize changes the PTY size", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    panel.send({ type: "resize", pane: PANE, cols: 132, rows: 43 });
+
+    expect(spawner.spawned[0]?.options).toMatchObject({ cols: 100, rows: 30 });
+    expect(spawner.pty().sizes).toEqual([[132, 43]]);
+  });
+
+  it("a resize that arrives while the pane's shell is starting sets the size it starts at", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    panel.send({ type: "resize", pane: PANE, cols: 132, rows: 43 });
+    await settle();
+
+    expect(spawner.spawned[0]?.options).toMatchObject({ cols: 132, rows: 43 });
+    expect(panel.sent.filter((m) => m.type === "error")).toEqual([]);
+  });
+
+  it("open from another panel takes the pane and tells the previous owner it was taken", async () => {
+    const { spawner, client } = setup();
+    const first = await client("panel", { window: 7 });
+    const second = await client("panel", { window: 8 });
+    first.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+    spawner.pty().print("after\r\n");
+
+    expect(spawner.spawned).toHaveLength(1);
+    expect(first.sent).toContainEqual({ type: "detached", pane: PANE, reason: "taken" });
+    expect(second.last()).toEqual({ type: "out", pane: PANE, data: "after\r\n" });
+    expect(first.sent.filter((m) => m.type === "out")).toEqual([]);
+  });
+
+  it("a pane's shell keeps running when its panel disconnects, and the next open re-attaches it", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    panel.hangUp();
+    spawner.pty().print("nobody sees this\r\n");
+    const again = await client("panel", { window: 7 });
+    again.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(spawner.pty().signals).toEqual([]);
+    expect(spawner.spawned).toHaveLength(1);
+    expect(again.sent[0]).toEqual({ type: "hello", v: 1, build: "0.3.0", panes: [{ id: PANE, alive: true }], notices: [] });
+    expect(again.last()).toMatchObject({ type: "snapshot", pane: PANE, data: "" });
+  });
+
+  it("a shell that exits is reported to its owner, and the next open of that pane starts a new one", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    spawner.pty().end({ code: 0, signal: null });
+    panel.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(panel.sent).toContainEqual({ type: "exit", pane: PANE, code: 0, signal: null });
+    expect(spawner.spawned).toHaveLength(2);
+  });
+
+  it("a shell that cannot start gets E_SPAWN", async () => {
+    const { spawner, client } = setup();
+    spawner.failing = true;
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(panel.last()).toEqual({ type: "error", id: "r1", pane: PANE, code: "E_SPAWN", message: "the shell could not start" });
+  });
+
+  it("the shell plan's notice reaches the panel that opened the pane", async () => {
+    const { client } = setup({ notice: "tmux-line-missing" });
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(panel.sent).toContainEqual({ type: "notice", kind: "tmux-line-missing" });
+  });
+
+  it("the shell's output is split into messages of at most 768 KiB encoded", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    const output = "\u001b[0m".repeat(200_000);
+
+    spawner.pty().print(output);
+    const outs = panel.sent.filter((m) => m.type === "out");
+
+    expect(outs.length).toBeGreaterThan(1);
+    expect(outs.map((m) => (m.type === "out" ? m.data : "")).join("")).toBe(output);
+    for (const message of outs) expect(new TextEncoder().encode(JSON.stringify(message)).length).toBeLessThanOrEqual(WIRE_MESSAGE_MAX);
+  });
+
+  it("list reports the panes, the windows whose panel said hello, and the service worker's connection", async () => {
+    const { client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    await client("sw");
+    const cli = await client("cli");
+
+    cli.send({ type: "list", id: "r9" });
+
+    expect(cli.last()).toEqual({
+      type: "panes",
+      id: "r9",
+      panes: [{ id: PANE, alive: true, owned: true }],
+      panels: [{ window: 7 }],
+      sw: { connected: true, connects: 1 },
+    });
+  });
+
+  it("the daemon relays an extension call from the launcher to the service worker and its answer back", async () => {
+    const { client } = setup();
+    const sw = await client("sw");
+    const cli = await client("cli");
+
+    cli.send({ type: "ext.call", id: "r5", op: "windows" });
+    const relayed = sw.last();
+    if (relayed?.type !== "ext.call") throw new Error("the worker got no call");
+    sw.send({ type: "ext.result", id: relayed.id, ok: true, value: [{ id: 7, focused: true, lastFocused: true, panelOpen: false }] });
+
+    expect(relayed).toEqual({ type: "ext.call", id: expect.stringMatching(/^x\d+$/), op: "windows" });
+    expect(cli.last()).toEqual({
+      type: "ext.result",
+      id: "r5",
+      ok: true,
+      value: [{ id: 7, focused: true, lastFocused: true, panelOpen: false }],
+    });
+  });
+
+  it("an extension call with no service worker connected gets E_NOEXT", async () => {
+    const { client } = setup();
+    const cli = await client("cli");
+
+    cli.send({ type: "ext.call", id: "r5", op: "windows" });
+
+    expect(cli.last()).toEqual({ type: "error", id: "r5", code: "E_NOEXT", message: "the Desk extension is not connected" });
+  });
+
+  it("an extension call the service worker does not answer within 2 s gets E_NOEXT", async () => {
+    const { clock, client } = setup();
+    await client("sw");
+    const cli = await client("cli");
+
+    cli.send({ type: "ext.call", id: "r5", op: "windows" });
+    await clock.advance(1_999);
+    const early = cli.sent.length;
+    await clock.advance(1);
+
+    expect(early).toBe(1);
+    expect(cli.last()).toEqual({ type: "error", id: "r5", code: "E_NOEXT", message: "the Desk extension is not connected" });
+  });
+
+  it("an extension call is answered with E_NOEXT when the service worker disconnects first", async () => {
+    const { client } = setup();
+    const sw = await client("sw");
+    const cli = await client("cli");
+
+    cli.send({ type: "ext.call", id: "r5", op: "windows" });
+    sw.hangUp();
+    cli.send({ type: "list", id: "r6" });
+
+    expect(cli.sent.at(-2)).toEqual({ type: "error", id: "r5", code: "E_NOEXT", message: "the Desk extension is not connected" });
+    expect(cli.last()).toMatchObject({ type: "panes", sw: { connected: false, connects: 1 } });
+  });
+
+  it("a malformed line gets E_PROTO and the daemon keeps serving", async () => {
+    const { daemon, client } = setup();
+    const sent: DaemonMessage[] = [];
+    const connection = daemon.connect({ send: (m) => sent.push(m), close: () => undefined });
+
+    connection.receive("{ not json");
+    const cli = await client("cli");
+
+    expect(sent).toEqual([{ type: "error", code: "E_PROTO", message: "the message was malformed" }]);
+    expect(cli.last()).toMatchObject({ type: "hello" });
+  });
+
+  it("a client must say hello before anything else", async () => {
+    const { connect } = setup();
+    const peer = connect();
+
+    peer.send({ type: "list", id: "r1" });
+
+    expect(peer.last()).toEqual({ type: "error", id: "r1", code: "E_PROTO", message: "the message was malformed" });
+  });
+
+  it.each([
+    ["sw", { type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 }],
+    ["sw", { type: "ext.call", id: "r1", op: "windows" }],
+    ["cli", { type: "in", pane: PANE, data: "x" }],
+    ["cli", { type: "ext.result", id: "x1", ok: true }],
+    ["panel", { type: "ext.call", id: "r1", op: "windows" }],
+    ["watch", { type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 }],
+  ])("a %s client sending %j gets E_VERB", async (kind, message) => {
+    const { client } = setup();
+    const peer = await client(kind);
+
+    peer.send(message);
+
+    expect(peer.last()).toMatchObject({ type: "error", code: "E_VERB" });
+  });
+
+  it("shutdown sends SIGHUP to every running shell and ends the daemon", async () => {
+    const { spawner, shutdowns, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    panel.send({ type: "open", id: "r2", pane: OTHER, cols: 100, rows: 30 });
+    await settle();
+    spawner.pty(1).end({ code: 0, signal: null });
+    const cli = await client("cli");
+
+    cli.send({ type: "shutdown", mode: "stop" });
+
+    expect(spawner.pty(0).signals).toEqual(["SIGHUP"]);
+    expect(spawner.pty(1).signals).toEqual([]);
+    expect(shutdowns).toEqual(["stop"]);
+  });
+
+  it("shutdown is accepted after E_STALE", async () => {
+    const { shutdowns, connect } = setup();
+    const stale = connect();
+    stale.send({ type: "hello", vMin: 2, vMax: 2, client: "panel", build: "0.9.0" });
+
+    stale.send({ type: "shutdown", mode: "restart" });
+
+    expect(shutdowns).toEqual(["restart"]);
+  });
+});
