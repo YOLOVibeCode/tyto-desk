@@ -22,8 +22,11 @@ driving the same Chrome over CDP. It is **TDD + ISP** with a pure, browser-safe 
    [RELEASING](./docs/RELEASING.md), IMPLEMENTATION §23.1). Conventional Commit titles on `slice-<id>/…`, `feat/…`,
    `fix/…`, `docs/…`, `ci/…` or `chore/…` branches (`node scripts/delivery/check-pr.mjs --title "…"`). Never push to
    `main` or a tag, never `--admin`, and no `--auto` until `github-setup.mjs --check` is clean. Never merge, ready or
-   auto-merge the release PR or a PR labeled `owner-merge`, never remove that label, never approve a deployment, never
-   edit the version or the changelog, and never run `npm run deploy`, `desk update`, `desk use`, `desk rollback` or
+   auto-merge the release PR. Never auto-merge a PR labeled `owner-merge` or remove that label; merge one only as the
+   agent session acting for the owner, with the owner's `gh`, after every check is green on its exact head SHA and at
+   least two independent security-review agents (not its author) posted APPROVE or APPROVE_WITH_NITS verdict comments
+   naming that SHA, with no REFUSE (IMPLEMENTATION D81). Never approve a deployment, never edit the version or the
+   changelog, and never run `npm run deploy`, `desk update`, `desk use`, `desk rollback` or
    `github-setup.mjs --apply`.
 10. After changes: `npm run check`.
 

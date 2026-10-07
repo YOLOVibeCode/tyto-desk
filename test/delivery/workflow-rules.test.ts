@@ -155,6 +155,143 @@ describe("lint:workflows", () => {
       "cache",
     ],
     ["a file that does not parse", "ci.yml", "on: [push\njobs: {", "parse"],
+    // D84: a cache in any job that holds a secret, an environment, the App's token or a write scope.
+    [
+      "a cache in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: `- uses: ${CACHE}\n  with:\n    path: x\n    key: y` }) }),
+      "cache",
+    ],
+    [
+      "a cache in a job with a secret",
+      "release-please.yml",
+      workflow({
+        jobs: job("release-please", {
+          extra: "environment: release-please",
+          steps: `- uses: ${CACHE.replace("actions/cache@", "actions/cache/restore@")}\n  with:\n    path: x\n    key: y\n- run: echo hi\n  env:\n    KEY: \${{ secrets.RELEASE_APP_PRIVATE_KEY }}`,
+        }),
+      }),
+      "cache",
+    ],
+    [
+      "a cache in a job with the App's token",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { steps: `- uses: ${APP_TOKEN}\n- uses: ${CACHE.replace("actions/cache@", "actions/cache/save@")}\n  with:\n    path: x\n    key: y` }) }),
+      "cache",
+    ],
+    [
+      "a cache in a job with a write scope",
+      "dependabot-auto-merge.yml",
+      workflow({ jobs: job("automerge", { steps: `- uses: ${CACHE}\n  with:\n    path: x\n    key: y` }).replace("contents: read", "contents: write") }),
+      "cache",
+    ],
+    [
+      "setup-node's cache in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment:\n  name: release-please\n  deployment: false", steps: `- uses: ${SETUP_NODE}\n  with:\n    cache: npm` }) }),
+      "cache",
+    ],
+    // D84: no shell that traces its commands in such a job, however the shell is named.
+    [
+      "a workflow's defaults.run.shell with -x, when a job holds a write scope",
+      "release.yml",
+      workflow({
+        top: "permissions: {}\ndefaults:\n  run:\n    shell: bash -x {0}",
+        jobs: job("publish", { extra: "environment: publish" }).replace("contents: read", "contents: write"),
+      }),
+      "debug-output",
+    ],
+    [
+      "a job's defaults.run.shell with -ex in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please\ndefaults:\n  run:\n    shell: bash -ex {0}" }) }),
+      "debug-output",
+    ],
+    [
+      "a step shell with -x in a job with a secret",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: echo hi\n  shell: bash --noprofile --norc -eox pipefail {0}\n  env:\n    KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}" }) }),
+      "debug-output",
+    ],
+    [
+      "a step shell with -o xtrace in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: "- run: echo hi\n  shell: bash -o xtrace {0}" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "SHELLOPTS=xtrace in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { extra: "env:\n  SHELLOPTS: braceexpand:xtrace" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    // D84: a pull_request_target workflow brings nothing of the pull request onto the runner, by any route.
+    [
+      "a pull_request_target workflow that clones a repository with gh",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh repo clone "$HEAD_REPO" pr -- --depth 1' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads a tarball with gh api",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh api "repos/$REPO/tarball/$HEAD_SHA" > pr.tgz' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads a zipball with gh api",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh api --method GET "repos/$REPO/zipball/$HEAD_SHA" > pr.zip' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads an archive with curl",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: curl -sSfL -o pr.tgz "https://codeload.github.com/$REPO/tar.gz/$HEAD_SHA"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that fetches a pull request ref with git fetch-pack",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: git fetch-pack "$URL" "refs/pull/$PR/head"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that fetches a pull request ref inside bash -c",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: `- run: bash -c "git fetch origin pull/\${PR}/head"` }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that names a pull request ref to any command",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: |\n    "$GIT" fetch origin "+refs/pull/*/head:refs/remotes/pr/*"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that clones a repository with gh inside sh -c",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: `- run: env GH_PROMPT_DISABLED=1 sh -c 'gh repo clone "$HEAD_REPO"'` }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that fetches with git inside eval",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: `- run: eval "git fetch origin \$HEAD_REF"` }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that clones a fork with gh repo fork --clone",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh repo fork "$HEAD_REPO" --clone' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that updates every remote",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: git remote add pr \"$HEAD_URL\" && git remote update" }) }),
+      "pull-request-target",
+    ],
   ])("lint:workflows fails on %s", (_label, file, text, rule) => {
     expect(rulesBroken(file, text)).toEqual([rule]);
   });
@@ -216,6 +353,47 @@ describe("lint:workflows", () => {
     ];
 
     expect(checkWorkflows(files)).toEqual([]);
+  });
+
+  it("lint:workflows allows a cache in a job that holds no secret, environment or write scope, and a shell that does not trace", () => {
+    const files = [
+      {
+        path: ".github/workflows/live-run.yml",
+        text: workflow({
+          on: "workflow_call:",
+          jobs: job("live", {
+            runsOn: "ubuntu-24.04-arm",
+            extra: "defaults:\n  run:\n    shell: bash -e {0}",
+            steps: `- uses: ${CACHE.replace("actions/cache@", "actions/cache/restore@")}\n  with:\n    path: x\n    key: y\n- run: echo hi\n  shell: bash --noprofile --norc -eo pipefail {0}`,
+          }),
+        }),
+      },
+      {
+        path: ".github/workflows/release.yml",
+        text: workflow({
+          top: "permissions: {}\ndefaults:\n  run:\n    shell: bash --noprofile --norc -euo pipefail {0}",
+          jobs: job("publish", { extra: "environment: publish\nenv:\n  SHELLOPTS: braceexpand" }).replace("contents: read", "contents: write"),
+        }),
+      },
+    ];
+
+    expect(checkWorkflows(files)).toEqual([]);
+  });
+
+  it("lint:workflows allows a pull_request_target workflow to read the pull request through the API, as data", () => {
+    const text = workflow({
+      on: "pull_request_target:\n    types: [opened]",
+      jobs: job("owner-merge", {
+        steps: [
+          '- run: gh api --method GET "repos/$REPO/pulls/$PR/files?per_page=100"',
+          '- run: gh pr view "$PR" --json files && gh pr diff "$PR" > pr.diff && gh pr comment "$PR" --body "$BODY"',
+          "- run: |",
+          '    gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/workflows/ci.yml?ref=$HEAD_SHA"',
+        ].join("\n"),
+      }).replace("contents: read", "contents: read\n      pull-requests: write"),
+    });
+
+    expect(checkWorkflows([{ path: ".github/workflows/owner-merge.yml", text }])).toEqual([]);
   });
 
   it("lint:workflows names the file, line and rule of each violation", async () => {

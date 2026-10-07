@@ -73,9 +73,13 @@ Branches, pull requests and the rules for agents: `docs/CONTRIBUTING.md`. Versio
 - Until `node scripts/delivery/github-setup.mjs` (its `--check`) is clean, never pass `--auto`: merge with
   `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>`. Afterwards,
   `gh pr merge --auto --squash` right after `gh pr create`.
-- Never merge a PR labeled `owner-merge`, turn its auto-merge on, or remove the label. A change to an owner-merge path
-  (`scripts/delivery/owner-paths.json`: `.github/`, `scripts/delivery/`, the agent rules, …) goes in its own PR and
-  waits for the owner.
+- Never turn on the auto-merge of a PR labeled `owner-merge`, or remove the label. Merge one only as the agent session
+  acting for the owner, with the owner's `gh`, and only after every check is green on its exact head SHA and at least
+  two independent security-review agents (not its author) posted APPROVE or APPROVE_WITH_NITS verdict comments naming
+  that SHA: any REFUSE blocks it, and nits become follow-ups. Merge it with
+  `gh pr merge <n> --squash --match-head-commit <sha>` (IMPLEMENTATION §23.1, D81). A change to an owner-merge path
+  (`scripts/delivery/owner-paths.json`: `.github/`, `scripts/delivery/`, the agent rules at any depth,
+  `docs/CONTRIBUTING.md`, …) goes in its own PR.
 - Never merge the release PR, mark it ready, turn its auto-merge on, or push to its branch. Never approve a deployment.
 - Never edit package.json's `version`, package-lock.json's root version, `.release-please-manifest.json`, or
   `CHANGELOG.md`: release-please owns them.

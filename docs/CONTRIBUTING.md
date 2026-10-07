@@ -78,8 +78,9 @@ Afterwards, the PR merges itself once its two required checks pass:
 | `pr-title` | `pr-title.yml` | from `main`'s copy of `scripts/delivery/check-pr.mjs`: the title and branch rules above, and the workflow rules on your PR's workflow files, each pinned SHA checked against its tag |
 | `ci-ok` | `ci.yml` | passes when `scan` (secret scan, gitleaks) passed and, if code changed, `check` (Node 22.22.2 and 26.10.0) and `macos` (the darwin-arm64 build) passed; on the release PR it also needs a runtime and an installer (slices 1c and D2) |
 
-A docs-only PR (`docs/`, root Markdown other than `CLAUDE.md` and `AGENTS.md`, `LICENSE`) runs only `pr-title`,
-`scan`, and `ci-ok`; agent rules and package files count as code. Label a PR `live` to run the live suite on it too.
+A docs-only PR (`docs/`, root Markdown, `LICENSE`) runs only `pr-title`, `scan`, and `ci-ok`; an owner-merge path never
+counts as docs (the agent rules among them: `CLAUDE.md` and `AGENTS.md` at any depth, and this page), and package files
+count as code. Label a PR `live` to run the live suite on it too.
 No approval is needed: GitHub never lets an author approve their own PR, and `main` requires none.
 
 ## What merges itself
@@ -87,9 +88,9 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
 | Pull request | Auto-merge |
 |---|---|
 | Yours or an agent's | `gh pr merge --auto --squash`, right after `gh pr create` (once the interim rule has ended) |
-| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `packages/core/src/release/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`; or one whose files the API did not list in full | never: `owner-merge.yml` turns auto-merge off and labels it `owner-merge`; the operator reads the diff and merges it |
-| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml` | turned on by `dependabot-auto-merge.yml`, once `main` requires `pr-title` and `ci-ok` (until then the operator merges it) |
-| Dependabot: the weekly GitHub Actions group | never: the operator reads the new SHAs and the tags they claim, then merges it |
+| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `packages/core/src/release/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `docs/CONTRIBUTING.md`, and at any depth `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, `.cursor/`, `.cursorrules`, `.mcp.json` (`scripts/delivery/owner-paths.json`); or one whose files the API did not list in full | never: `owner-merge.yml` turns auto-merge off and labels it `owner-merge`; the operator reads the diff and merges it, or the agent session acting for the operator merges it by rule 6 |
+| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml`, all of whose commits are Dependabot's and which touches no owner-merge path | turned on by `dependabot-auto-merge.yml` on Dependabot's own events, for the head commit it judged, once `main` requires `pr-title` and `ci-ok` (until then the operator merges it) |
+| Dependabot: the weekly GitHub Actions group | never: the operator reads the new SHAs and the tags they claim, then merges it, or the agent session acting for the operator does by rule 6 |
 | Dependabot: anything else (runtime or bundled packages, esbuild, majors, the live image's base) | the operator decides |
 | The release PR, `chore(main): release X.Y.Z` | never: it opens as a draft; the operator marks it ready and merges it to release |
 
@@ -103,8 +104,17 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
    version, `.release-please-manifest.json`, or `CHANGELOG.md`.
 5. Never merge the release PR, mark it ready (`gh pr ready`), turn on its auto-merge, or push to its branch. Never
    approve a deployment: approving `publish` is the operator's release decision.
-6. Never merge a PR labeled `owner-merge`, turn its auto-merge on, or remove the label. A change that needs an
-   owner-merge path goes in its own PR, which says so in its body and waits for the operator.
+6. Never turn on the auto-merge of a PR labeled `owner-merge`, and never remove the label. Merge one only as the agent
+   session acting for the operator, with the operator's `gh` login, and only after both (the operator's decision of
+   2026-10-06; IMPLEMENTATION §23.1, D81):
+   - every check is green on the PR's exact head SHA; and
+   - at least two independent security-review agents, neither of them the PR's author, have each posted a verdict
+     comment, `APPROVE` or `APPROVE_WITH_NITS`, naming that SHA in full, for example
+     `Security review (independent agent, workflows): APPROVE_WITH_NITS at <sha>`.
+
+   Any `REFUSE` blocks the merge; a new head commit needs its own two approvals; nits become follow-up PRs. Merge with
+   `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or `--admin`. None of this covers the release
+   PR (rule 5). A change that needs an owner-merge path goes in its own PR, which says so in its body.
 7. Never run `npm run deploy`, `desk update`, `desk use`, `desk rollback`, the installed `desk`, or
    `scripts/delivery/github-setup.mjs --apply`: they change the operator's Mac or repository. Their prompts stop
    accidents, not a process that answers them, so this rule is what keeps you out. `npm run pack` and `github-setup.mjs`
@@ -121,7 +131,7 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
 
 ## Docs
 
-A docs PR changes documents only (`docs/`, root Markdown other than `CLAUDE.md` and `AGENTS.md`), so it skips the build
-jobs. Use fake values in examples (`/Users/alex`, port 9417, `a1b2c3d…`), never real tokens, cookies, or values from the
-operator's Mac; the secret scan and gitleaks read docs too. Update SPEC and IMPLEMENTATION together when behavior
-changes, and record deviations in IMPLEMENTATION §22.
+A docs PR changes documents only (`docs/` and root Markdown, but no owner-merge path: `CLAUDE.md` and `AGENTS.md` at any
+depth, and this page, are agent rules), so it skips the build jobs. Use fake values in examples (`/Users/alex`, port
+9417, `a1b2c3d…`), never real tokens, cookies, or values from the operator's Mac; the secret scan and gitleaks read docs
+too. Update SPEC and IMPLEMENTATION together when behavior changes, and record deviations in IMPLEMENTATION §22.

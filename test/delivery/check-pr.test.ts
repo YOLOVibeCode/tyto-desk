@@ -207,6 +207,65 @@ describe("the PR check", () => {
     expect((await workflowProblems({ "ci.yml": workflow() }, tags)).problems).toEqual([]);
   });
 
+  const many = (count: number, make: (i: number) => [string, string]) => Object.fromEntries(Array.from({ length: count }, (_, i) => make(i)));
+
+  it.each([
+    { count: 25, problems: [] },
+    {
+      count: 26,
+      problems: [".github/workflows  [cap] the head has 26 workflow files; the PR check reads at most 25, so it fails closed"],
+    },
+  ])("the PR check reads at most 25 workflow files and fails closed above that, reading none ($count files)", async ({ count, problems }) => {
+    const files = many(count, (i) => [`w${String(i).padStart(2, "0")}.yml`, workflow()]);
+
+    const result = await workflowProblems(files);
+
+    expect(result.problems).toEqual(problems);
+    const reads = result.calls.filter((call) => call.args.includes("Accept: application/vnd.github.raw"));
+    expect(reads).toHaveLength(count > 25 ? 0 : count);
+  });
+
+  /** A workflow whose one job pins `count` distinct actions, each to the commit its tag names. */
+  function pinning(count: number): { text: string; tags: Record<string, Tag> } {
+    const sha = (i: number) => i.toString(16).padStart(40, "a");
+    const steps = Array.from({ length: count }, (_, i) => `      - uses: example/action-${i}@${sha(i)} # v1.0.0`);
+    const tags = many(count, (i) => [`example/action-${i}@v1.0.0`, sha(i)]);
+    return { text: `${workflow()}${steps.join("\n")}\n`, tags: { ...tags, "actions/checkout@v7.0.1": CHECKOUT_SHA } };
+  }
+
+  it.each([
+    { count: 24, problems: [] },
+    {
+      count: 25,
+      problems: [
+        ".github/workflows  [cap] the workflow files pin 26 distinct actions (action and tag); the PR check looks up at most 25, so it fails closed",
+      ],
+    },
+  ])(
+    "the PR check looks up at most 25 distinct pinned actions and fails closed above that, looking up none ($count pins besides checkout)",
+    async ({ count, problems }) => {
+      const { text, tags } = pinning(count);
+
+      const result = await workflowProblems({ "ci.yml": text }, tags);
+
+      expect(result.problems).toEqual(problems);
+      const lookups = result.calls.filter((call) => /\/git\/ref\/tags\//.test(call.args.join(" ")));
+      expect(lookups).toHaveLength(count + 1 > 25 ? 0 : count + 1);
+    },
+  );
+
+  it("the PR check fails closed when the API may not have listed every entry of .github/workflows (1,000 or more)", async () => {
+    const entries = Array.from({ length: 1000 }, (_, i) => ({ name: `n${i}.txt`, path: `.github/workflows/n${i}.txt`, type: "file" }));
+    const fake = fakeGh([{ match: /contents\/\.github\/workflows\?ref=/, reply: () => ok(entries) }]);
+
+    const problems = await checkWorkflowFiles(ghPullRequestSource(fake.gh, { repository: REPOSITORY, headSha: HEAD }));
+
+    expect(problems).toEqual([
+      ".github/workflows  [cap] the API listed 1000 entries of .github/workflows, the most it lists, so a workflow may be missing; the PR check fails closed",
+    ]);
+    expect(fake.calls).toHaveLength(1);
+  });
+
   it("the PR check passes a PR whose head has no workflow directory", async () => {
     const fake = fakeGh([{ match: /contents\/\.github\/workflows\?ref=/, reply: notFound }]);
 

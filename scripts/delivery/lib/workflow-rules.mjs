@@ -71,10 +71,22 @@ const DEFAULT_TAG_PREFIX = "tag:yaml.org,2002:";
 /** git's own options that take the next word as their value, before the subcommand. */
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source"]);
 
-/** git subcommands that bring commits or files onto the runner. */
-const GIT_FETCHES = new Set(["fetch", "checkout", "switch", "worktree", "clone", "pull", "restore"]);
+/** git subcommands that bring commits or files onto the runner (`git remote` only to update or `add -f`). */
+const GIT_FETCHES = new Set(["fetch", "fetch-pack", "checkout", "switch", "worktree", "clone", "pull", "restore"]);
 
-/** Jobs whose output is attested or published: no cache may feed them. */
+/** Shells whose flags and `-c` scripts the rules read. */
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh"]);
+
+/**
+ * A pull request's ref in any word: `refs/pull/…`, or `pull/<n>/head` and `pull/<n>/merge` as a word or a refspec's
+ * side (`+pull/7/head:pr`). `pulls/<n>/files`, the REST API's, is no ref.
+ */
+const PULL_REF = /refs\/pull\/|(?:^|[\s:+"'=])pull\/[^\s/]+\/(?:head|merge)(?![\w-])/;
+
+/** A download of a repository's code as an archive: the REST API's tarball and zipball, codeload, `/archive/`. */
+const CODE_ARCHIVE = /\/(?:tarball|zipball)(?:[/?]|$)|codeload\.github\.com|github\.com\/\S*\/archive\//i;
+
+/** Jobs whose output is attested or published: no cache may feed them, privileged or not. */
 const NO_CACHE_JOBS = new Set(["pack", "attest", "publish"]);
 
 /** Refs a `pull_request_target` checkout may name: the base, never the pull request. */
@@ -271,6 +283,42 @@ function printsEnvironment(words) {
     default:
       return false;
   }
+}
+
+/**
+ * Whether a shell's arguments trace its commands: a flag cluster with `x` (`-x`, `-ex`, `-eox`), or `-o xtrace`
+ * (also at the end of a cluster, `-eo xtrace`). `+x` turns tracing off.
+ * @param {readonly string[]} args
+ */
+function traceFlags(args) {
+  return args.some((w, i) => /^-[a-zA-Z]*x[a-zA-Z]*$/.test(w) || (/^-[a-zA-Z]*o$/.test(w) && args[i + 1] === "xtrace"));
+}
+
+/** Whether a SHELLOPTS value turns tracing on (bash reads it from the environment at start). @param {unknown} value */
+function tracingShellOptions(value) {
+  return typeof value === "string" && value.split(":").includes("xtrace");
+}
+
+/**
+ * Whether a `shell:` (a step's, or `defaults.run.shell`) traces its commands or prints the environment: a POSIX shell,
+ * past `env` and variable assignments, given a tracing flag or SHELLOPTS with xtrace, or a shell that is `env` or
+ * `printenv` itself.
+ * @param {unknown} spec
+ */
+function loudShell(spec) {
+  if (typeof spec !== "string") return false;
+  if (shellCommands(spec).some(printsEnvironment)) return true;
+  const words = spec.trim().split(/\s+/);
+  let i = 0;
+  while (i < words.length) {
+    const w = words[i] ?? "";
+    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(w);
+    if (assignment !== null) {
+      if (assignment[1] === "SHELLOPTS" && tracingShellOptions(assignment[2])) return true;
+    } else if (w !== "env" && !COMMAND_PREFIXES.has(w)) break;
+    i += 1;
+  }
+  return SHELLS.has(baseName(words[i] ?? "")) && traceFlags(words.slice(i + 1));
 }
 
 /** Every string anywhere in `value`. @param {unknown} value @returns {string[]} */
@@ -572,13 +620,30 @@ function checkOne(file) {
     }
     if (job["timeout-minutes"] === undefined) report(where, "timeout", `${id} has no timeout-minutes`);
 
+    // A job is privileged when it holds a secret, an environment (whose secrets and deployment rights reach it), the
+    // App's token or a write scope (D84): no cache may feed it, and nothing in it may print the environment or trace.
     const privileged =
       writes.length > 0 ||
       secrets.length > 0 ||
+      environment !== null ||
       (Array.isArray(job.steps) && job.steps.some((step) => actionOf(asRecord(step)?.uses) === "actions/create-github-app-token"));
-    const noCache = pullRequestTarget || NO_CACHE_JOBS.has(id);
+    const noCache = pullRequestTarget || NO_CACHE_JOBS.has(id) || privileged;
     if (privileged && [...jobStrings, ...workflowStrings].some((text) => /ACTIONS_(?:STEP|RUNNER)_DEBUG/.test(text))) {
-      report(where, "debug-output", `${id} holds a secret or a write scope and must not turn on debug logging`);
+      report(where, "debug-output", `${id} holds a secret, an environment or a write scope and must not turn on debug logging`);
+    }
+    if (privileged) {
+      if (loudShell(asRecord(asRecord(workflow.defaults)?.run)?.shell)) {
+        report(["defaults", "run", "shell"], "debug-output", `${id} holds a secret, an environment or a write scope, and the workflow's default shell traces its commands`);
+      }
+      if (loudShell(asRecord(asRecord(job.defaults)?.run)?.shell)) {
+        report([...where, "defaults", "run", "shell"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
+      }
+      if (tracingShellOptions(asRecord(workflow.env)?.SHELLOPTS)) {
+        report(["env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope, and the workflow's SHELLOPTS traces its commands`);
+      }
+      if (tracingShellOptions(asRecord(job.env)?.SHELLOPTS)) {
+        report([...where, "env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
+      }
     }
 
     const steps = Array.isArray(job.steps) ? job.steps : [];
@@ -610,9 +675,11 @@ function checkOne(file) {
           report(stepPath, "cache", `${id} runs setup-node with package-manager-cache: false and no cache`);
         }
       }
-      const shell = typeof step.shell === "string" ? step.shell : "";
-      if (privileged && shell !== "" && shellCommands(shell).some(printsEnvironment)) {
-        report([...stepPath, "shell"], "debug-output", `${id} holds a secret or a write scope and must not trace its shell`);
+      if (privileged && loudShell(step.shell)) {
+        report([...stepPath, "shell"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
+      }
+      if (privileged && tracingShellOptions(asRecord(step.env)?.SHELLOPTS)) {
+        report([...stepPath, "env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
       }
       const scripts = [
         ...(typeof step.run === "string" ? [{ text: step.run, key: "run" }] : []),
@@ -631,10 +698,10 @@ function checkOne(file) {
           report([...stepPath, "run"], "ignore-scripts", "every npm ci or npm install passes --ignore-scripts itself");
         }
         if (privileged && commands.some(printsEnvironment)) {
-          report([...stepPath, "run"], "debug-output", `${id} holds a secret or a write scope and must not print its environment`);
+          report([...stepPath, "run"], "debug-output", `${id} holds a secret, an environment or a write scope and must not print its environment`);
         }
         if (pullRequestTarget && commands.some((words) => checksOutPullRequest(words))) {
-          report([...stepPath, "run"], "pull-request-target", "a pull_request_target workflow reads the pull request through the API, never with git");
+          report([...stepPath, "run"], "pull-request-target", "a pull_request_target workflow reads the pull request through the API, as data: no git fetch, clone or pull request ref, no gh repo clone, no code archive");
         }
       }
     });
@@ -643,11 +710,29 @@ function checkOne(file) {
 }
 
 /**
- * git or gh commands that would bring the pull request's code onto the runner, wherever they sit in the command
- * (`env … git`, `sudo git`) and past git's own options (`git -C . fetch`, `git --no-pager fetch`).
+ * Commands that would bring the pull request's code onto the runner: git fetching anything (past git's own options,
+ * `git -C . fetch`, and wherever git sits in the command, `env … git`, `xargs git`), any word naming a pull request ref
+ * (`refs/pull/…`, `pull/<n>/head`), a download of a code archive (`gh api …/tarball`, `/zipball`, codeload), `gh pr
+ * checkout`, `gh repo clone` and `gh repo fork --clone`, also inside `bash -c '…'`, `sh -c` or `eval`.
  * @param {string[]} words
+ * @param {number} [depth] how many `-c` or `eval` scripts deep this command is
+ * @returns {boolean}
  */
-function checksOutPullRequest(words) {
+function checksOutPullRequest(words, depth = 0) {
+  if (words.some((w) => PULL_REF.test(w) || CODE_ARCHIVE.test(w))) return true;
+  // A script handed to a shell or eval, wherever it sits in the command (`env X=1 bash -c '…'`, `xargs sh -c '…'`).
+  const shell = words.findIndex((w) => w === "eval" || SHELLS.has(baseName(w)));
+  if (shell !== -1 && depth < 3) {
+    const args = words.slice(shell + 1);
+    /** @type {string | null} */
+    let script = null;
+    if (words[shell] === "eval") script = args.join(" ");
+    else {
+      const flag = args.findIndex((w) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
+      if (flag !== -1) script = args[flag + 1] ?? null;
+    }
+    if (script !== null && shellCommands(script).some((inner) => checksOutPullRequest(inner, depth + 1))) return true;
+  }
   const git = words.findIndex((w) => w === "git" || w.endsWith("/git"));
   if (git !== -1) {
     const rest = words.slice(git + 1);
@@ -656,6 +741,11 @@ function checksOutPullRequest(words) {
       if (GIT_VALUE_OPTIONS.has(w)) i += 1;
       else if (!w.startsWith("-")) {
         if (GIT_FETCHES.has(w)) return true;
+        if (w === "remote") {
+          const after = rest.slice(i + 1);
+          const verb = after.find((word) => !word.startsWith("-"));
+          if (verb === "update" || (verb === "add" && after.some((word) => word === "-f" || word === "--fetch"))) return true;
+        }
         break;
       }
     }
@@ -663,8 +753,12 @@ function checksOutPullRequest(words) {
   const gh = words.findIndex((w) => w === "gh" || w.endsWith("/gh"));
   if (gh !== -1) {
     const rest = words.slice(gh + 1).filter((w) => !w.startsWith("-"));
-    const pr = rest.indexOf("pr");
-    if (pr !== -1 && rest.slice(pr + 1).includes("checkout")) return true;
+    const has = (/** @type {string} */ group, /** @type {string} */ verb) => {
+      const at = rest.indexOf(group);
+      return at !== -1 && rest.slice(at + 1).includes(verb);
+    };
+    if (has("pr", "checkout") || has("repo", "clone")) return true;
+    if (has("repo", "fork") && words.slice(gh + 1).some((w) => w === "--clone" || w.startsWith("--clone="))) return true;
   }
   return false;
 }

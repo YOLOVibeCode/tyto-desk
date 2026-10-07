@@ -64,7 +64,7 @@ export function desiredSettings({ ownerId, appId }) {
     },
     labels: {
       live: { name: "live", color: "0e8a16", description: "Runs the live suite on this pull request" },
-      "owner-merge": { name: "owner-merge", color: "b60205", description: "The owner merges this by hand after reading the diff" },
+      "owner-merge": { name: "owner-merge", color: "b60205", description: "The owner merges it, or their session after two security reviews of its head commit (D81)" },
     },
     rulesets: {
       main: {

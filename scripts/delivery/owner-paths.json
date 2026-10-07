@@ -1,5 +1,5 @@
 {
-  "$comment": "Owner-merge paths (docs/IMPLEMENTATION.md §23.1, D50, D61). A pull request that touches one changes the pipeline, code a privileged job runs, or what every later agent obeys: owner-merge.yml labels it owner-merge and turns its auto-merge off, and the owner merges it by hand after reading the diff. `dir/**` is everything under dir; other entries are exact files. Matched without case. Always read from the base branch. `branches` is the release PR's branch (scripts/delivery/lib/release-branch.mjs).",
+  "$comment": "Owner-merge paths (docs/IMPLEMENTATION.md §23.1, D50, D61, D81, D82). A pull request that touches one changes the pipeline, code a privileged job runs, or what every later agent obeys: owner-merge.yml labels it owner-merge and turns its auto-merge off, change detection never calls it docs-only, and Dependabot's auto-merge refuses it. The owner merges it after reading the diff, or the session acting for the owner does after two independent security reviews of its head commit (D81). A `**` segment stands for any number of directories, none included: `dir/**` is everything under dir, `**/CLAUDE.md` is a CLAUDE.md at any depth, the root included, and other entries are exact files. Matched without case. Always read from the base branch. `branches` is the release PR's branch (scripts/delivery/lib/release-branch.mjs).",
   "paths": [
     ".github/**",
     "scripts/delivery/**",
@@ -10,10 +10,14 @@
     "scripts/lib/secrets.mjs",
     "release-please-config.json",
     ".release-please-manifest.json",
-    "CLAUDE.md",
-    "AGENTS.md",
-    ".claude/**",
-    ".cursor/**"
+    "docs/CONTRIBUTING.md",
+    "**/CLAUDE.md",
+    "**/CLAUDE.local.md",
+    "**/AGENTS.md",
+    "**/.claude/**",
+    "**/.cursor/**",
+    "**/.cursorrules",
+    "**/.mcp.json"
   ],
   "branches": ["release-please--branches--main--components--tyto-desk"]
 }

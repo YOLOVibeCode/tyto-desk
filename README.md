@@ -32,8 +32,9 @@ real `~/.desk` changed.
 | `test/` | Repo-level checks and the test-isolation setup |
 
 Pull requests are titled as Conventional Commits and merge themselves when `pr-title` and `ci-ok` pass, except those
-that change the pipeline or the agent rules, which the owner merges ([CONTRIBUTING](docs/CONTRIBUTING.md)). Releases
-are cut from release-please's draft PR and published after the owner approves ([RELEASING](docs/RELEASING.md)).
+that change the pipeline or the agent rules, which the owner merges, or the owner's agent session once two independent
+security reviews approved the head commit ([CONTRIBUTING](docs/CONTRIBUTING.md)). Releases are cut from release-please's
+draft PR and published after the owner approves ([RELEASING](docs/RELEASING.md)).
 
 Agents: read [AGENTS.md](AGENTS.md); Claude Code also reads [CLAUDE.md](CLAUDE.md).
 

@@ -4,9 +4,9 @@
  * touches an owner-merge path, or the release PR, turns its auto-merge off and comments once; otherwise it removes the
  * label. Environment: GH_TOKEN, REPOSITORY, PR_NUMBER, PR_HEAD_REF. Dependency-free.
  */
-import { readFile } from "node:fs/promises";
 import { ghRunner } from "./lib/gh.mjs";
 import { ownerMerge } from "./lib/owner-merge.mjs";
+import { readOwnerPaths } from "./lib/owner-paths.mjs";
 
 const env = process.env;
 const repository = env.REPOSITORY ?? "";
@@ -15,7 +15,7 @@ if (repository === "" || !Number.isSafeInteger(number) || number < 1) {
   console.error("owner-merge: needs REPOSITORY and PR_NUMBER");
   process.exit(64);
 }
-const config = JSON.parse(await readFile(new URL("./owner-paths.json", import.meta.url), "utf8"));
+const config = await readOwnerPaths();
 const result = await ownerMerge(ghRunner(env), { repository, number, headRef: env.PR_HEAD_REF ?? "", config });
 console.log(
   result.ownerMerge
