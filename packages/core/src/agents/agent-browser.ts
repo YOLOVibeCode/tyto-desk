@@ -25,13 +25,13 @@ export function cdpUrl(port: number): string {
 }
 
 /**
- * `~/.desk/agent-browser.json`, rewritten at every launch (§11). Until slice 4b moves agents to the guarded endpoint,
- * `cdp` is the Desk Chrome's raw port. It saves nothing, pins each session to its tab, wraps page text in content
+ * `~/.desk/agent-browser.json`, rewritten at every launch (§11). `cdp` is the guarded endpoint (slice 4b), where the focus
+ * guard keeps agents' tabs in the background. It saves nothing, pins each session to its tab, wraps page text in content
  * boundaries, disconnects idle sessions, and names Desk's action policy.
  */
 export function agentBrowserConfig(input: { config: DeskConfig; deskHome: string }): Record<string, unknown> {
   return {
-    cdp: cdpUrl(input.config.chrome.port),
+    cdp: cdpUrl(input.config.gateway.port),
     restoreSave: "never",
     pinTab: true,
     contentBoundaries: true,

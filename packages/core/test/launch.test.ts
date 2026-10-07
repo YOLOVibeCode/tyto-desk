@@ -240,11 +240,19 @@ describe("desk, a fresh launch", () => {
     expect(desk.files.text(`${deskHome}/extension/sw.js`)).toBe("// worker");
     expect(desk.files.text(`${deskHome}/extension/panel.html`)).toBe("<!doctype html>");
     expect(parseRenderState(desk.files.text(`${deskHome}/render.json`))).toEqual({ version: 1, serial: 1, deskVersion: version, toggleKey: "Command+Shift+Period" });
-    expect(JSON.parse(desk.files.text(`${deskHome}/agent-browser.json`))).toMatchObject({ cdp: "http://127.0.0.1:9417" });
+    expect(JSON.parse(desk.files.text(`${deskHome}/agent-browser.json`))).toMatchObject({ cdp: "http://127.0.0.1:9583" });
     expect(JSON.parse(desk.files.text(`${deskHome}/agent-policy.json`))).toEqual(agentPolicy("open"));
     for (const path of [`${deskHome}/render.json`, `${deskHome}/agent-browser.json`, `${deskHome}/agent-policy.json`]) {
       expect(desk.files.files.get(path)?.mode).toBe(0o600);
     }
+  });
+
+  it("a new install writes the open policy", async () => {
+    const desk = setup();
+
+    await desk.run();
+
+    expect(JSON.parse(desk.files.text(`${deskHome}/agent-policy.json`))).toEqual(agentPolicy("open"));
   });
 
   it("a launch keeps the agent policy the user chose", async () => {

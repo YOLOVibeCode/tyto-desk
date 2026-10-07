@@ -1,8 +1,10 @@
+import type { AgentTabs } from "../ports/agent-tabs.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { ExtensionWindows } from "../ports/extension-windows.ts";
 import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
 import type { SidePanelApi } from "../ports/side-panel-api.ts";
+import type { TabTargets } from "../ports/tab-targets.ts";
 import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type ExtCall } from "../protocol/messages.ts";
 import { Backoff } from "../time/backoff.ts";
 
@@ -10,10 +12,19 @@ export type WorkerPorts = {
   connector: HostConnector;
   sidePanel: SidePanelApi;
   windows: ExtensionWindows;
+  tabs: TabTargets;
+  agentTabs: AgentTabs;
   clock: Clock;
   /** The extension's Desk version. */
   build: string;
 };
+
+/** A pane id, as the daemon makes them (`p_` and 10 Crockford base32 characters), or `null`. */
+function paneArg(args: unknown): string | null {
+  if (typeof args !== "object" || args === null || !("pane" in args)) return null;
+  const value = (args as { pane: unknown }).pane;
+  return typeof value === "string" && /^p_[0-9a-z]{10}$/.test(value) ? value : null;
+}
 
 function windowArg(args: unknown): number | null {
   if (typeof args !== "object" || args === null || !("window" in args)) return null;
@@ -25,7 +36,9 @@ function windowArg(args: unknown): number | null {
  * The Desk extension's service worker (docs/IMPLEMENTATION.md §9). At start it makes the toolbar action open the panel,
  * learns which windows show the panel, and opens its own native connection, which keeps it alive while Chrome runs; it
  * says hello as `sw` and reconnects with backoff from 100 ms to 5 s whenever the host goes away. It answers the
- * extension calls the daemon relays: `windows` (each normal window's focus and panel state) and `focusWindow`.
+ * extension calls the daemon relays: `windows` (each normal window's focus and panel state), `focusWindow`,
+ * `tabCurrent` (the active tab's target in the last-focused window) and `tabMine` (a pane's agent tab, in a group named
+ * after the pane, created in the background when missing).
  */
 export class WorkerController {
   private readonly ports: WorkerPorts;
@@ -83,10 +96,32 @@ export class WorkerController {
           ? { type: "ext.result", id: call.id, ok: true }
           : { type: "ext.result", id: call.id, ok: false, error: "no-window" };
       }
+      case "tabCurrent": {
+        const windowId = await this.lastFocusedWindow();
+        const target = windowId === null ? null : await this.ports.tabs.activeTabTarget(windowId);
+        return target === null ? { type: "ext.result", id: call.id, ok: false, error: "no-tab" } : { type: "ext.result", id: call.id, ok: true, value: target };
+      }
+      case "tabMine": {
+        const pane = paneArg(call.args);
+        if (pane === null) return { type: "ext.result", id: call.id, ok: false, error: "bad-args" };
+        let tab = await this.ports.agentTabs.find(pane);
+        if (tab === null) {
+          const windowId = await this.lastFocusedWindow();
+          tab = windowId === null ? null : await this.ports.agentTabs.create(pane, windowId);
+        }
+        const target = tab === null ? null : await this.ports.tabs.targetOfTab(tab);
+        return target === null ? { type: "ext.result", id: call.id, ok: false, error: "no-tab" } : { type: "ext.result", id: call.id, ok: true, value: target };
+      }
       default: {
         const never: never = call.op;
         throw new Error(`unknown extension call ${String(never)}`);
       }
     }
+  }
+
+  /** The last-focused normal window, else the focused one, else any; `null` when Chrome has none. */
+  private async lastFocusedWindow(): Promise<number | null> {
+    const windows = await this.ports.windows.normalWindows();
+    return (windows.find((entry) => entry.lastFocused) ?? windows.find((entry) => entry.focused) ?? windows[0])?.id ?? null;
   }
 }

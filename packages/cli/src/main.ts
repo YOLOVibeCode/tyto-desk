@@ -8,6 +8,7 @@ import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
 import { TtyPrompter } from "./prompter.ts";
 import { quitCommand } from "./quit.ts";
+import { tabCommand } from "./tab.ts";
 import { watchCommand } from "./watch.ts";
 
 export type MainInput = {
@@ -27,6 +28,7 @@ const USAGE = [
   "       desk --version [--json]    this version, its channel, commit and build time",
   "       desk quit [--all]          close the Desk Chrome; --all also stops the terminal daemon and desk watch",
   "       desk cdp [--raw] [--ws]    the guarded endpoint for CDP clients; --raw the browser's own port",
+  "       desk tab current|mine      the tab you are looking at, or this pane's agent tab (made in the background)",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -97,6 +99,14 @@ export async function main(input: MainInput): Promise<number> {
       const flags = new Set(rest);
       if (flags.size !== rest.length || rest.some((flag) => flag !== "--raw" && flag !== "--ws")) return usage();
       const result = await cdpCommand({ deskHome, raw: flags.has("--raw"), ws: flags.has("--ws") });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "tab") {
+      const which = rest[0];
+      if (rest.length !== 1 || (which !== "current" && which !== "mine")) return usage();
+      const result = await tabCommand({ deskHome, version: version.info.version, which, pane: input.env.DESK_PANE });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
       return result.code;

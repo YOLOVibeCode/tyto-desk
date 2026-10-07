@@ -73,7 +73,7 @@ describe("the desk command", () => {
     expect(err).toMatch(/version\.json is missing or damaged/);
   });
 
-  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"]])("desk %s is a usage error (64)", async (...argv) => {
+  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"], ["tab"], ["tab", "theirs"], ["tab", "current", "mine"]])("desk %s is a usage error (64)", async (...argv) => {
     const { code, err } = await desk(argv);
 
     expect(code).toBe(64);
@@ -99,5 +99,13 @@ describe("the desk command", () => {
 
   it("desk cdp exits 69 naming desk when Desk has no config yet", async () => {
     expect(await desk(["cdp"])).toEqual({ code: 69, out: "", err: "desk: Desk has no config yet; run desk\n" });
+  });
+
+  it("desk tab mine outside a Desk pane says it needs one (64)", async () => {
+    expect(await desk(["tab", "mine"])).toEqual({ code: 64, out: "", err: "desk: desk tab mine runs in a Desk pane, which sets DESK_PANE\n" });
+  });
+
+  it("desk tab current exits 69 when Desk is not running", async () => {
+    expect(await desk(["tab", "current"])).toEqual({ code: 69, out: "", err: "desk: Desk is not running, or its extension did not answer; run desk\n" });
   });
 });

@@ -51,10 +51,16 @@ afterEach(async () => {
 });
 
 /** A fake Chrome and a guarded endpoint in front of it, on ephemeral ports, once the endpoint follows Chrome. */
-async function guarded() {
+async function guarded(focus: { activeTab: () => Promise<string | null> } | null = null) {
   const chrome = await startFakeChrome();
   cleanups.push(chrome.close);
-  const endpoint = new NodeGuardedEndpoint({ port: 0, rawPort: chrome.port, extensionId: DESK, feedRetryMs: 20 });
+  const endpoint = new NodeGuardedEndpoint({
+    port: 0,
+    rawPort: chrome.port,
+    extensionId: DESK,
+    feedRetryMs: 20,
+    ...(focus === null ? {} : { focusGuard: true, activeTab: focus.activeTab }),
+  });
   cleanups.push(() => endpoint.close());
   expect(await endpoint.listen()).toEqual({ ok: true });
   for (let i = 0; i < 200 && (await http(endpoint.port(), "GET", "/json/version")).status !== 200; i += 1) await new Promise((r) => setTimeout(r, 10));
@@ -236,5 +242,69 @@ describe("the guarded endpoint over WebSocket (docs/IMPLEMENTATION.md §12)", ()
 
     await closed;
     expect(opened.socket.readyState).toBe(WebSocket.CLOSED);
+  });
+});
+
+describe("the focus guard in the guarded endpoint (docs/IMPLEMENTATION.md §12, slice 4b)", () => {
+  async function client(port: number): Promise<WebSocket> {
+    const opened = await connect(`ws://127.0.0.1:${port}/devtools/browser/b-1`);
+    if (!opened.ok) throw new Error(`no connection: ${opened.status}`);
+    cleanups.push(async () => opened.socket.close());
+    return opened.socket;
+  }
+
+  it("a client's Target.createTarget reaches Chrome with background: true", async () => {
+    const { port, chrome } = await guarded({ activeTab: async () => "USER" });
+
+    await command(await client(port), { id: 1, method: "Target.createTarget", params: { url: "https://app.example/agent" } });
+
+    expect(chrome.commands.find((c) => c.method === "Target.createTarget")).toEqual({
+      id: 1,
+      method: "Target.createTarget",
+      params: { url: "https://app.example/agent", background: true },
+    });
+  });
+
+  it("a client's Target.activateTarget for a tab you are not looking at is answered with {} and never reaches Chrome", async () => {
+    const { port, chrome } = await guarded({ activeTab: async () => "USER" });
+
+    const answer = await command(await client(port), { id: 2, method: "Target.activateTarget", params: { targetId: "PAGE" } });
+
+    expect(answer).toEqual({ id: 2, result: {} });
+    expect(chrome.commands.some((c) => c.method === "Target.activateTarget")).toBe(false);
+  });
+
+  it("a client's Target.activateTarget for the tab you are looking at reaches Chrome", async () => {
+    const { port, chrome } = await guarded({ activeTab: async () => "PAGE" });
+
+    const answer = await command(await client(port), { id: 3, method: "Target.activateTarget", params: { targetId: "PAGE" } });
+
+    expect(answer).toEqual({ id: 3, result: { echoed: "Target.activateTarget" } });
+    expect(chrome.commands.some((c) => c.method === "Target.activateTarget")).toBe(true);
+  });
+
+  it("commands after a held focus command reach Chrome in the order the client sent them", async () => {
+    let release: (tab: string | null) => void = () => undefined;
+    const { port, chrome } = await guarded({ activeTab: () => new Promise((resolve) => (release = resolve)) });
+    const socket = await client(port);
+
+    const held = command(socket, { id: 4, method: "Target.activateTarget", params: { targetId: "PAGE" } });
+    const after = command(socket, { id: 5, method: "Runtime.evaluate", params: { expression: "1" } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const beforeRelease = chrome.commands.filter((c) => c.id === 5).length;
+    release("PAGE");
+    await Promise.all([held, after]);
+
+    expect(beforeRelease).toBe(0);
+    expect(chrome.commands.filter((c) => c.id === 4 || c.id === 5).map((c) => c.id)).toEqual([4, 5]);
+  });
+
+  it("/json/activate/<id> goes through the focus guard", async () => {
+    const { port, chrome } = await guarded({ activeTab: async () => "USER" });
+
+    const answer = await http(port, "GET", "/json/activate/PAGE");
+
+    expect(answer).toMatchObject({ status: 200, body: "Target activated" });
+    expect(chrome.requests.some((r) => r.url.startsWith("/json/activate"))).toBe(false);
   });
 });

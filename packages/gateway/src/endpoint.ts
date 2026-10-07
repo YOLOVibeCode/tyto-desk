@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   GatewayConnection,
   HiddenTargets,
+  type GatewayStep,
   filterTargetList,
   guardedVersion,
   httpGuard,
@@ -24,6 +25,10 @@ export type EndpointOptions = {
   extensionId: string;
   /** The first wait before the discovery connection retries (100 ms; tests shorten it). */
   feedRetryMs?: number;
+  /** §12's focus guard: agents' new tabs open in the background, and only the tab you look at may be brought forward. */
+  focusGuard?: boolean;
+  /** The target id of the active tab in the last-focused Desk window, from the service worker; `null` when it did not say. */
+  activeTab?: () => Promise<string | null>;
 };
 
 const NOT_RUNNING = "Desk is not running; run desk";
@@ -140,6 +145,9 @@ export class NodeGuardedEndpoint implements GuardedEndpoint {
       case "activate":
       case "close":
         if (this.hidden.isHidden(route.targetId)) return send(res, 404, `No such target id: ${route.targetId}`);
+        if (route.kind === "activate" && this.options.focusGuard === true && (await this.activeTab()) !== route.targetId) {
+          return send(res, 200, "Target activated");
+        }
         return this.forward(res, path);
       case "protocol":
       case "devtools":
@@ -180,21 +188,40 @@ export class NodeGuardedEndpoint implements GuardedEndpoint {
     });
   }
 
-  /** Relays one client and its upstream socket through core's policy until either side closes. */
+  /** The active tab, as the service worker reports it; any failure counts as no active tab. */
+  private async activeTab(): Promise<string | null> {
+    try {
+      return (await this.options.activeTab?.()) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Relays one client and its upstream socket through core's policy until either side closes. The client's messages are
+   * handled one at a time, so a focus command held while the active tab is looked up keeps its place in the order.
+   */
   private bridge(client: WebSocket, upstream: WebSocket): void {
-    const policy = new GatewayConnection({ extensionId: this.options.extensionId, hidden: this.hidden });
+    const policy = new GatewayConnection({ extensionId: this.options.extensionId, hidden: this.hidden, focusGuard: this.options.focusGuard === true });
+    const deliver = (step: GatewayStep) => {
+      for (const message of step.toChrome) if (upstream.readyState === WebSocket.OPEN) upstream.send(message);
+      for (const message of step.toClient) if (client.readyState === WebSocket.OPEN) client.send(message);
+    };
+    let queue: Promise<void> = Promise.resolve();
     this.clients.add(client);
     client.on("message", (data, isBinary) => {
-      if (isBinary) return upstream.send(data, { binary: true });
-      const step = policy.fromClient(text(data));
-      for (const message of step.toChrome) upstream.send(message);
-      for (const message of step.toClient) client.send(message);
+      queue = queue
+        .then(async () => {
+          if (isBinary) return upstream.send(data, { binary: true });
+          const step = policy.fromClient(text(data));
+          deliver(step);
+          if (step.focus !== undefined) deliver(policy.focusAnswer(step.focus, await this.activeTab()));
+        })
+        .catch(() => undefined);
     });
     upstream.on("message", (data, isBinary) => {
       if (isBinary) return client.send(data, { binary: true });
-      const step = policy.fromChrome(text(data));
-      for (const message of step.toChrome) upstream.send(message);
-      for (const message of step.toClient) client.send(message);
+      deliver(policy.fromChrome(text(data)));
     });
     const end = () => {
       this.clients.delete(client);
