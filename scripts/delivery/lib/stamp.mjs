@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DESK_COMPAT } from "../../../packages/core/src/release/compat.ts";
 import { currentBranch, dirtyFiles, headCommit, tagOnMain } from "./git-facts.mjs";
+import { readNodeRuntime } from "./node-runtime.mjs";
 
 /** @typedef {import("./run.mjs").Runner} Runner */
 /** @typedef {import("../../../packages/core/src/release/classify-build.ts").ClassifyBuildInput} ClassifyBuildInput */
@@ -162,14 +163,12 @@ export function versionFile(input, build, node) {
 }
 
 /**
- * Desk Terminal's Node: the pinned Node 26.10.0 (D49), which `.nvmrc` names until slice 1c's
- * `scripts/delivery/node-runtime.json` pins its tarball.
+ * Desk Terminal's Node: the version `scripts/delivery/node-runtime.json` pins (D49; `.nvmrc` names the same one, which a
+ * test checks).
  * @param {string} root
  */
 export async function pinnedNode(root) {
-  const version = (await readFile(join(root, ".nvmrc"), "utf8")).trim().replace(/^v/, "");
-  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error(".nvmrc does not name an exact Node version");
-  return version;
+  return (await readNodeRuntime(root)).version;
 }
 
 /**
