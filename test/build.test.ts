@@ -1,4 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -137,6 +141,26 @@ describe("build", () => {
     expect(await undeclaredBundledPackages(repo, [{ name: "runtime", metafile }], manifests)).toEqual([
       { bundle: "runtime", importer: "ws", bundled: "left-pad", declaredIn: "nothing" },
     ]);
+  });
+
+  it("the runtime bundle loads under Node, CommonJS dependencies and all, before it looks for its version.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "runtime-"));
+    for (const bundle of production.bundles.filter((entry) => entry.path.startsWith("runtime/"))) {
+      const file = join(dir, bundle.path);
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, bundle.text);
+    }
+
+    const ran = await promisify(execFile)(process.execPath, [join(dir, "runtime", "desk.mjs"), "--version"], {
+      env: { PATH: dirname(process.execPath) },
+      signal: AbortSignal.timeout(20_000),
+    }).then(
+      () => ({ code: 0, stderr: "" }),
+      (failure: { code?: number; stderr?: string }) => ({ code: failure.code ?? -1, stderr: failure.stderr ?? "" }),
+    );
+
+    expect(ran.stderr).toMatch(/version\.json is missing or damaged/);
+    expect(ran.code).toBe(70);
   });
 
   it("production builds drop deskTest, and the test build exposes it", async () => {

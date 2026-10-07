@@ -27,6 +27,13 @@ export const RUNTIME_EXTERNALS = ["@lydell/node-pty"];
  */
 export const OPTIONAL_TRIED_PACKAGES = /** @type {Readonly<Record<string, readonly string[]>>} */ ({ ws: ["bufferutil", "utf-8-validate"] });
 
+/**
+ * The runtime is an ES module, and esbuild turns a bundled CommonJS dependency's `require` (ws's `require("events")`)
+ * into a stub that throws unless the module has a real `require`. Each runtime file gets one, made for its own location,
+ * so Node builtins load and an optional package that is not installed still fails into its dependency's fallback.
+ */
+export const RUNTIME_BANNER = 'import { createRequire as deskCreateRequire } from "node:module"; const require = deskCreateRequire(import.meta.url);';
+
 /** The strict policy §9 gives every extension page. */
 export const EXTENSION_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'";
@@ -84,6 +91,7 @@ export async function buildBundles(root, options = {}) {
     chunkNames: "chunks/[name]-[hash]",
     outExtension: { ".js": ".mjs" },
     external: RUNTIME_EXTERNALS,
+    banner: { js: RUNTIME_BANNER },
     outdir: join(dist, "runtime"),
   });
   const outputs = (/** @type {import("esbuild").BuildResult} */ result) => {
