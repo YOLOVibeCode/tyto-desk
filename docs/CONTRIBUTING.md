@@ -75,7 +75,7 @@ Afterwards, the PR merges itself once its two required checks pass:
 
 | Check | Workflow | What it runs |
 |---|---|---|
-| `pr-title` | `pr-title.yml` | from `main`'s copy of `scripts/delivery/check-pr.mjs`: the title and branch rules above, and the workflow rules on your PR's workflow files, each pinned SHA checked against its tag |
+| `pr-title` | `pr-title.yml` | from `main`'s copy of `scripts/delivery/check-pr.mjs`: the title and branch rules above, and the workflow rules on your PR's workflow files, each pinned SHA checked against its tag (at most 25 workflow files and 25 distinct pins a run; above either it fails) |
 | `ci-ok` | `ci.yml` | passes when `scan` (secret scan, gitleaks) passed and, if code changed, `check` (Node 22.22.2 and 26.10.0) and `macos` (the darwin-arm64 build) passed; on the release PR it also needs a runtime and an installer (slices 1c and D2) |
 
 A docs-only PR (`docs/`, root Markdown, `LICENSE`) runs only `pr-title`, `scan`, and `ci-ok`; an owner-merge path never
