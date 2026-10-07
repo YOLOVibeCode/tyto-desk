@@ -1,19 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { ownerMerge, ownerMergeDecision } from "../../scripts/delivery/lib/owner-merge.mjs";
+import { readOwnerPaths } from "../../scripts/delivery/lib/owner-paths.mjs";
 import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
 import { fakeGh, ok, type GhCall } from "./fake-gh.ts";
-import { repo } from "./helpers.ts";
+import { ruleGaps } from "./owner-merge-rule.ts";
+import { ownerPathExamples, ownerPaths as config } from "./owner-paths.ts";
 
 const REPOSITORY = "YOLOVibeCode/tyto-desk";
-const config = JSON.parse(await readFile(join(repo, "scripts/delivery/owner-paths.json"), "utf8")) as {
-  paths: string[];
-  branches: string[];
-};
 
-/** A file under each owner-merge path: `dir/**` gets a file inside it. */
-const examples = config.paths.map((pattern) => [pattern, pattern.endsWith("/**") ? `${pattern.slice(0, -3)}/example.txt` : pattern]);
+/** A file under each owner-merge path, a nested one too for the paths that count at any depth. */
+const examples = ownerPathExamples(["packages/node/test", "docs/notes"]);
 
 /** The pull request as the API reports it; `changed_files` defaults to the number of files listed. */
 type Pull = { auto_merge: object | null; labels: { name: string }[]; changed_files?: number | null };
@@ -82,6 +82,27 @@ describe("owner-merge", () => {
     expect(writes(calls)).toEqual([`api --method POST repos/${REPOSITORY}/issues/7/labels --input -`]);
   });
 
+  it("owner-merge's comment states the owner's decision and every condition under which the session acting for the owner merges the PR", async () => {
+    const { gh, calls } = github([".github/workflows/ci.yml"], { auto_merge: null, labels: [] });
+
+    await ownerMerge(gh, { repository: REPOSITORY, number: 7, headRef: "feat/x", config });
+
+    const body = commentOf(calls);
+    expect(ruleGaps(body)).toEqual([]);
+    expect(body).toContain("The owner merges it after reading its diff");
+    expect(body).not.toContain("never merge it");
+  });
+
+  it("owner-merge's comment on the release PR says only the owner marks it ready and merges it", async () => {
+    const { gh, calls } = github(["CHANGELOG.md", ".release-please-manifest.json"], { auto_merge: null, labels: [] });
+
+    await ownerMerge(gh, { repository: REPOSITORY, number: 7, headRef: RELEASE_BRANCH, config });
+
+    const body = commentOf(calls);
+    expect(body).toContain("only the owner marks it ready and merges it");
+    expect(body).not.toContain("security-review agents");
+  });
+
   it("owner-merge does not trust a marker that someone else wrote", async () => {
     const forged = { user: { login: "someone" }, body: "<!-- desk:owner-merge -->" };
     const { gh, calls } = github([".npmrc"], { auto_merge: null, labels: [] }, [forged]);
@@ -98,6 +119,73 @@ describe("owner-merge", () => {
     { files: ["scripts/lib/build.mjs", "docs/x.md"], ownerMerge: false },
   ])("owner-merge matches owner-merge paths without case ($files)", ({ files, ownerMerge: expected }) => {
     expect(ownerMergeDecision({ files, headRef: "feat/x", config }).ownerMerge).toBe(expected);
+  });
+
+  it.each([
+    { label: "ſ (U+017F), which macOS folds to s, in AGENTS.md", file: "AGENTſ.md" },
+    { label: "ſ in a nested AGENTS.md", file: "docs/AGENTſ.md" },
+    { label: "ſ in .mcp.json", file: ".mcp.jſon" },
+    { label: "ſ in scripts/delivery/", file: "ſcripts/delivery/x.mjs" },
+    { label: "the Kelvin sign (U+212A), which macOS folds to k, in packages/core/src/release/", file: "pacKages/core/src/release/x.ts" },
+    { label: "the ﬆ ligature (U+FB06) in scripts/allowed-install-scripts.json", file: "scripts/allowed-inﬆall-scripts.json" },
+    { label: "fullwidth letters in docs/CONTRIBUTING.md", file: "docs/ＣＯＮＴＲＩＢＵＴＩＮＧ.md" },
+  ])("owner-merge matches owner-merge paths after NFKC normalization and without case, as macOS folds a name to one ($label)", ({ file }) => {
+    expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(true);
+  });
+
+  it.each([
+    "packages/node/CLAUDE.md",
+    "docs/CLAUDE.md",
+    "packages/core/src/AGENTS.md",
+    "docs/agents.md",
+    "AGENTS.override.md",
+    "packages/node/AGENTS.override.md",
+    "CLAUDE.local.md",
+    "packages/node/CLAUDE.local.md",
+    ".cursorrules",
+    "packages/core/.cursorrules",
+    ".mcp.json",
+    "docs/.mcp.json",
+    "packages/node/.claude/settings.json",
+    "packages/core/.cursor/rules/core.mdc",
+    "docs/CONTRIBUTING.md",
+    "docs/contributing.md",
+  ])(
+    "owner-merge treats CLAUDE.md, AGENTS.md and the other agent rules at any depth, CLAUDE.local.md, AGENTS.override.md, .cursorrules, .mcp.json and docs/CONTRIBUTING.md as owner-merge paths (%s)",
+    (file) => {
+      expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(true);
+    },
+  );
+
+  it.each(["CONTRIBUTING.md", "docs/RELEASING.md", "docs/CLAUDE.md.txt", "packages/node/NOTCLAUDE.md", "docs/claude/notes.md", ".mcp.json.example", "AGENTS.override.md.bak"])(
+    "owner-merge leaves a file that only resembles an agent rule alone (%s)",
+    (file) => {
+      expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(false);
+    },
+  );
+
+  it("the delivery scripts read owner-paths.json from beside them", async () => {
+    expect(await readOwnerPaths()).toEqual({ paths: config.paths, branches: config.branches });
+  });
+
+  it.each([
+    { label: "no paths", text: JSON.stringify({ paths: [], branches: [] }) },
+    { label: "a path that is not text", text: JSON.stringify({ paths: [".github/**", 7], branches: [] }) },
+    { label: "no branches", text: JSON.stringify({ paths: [".github/**"] }) },
+    { label: "not JSON", text: "{ paths" },
+  ])("the delivery scripts refuse an owner-paths.json they cannot trust ($label)", async ({ text }) => {
+    const file = join(await mkdtemp(join(tmpdir(), "owner-paths-")), "owner-paths.json");
+    await writeFile(file, text);
+
+    await expect(readOwnerPaths(pathToFileURL(file))).rejects.toThrow(/owner-paths/);
+  });
+
+  it("owner-paths.json spells each path as exact names and whole ** segments", () => {
+    for (const pattern of config.paths) {
+      for (const segment of pattern.split("/")) {
+        expect(segment === "**" || (segment !== "" && !segment.includes("*")), `${pattern}`).toBe(true);
+      }
+    }
   });
 
   const docs = Array.from({ length: 3000 }, (_, i) => `docs/notes/${String(i).padStart(4, "0")}.md`);

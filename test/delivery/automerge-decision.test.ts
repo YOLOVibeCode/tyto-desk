@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { automergeDecision, decideAutomerge } from "../../scripts/delivery/lib/automerge-decision.mjs";
 import { fakeGh, ok } from "./fake-gh.ts";
-import type { RunResult } from "../../scripts/delivery/lib/run.mjs";
+import type { Runner, RunResult } from "../../scripts/delivery/lib/run.mjs";
 import { repo, runScript } from "./helpers.ts";
+import { ownerPaths } from "./owner-paths.ts";
 
 const script = join(repo, "scripts/delivery/automerge-decision.mjs");
 const REPOSITORY = "YOLOVibeCode/tyto-desk";
@@ -46,9 +47,83 @@ const FROM_ACTIONS = [
   { context: "ci-ok", integration_id: 15368 },
 ];
 
-/** gh answering main's active rules with `rules`, one page, or failing. */
+/** The head commit of Dependabot's pull request (#6), as the event names it. */
+const HEAD = "f8e753e9257b286ffb694b44fc40f49f8e39b252";
+
+/** A GitHub account as the commits API names one. */
+type Account = { login: string; id: number; type: string };
+const DEPENDABOT: Account = { login: "dependabot[bot]", id: 49699333, type: "Bot" };
+const WEB_FLOW: Account = { login: "web-flow", id: 19864447, type: "User" };
+const SOMEONE: Account = { login: "alex", id: 1024025, type: "User" };
+
+/**
+ * One entry of `GET repos/<r>/pulls/<n>/commits`, shaped like a real Dependabot commit (#6's f8e753e): authored by
+ * dependabot[bot], committed by GitHub (web-flow, `GitHub <noreply@github.com>`) and signed with GitHub's key, which
+ * GitHub verified (`valid`).
+ */
+function commit(over: { sha?: string; author?: Account | null; committer?: Account | null; verified?: boolean; reason?: string } = {}) {
+  const verified = over.verified ?? true;
+  const committer = over.committer === undefined ? WEB_FLOW : over.committer;
+  return {
+    sha: over.sha ?? HEAD,
+    author: over.author === undefined ? DEPENDABOT : over.author,
+    committer,
+    commit: {
+      author: { name: "dependabot[bot]", email: "49699333+dependabot[bot]@users.noreply.github.com" },
+      committer: committer === WEB_FLOW ? { name: "GitHub", email: "noreply@github.com" } : { name: "Alex", email: "alex@example.test" },
+      verification: { verified, reason: over.reason ?? (verified ? "valid" : "unsigned") },
+    },
+  };
+}
+
+type DependabotPr = {
+  commits?: object[];
+  files?: string[];
+  head?: string;
+  commitCount?: number;
+  changedFiles?: number;
+  rules?: RunResult;
+  failCommits?: boolean;
+};
+
+/** gh against Dependabot's pull request #6 (its commits, files and head) and main's active rules, one page each. */
+function dependabotPr({
+  commits = [commit()],
+  files = ["package-lock.json", "package.json"],
+  head = HEAD,
+  commitCount = commits.length,
+  changedFiles = files.length,
+  rules = ok([[requiredChecks(FROM_ACTIONS)]]),
+  failCommits = false,
+}: DependabotPr = {}) {
+  return fakeGh([
+    {
+      match: new RegExp(`^api --method GET --paginate --slurp repos/${REPOSITORY}/pulls/6/commits\\?per_page=100$`),
+      reply: () => (failCommits ? { code: 1, stdout: "", stderr: "gh: Server Error (HTTP 502)\n" } : ok([commits])),
+    },
+    {
+      match: new RegExp(`^api --method GET --paginate --slurp repos/${REPOSITORY}/pulls/6/files\\?per_page=100$`),
+      reply: () => ok([files.map((filename) => ({ filename }))]),
+    },
+    {
+      match: new RegExp(`^api --method GET repos/${REPOSITORY}/pulls/6$`),
+      reply: () => ok({ number: 6, head: { sha: head }, commits: commitCount, changed_files: changedFiles }),
+    },
+    {
+      match: new RegExp(`^api --method GET --paginate --slurp repos/${REPOSITORY}/rules/branches/main\\?per_page=100$`),
+      reply: () => rules,
+    },
+  ]);
+}
+
+/** gh answering main's active rules with `rules`, one page, or failing; Dependabot's own pull request otherwise. */
 function rulesApi(reply: RunResult) {
-  return fakeGh([{ match: new RegExp(`^api --method GET --paginate --slurp repos/${REPOSITORY}/rules/branches/main\\?per_page=100$`), reply: () => reply }]);
+  return dependabotPr({ rules: reply });
+}
+
+/** The decision for pull request #6 at HEAD. */
+function decide(gh: Runner, updates: unknown[] = [update()]) {
+  return decideAutomerge(gh, { repository: REPOSITORY, number: 6, headSha: HEAD, updates, ownerPaths: ownerPaths.paths });
 }
 
 describe("the auto-merge decision", () => {
@@ -102,20 +177,69 @@ describe("the auto-merge decision", () => {
     async ({ reply, merge }) => {
       const { gh } = rulesApi(reply);
 
-      const decision = await decideAutomerge(gh, { repository: REPOSITORY, updates: [update()] });
+      const decision = await decide(gh);
 
       expect(decision.merge).toBe(merge);
       if (!merge) expect(decision.reason).toContain("interim rule");
     },
   );
 
-  it("the auto-merge decision reads main's rules only for an update it would merge", async () => {
+  it("the auto-merge decision reads nothing for an update it would not merge", async () => {
     const { gh, calls } = rulesApi(ok([[requiredChecks(FROM_ACTIONS)]]));
 
-    const decision = await decideAutomerge(gh, { repository: REPOSITORY, updates: [update({ dependencyName: "esbuild" })] });
+    const decision = await decide(gh, [update({ dependencyName: "esbuild" })]);
 
     expect(decision.merge).toBe(false);
     expect(calls).toEqual([]);
+  });
+
+  const STRANGER = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+  const NOT_AUTHORED = "commit f8e753e is not authored by dependabot[bot]";
+  const NOT_GITHUB = "commit f8e753e is not committed and signed by GitHub (web-flow)";
+  it.each([
+    { label: "a commit someone else authored", pr: { commits: [commit({ sha: STRANGER, author: SOMEONE }), commit()] }, reason: "commit 1a2b3c4 is not authored by dependabot[bot]" },
+    { label: "a commit whose author is no GitHub account", pr: { commits: [commit({ author: null })] }, reason: NOT_AUTHORED },
+    { label: "an author with Dependabot's login but another account id", pr: { commits: [commit({ author: { ...DEPENDABOT, id: 1 } })] }, reason: NOT_AUTHORED },
+    {
+      label: "a commit with Dependabot's author email that someone else committed and signed with their own key",
+      pr: { commits: [commit({ committer: SOMEONE })] },
+      reason: NOT_GITHUB,
+    },
+    { label: "a commit whose committer is no GitHub account", pr: { commits: [commit({ committer: null })] }, reason: NOT_GITHUB },
+    { label: "a committer with web-flow's login but another account id", pr: { commits: [commit({ committer: { ...WEB_FLOW, id: 1 } })] }, reason: NOT_GITHUB },
+    { label: "a commit that names Dependabot but GitHub did not sign", pr: { commits: [commit({ verified: false })] }, reason: NOT_GITHUB },
+    { label: "a verification whose reason is not valid", pr: { commits: [commit({ reason: "unverified_email" })] }, reason: NOT_GITHUB },
+    { label: "more commits than the API listed", pr: { commitCount: 251 }, reason: "the API listed only 1 of its 251 commits" },
+    { label: "commits that end before the event's head", pr: { commits: [commit({ sha: STRANGER })] }, reason: "its commits do not end at the head commit the event named" },
+    { label: "a head that moved after the event", pr: { head: STRANGER }, reason: "its head moved after the event" },
+  ])("the auto-merge decision refuses a PR with a commit that dependabot[bot] did not author or GitHub (web-flow) did not commit and sign, or a head it did not judge ($label)", async ({ pr, reason }) => {
+    const { gh } = dependabotPr(pr);
+
+    expect(await decide(gh)).toEqual({ merge: false, reason });
+  });
+
+  it.each([
+    { label: "a workflow", pr: { files: [".github/workflows/ci.yml", "package.json"] }, reason: "it is owner-merge (.github/**)" },
+    { label: "a nested CLAUDE.md", pr: { files: ["package.json", "packages/node/CLAUDE.md"] }, reason: "it is owner-merge (**/CLAUDE.md)" },
+    { label: "the agent rules in docs/CONTRIBUTING.md", pr: { files: ["docs/CONTRIBUTING.md"] }, reason: "it is owner-merge (docs/CONTRIBUTING.md)" },
+    { label: "a file list the API cut short", pr: { files: ["package.json"], changedFiles: 3001 }, reason: "it is owner-merge (the API listed only 1 of 3001 files)" },
+  ])("the auto-merge decision refuses a PR that touches an owner-merge path ($label)", async ({ pr, reason }) => {
+    const { gh } = dependabotPr(pr);
+
+    expect(await decide(gh)).toEqual({ merge: false, reason });
+  });
+
+  it("the auto-merge decision refuses a PR it cannot read", async () => {
+    const { gh } = dependabotPr({ failCommits: true });
+
+    expect(await decide(gh)).toEqual({ merge: false, reason: "the pull request's commits, files or head could not be read" });
+  });
+
+  it("the auto-merge decision turns auto-merge on for Dependabot's own patch of an allowlisted dev tool, read through the API", async () => {
+    const { gh, calls } = dependabotPr();
+
+    expect(await decide(gh)).toEqual({ merge: true, reason: "patch updates of allowlisted dev tools" });
+    for (const call of calls) expect(call.args.slice(0, 3)).toEqual(["api", "--method", "GET"]);
   });
 
   it("the auto-merge decision reaches the workflow as one safe line per output", async () => {
@@ -130,6 +254,20 @@ describe("the auto-merge decision", () => {
     expect(result.code).toBe(0);
     expect(await readFile(output, "utf8")).toBe(
       "merge=false\nreason=evilmergetruex is not a patch update of an allowlisted dev tool (@types/*, typescript, vitest, yaml)\n",
+    );
+  });
+
+  it("the auto-merge decision refuses an allowed update when the workflow names no pull request and head commit", async () => {
+    const output = join(await mkdtemp(join(tmpdir(), "automerge-")), "output");
+    await writeFile(output, "");
+
+    const result = await runScript(script, [], {
+      env: { PATH: process.env.PATH ?? "", GITHUB_OUTPUT: output, UPDATED_DEPENDENCIES_JSON: JSON.stringify([update()]), REPOSITORY },
+    });
+
+    expect(result.code).toBe(0);
+    expect(await readFile(output, "utf8")).toBe(
+      "merge=false\nreason=the workflow named no pull request and head commit (REPOSITORY, PR_NUMBER, PR_HEAD_SHA)\n",
     );
   });
 });

@@ -73,9 +73,26 @@ Branches, pull requests and the rules for agents: `docs/CONTRIBUTING.md`. Versio
 - Until `node scripts/delivery/github-setup.mjs` (its `--check`) is clean, never pass `--auto`: merge with
   `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>`. Afterwards,
   `gh pr merge --auto --squash` right after `gh pr create`.
-- Never merge a PR labeled `owner-merge`, turn its auto-merge on, or remove the label. A change to an owner-merge path
-  (`scripts/delivery/owner-paths.json`: `.github/`, `scripts/delivery/`, the agent rules, …) goes in its own PR and
-  waits for the owner.
+- Never turn on the auto-merge of a PR labeled `owner-merge`, or remove the label. The owner merges one, or the agent
+  session acting for the owner merges it with the owner's `gh` login, by the owner's decision of 2026-10-07: "I merge
+  them with your gh login, but only after all checks pass AND a separate security-review agent reads the sensitive
+  files' diff and signs off. A refusal stops the merge and I tell you why." (IMPLEMENTATION §23.1, D81; CONTRIBUTING
+  rule 6). The session merges only when:
+  1. every check is green on its exact head SHA;
+  2. at least two independent security-review agents (not its author) each read the full diff of every owner-merge
+     path it changes and posted a verdict comment, APPROVE or APPROVE_WITH_NITS, that names the full 40-character head
+     SHA and lists the owner-merge files it read;
+  3. only verdict comments posted by the owner's GitHub login count (check each comment's `user.login`): the
+     repository is public, and anyone can post text;
+  4. no REFUSE stands: a REFUSE stops the merge, and the session tells the owner which review refused and why before
+     doing anything else;
+  5. a REFUSE keeps blocking, on its head and every later head, until a later approving review names each of its
+     blocking reasons as resolved;
+  6. the merge is `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or `--admin`; only the
+     operator runs `github-setup.mjs --apply`, and the release PR is never auto-merged.
+
+  Nits become follow-ups. A change to an owner-merge path (`scripts/delivery/owner-paths.json`: `.github/`,
+  `scripts/delivery/`, the agent rules at any depth, `docs/CONTRIBUTING.md`, …) goes in its own PR.
 - Never merge the release PR, mark it ready, turn its auto-merge on, or push to its branch. Never approve a deployment.
 - Never edit package.json's `version`, package-lock.json's root version, `.release-please-manifest.json`, or
   `CHANGELOG.md`: release-please owns them.

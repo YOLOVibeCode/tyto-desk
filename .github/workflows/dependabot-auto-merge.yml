@@ -1,9 +1,11 @@
-# Dependabot auto-merge (docs/IMPLEMENTATION.md §23.7, D44, D54). Only for Dependabot's own pull requests from this
-# repository: fetch-metadata (never skip-verification) reads what changed, main's dependency-free
-# automerge-decision.mjs decides, and only patch updates of allowlisted dev tools (@types/*, typescript, vitest, yaml),
-# every member of a group included, get auto-merge, and only once main's rules require pr-title and ci-ok (the interim
-# rule: until then gh pr merge --auto would merge at once, before the checks). Any other gets a comment naming why the
-# owner merges it. No npm ci, no checkout of the pull request.
+# Dependabot auto-merge (docs/IMPLEMENTATION.md §23.7, D44, D54, D83). Only for Dependabot's own pull requests from this
+# repository, and only on events Dependabot itself sent (a push by anyone else never turns auto-merge back on):
+# fetch-metadata (never skip-verification) reads what changed, and main's dependency-free automerge-decision.mjs
+# decides. Only patch updates of allowlisted dev tools (@types/*, typescript, vitest, yaml), every member of a group
+# included, whose every commit dependabot[bot] authored and GitHub itself (web-flow) committed and signed, and which
+# touch no owner-merge path, get auto-merge, for the head commit the decision judged alone, and only once main's rules
+# require pr-title and ci-ok (the interim rule: until then gh pr merge --auto would merge at once, before the checks).
+# Any other gets a comment naming why the owner merges it. No npm ci, no checkout of the pull request.
 name: dependabot-auto-merge
 
 on:
@@ -18,7 +20,10 @@ concurrency:
 
 jobs:
   automerge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.sender.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -36,19 +41,22 @@ jobs:
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
-      - name: Does it merge itself? (the update class, then main's rules, read-only)
+      - name: Does it merge itself? (the update class, the pull request's commits and files, then main's rules; read-only)
         id: decision
         env:
           UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/delivery/automerge-decision.mjs
-      - name: Turn on auto-merge (squash)
+      - name: Turn on auto-merge (squash), for the head commit the decision judged
         if: steps.decision.outputs.merge == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: gh pr merge --auto --squash --match-head-commit "$PR_HEAD_SHA" "$PR_URL"
       - name: Say why the owner merges this one
         if: steps.decision.outputs.merge != 'true' && github.event.action != 'synchronize'
         env:
@@ -56,4 +64,4 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           REASON: ${{ steps.decision.outputs.reason }}
         run: |
-          gh pr comment "$PR_URL" --body "The owner merges this one by hand: $REASON (IMPLEMENTATION §23.7, D44)."
+          gh pr comment "$PR_URL" --body "The owner merges this one by hand: $REASON (IMPLEMENTATION §23.7, D44, D83)."

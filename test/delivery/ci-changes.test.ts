@@ -5,8 +5,10 @@ import { describe, expect, it } from "vitest";
 import { classifyChanges, pullRequestChanges } from "../../scripts/delivery/lib/ci-changes.mjs";
 import { fakeGh, ok } from "./fake-gh.ts";
 import { repo, runScript } from "./helpers.ts";
+import { ownerPathExamples, ownerPaths } from "./owner-paths.ts";
 
 const ciChanges = join(repo, "scripts/delivery/ci-changes.mjs");
+const OWNER_PATHS = ownerPaths.paths;
 
 describe("change detection", () => {
   it.each([
@@ -14,8 +16,8 @@ describe("change detection", () => {
     [["docs/IMPLEMENTATION.md", "docs/checklist-results/run-b.json", "docs/img/flow.png"]],
     [["README.md", "LICENSE"]],
     [["CONTRIBUTING.md", "docs/RELEASING.md"]],
-  ])("change detection calls a PR docs-only only when it touches nothing but docs/, root Markdown other than CLAUDE.md and AGENTS.md, and LICENSE (%j)", (files) => {
-    expect(classifyChanges(files, { listed: files.length, expected: files.length })).toEqual({ code: false });
+  ])("change detection calls a PR docs-only only when it touches nothing but docs/, root Markdown and LICENSE, and no owner-merge path (%j)", (files) => {
+    expect(classifyChanges(files, { listed: files.length, expected: files.length, ownerPaths: OWNER_PATHS })).toEqual({ code: false });
   });
 
   it.each([
@@ -34,14 +36,26 @@ describe("change detection", () => {
     "docs",
     "README.MD",
   ])("change detection calls a PR that changes ci-changes.mjs, a workflow, a package file or an agent rule code (%s)", (file) => {
-    expect(classifyChanges(["docs/SPEC.md", file], { listed: 2, expected: 2 }).code).toBe(true);
+    expect(classifyChanges(["docs/SPEC.md", file], { listed: 2, expected: 2, ownerPaths: OWNER_PATHS }).code).toBe(true);
+  });
+
+  it.each([
+    ...ownerPathExamples(["docs", "docs/notes"]),
+    ["**/CLAUDE.md", "docs/claude.md"],
+    ["docs/CONTRIBUTING.md", "docs/CONTRIBUTING.md"],
+    ["**/AGENTS.override.md", "AGENTS.override.md"],
+    ["**/AGENTS.override.md", "docs/AGENTS.override.md"],
+    ["**/AGENTS.md (ſ, which macOS folds to s)", "AGENTſ.md"],
+    ["**/CLAUDE.md (fullwidth letters)", "docs/ＣＬＡＵＤＥ.md"],
+  ])("change detection never calls an owner-merge path docs-only (%s: %s)", (_pattern, file) => {
+    expect(classifyChanges(["docs/SPEC.md", file], { listed: 2, expected: 2, ownerPaths: OWNER_PATHS }).code).toBe(true);
   });
 
   it.each([
     { label: "3,000 of 3,001 files", files: ["docs/SPEC.md"], listed: 3000, expected: 3001 },
     { label: "no files", files: [], listed: 0, expected: 0 },
   ])("change detection calls a PR code when the API listed fewer files than it changes, or none ($label)", ({ files, listed, expected }) => {
-    expect(classifyChanges(files, { listed, expected }).code).toBe(true);
+    expect(classifyChanges(files, { listed, expected, ownerPaths: OWNER_PATHS }).code).toBe(true);
   });
 
   const HEAD = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
@@ -66,7 +80,7 @@ describe("change detection", () => {
       { sha: HEAD, changedFiles: 2 },
     );
 
-    const changes = await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD });
+    const changes = await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD, ownerPaths: OWNER_PATHS });
 
     expect(changes).toEqual({ code: true });
     expect(calls.map((call) => call.args.at(-1))).toEqual([
@@ -78,7 +92,7 @@ describe("change detection", () => {
   it("change detection calls a docs-only PR docs-only when its head is still the event's", async () => {
     const { gh } = pullRequest([[{ filename: "docs/SPEC.md" }]], { sha: HEAD, changedFiles: 1 });
 
-    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD })).toEqual({ code: false });
+    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD, ownerPaths: OWNER_PATHS })).toEqual({ code: false });
   });
 
   it.each([
@@ -87,7 +101,7 @@ describe("change detection", () => {
   ])("change detection calls a PR code when the files it read may not be the event's head commit's ($label)", async ({ headSha, apiHead }) => {
     const { gh } = pullRequest([[{ filename: "docs/SPEC.md" }]], { sha: apiHead, changedFiles: 1 });
 
-    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha })).toEqual({ code: true });
+    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha, ownerPaths: OWNER_PATHS })).toEqual({ code: true });
   });
 
   it("change detection calls every push to main code, without reading anything", async () => {

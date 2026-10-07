@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkTitleAndBranch, checkWorkflowFiles, ghPullRequestSource } from "../../scripts/delivery/lib/pr-check.mjs";
 import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
+import type { Runner, RunResult } from "../../scripts/delivery/lib/run.mjs";
 import { fakeGh, notFound, ok } from "./fake-gh.ts";
 import { repo, runScript } from "./helpers.ts";
 
@@ -205,6 +206,83 @@ describe("the PR check", () => {
     { label: "an annotated tag", tags: { "actions/checkout@v7.0.1": { annotated: TAG_OBJECT, commit: CHECKOUT_SHA } } },
   ])("the PR check passes a pinned action whose SHA is the commit its tag names ($label)", async ({ tags }) => {
     expect((await workflowProblems({ "ci.yml": workflow() }, tags)).problems).toEqual([]);
+  });
+
+  const many = (count: number, make: (i: number) => [string, string]) => Object.fromEntries(Array.from({ length: count }, (_, i) => make(i)));
+
+  it.each([
+    { count: 25, problems: [] },
+    {
+      count: 26,
+      problems: [".github/workflows  [cap] the head has 26 workflow files; the PR check reads at most 25, so it fails closed"],
+    },
+  ])("the PR check reads at most 25 workflow files and fails closed above that, reading none ($count files)", async ({ count, problems }) => {
+    const files = many(count, (i) => [`w${String(i).padStart(2, "0")}.yml`, workflow()]);
+
+    const result = await workflowProblems(files);
+
+    expect(result.problems).toEqual(problems);
+    const reads = result.calls.filter((call) => call.args.includes("Accept: application/vnd.github.raw"));
+    expect(reads).toHaveLength(count > 25 ? 0 : count);
+  });
+
+  /** A workflow whose one job pins `count` distinct actions, each to the commit its tag names. */
+  function pinning(count: number): { text: string; tags: Record<string, Tag> } {
+    const sha = (i: number) => i.toString(16).padStart(40, "a");
+    const steps = Array.from({ length: count }, (_, i) => `      - uses: example/action-${i}@${sha(i)} # v1.0.0`);
+    const tags = many(count, (i) => [`example/action-${i}@v1.0.0`, sha(i)]);
+    return { text: `${workflow()}${steps.join("\n")}\n`, tags: { ...tags, "actions/checkout@v7.0.1": CHECKOUT_SHA } };
+  }
+
+  it.each([
+    { count: 24, problems: [] },
+    {
+      count: 25,
+      problems: [
+        ".github/workflows  [cap] the workflow files pin 26 distinct actions (action and tag); the PR check looks up at most 25, so it fails closed",
+      ],
+    },
+  ])(
+    "the PR check looks up at most 25 distinct pinned actions and fails closed above that, looking up none ($count pins besides checkout)",
+    async ({ count, problems }) => {
+      const { text, tags } = pinning(count);
+
+      const result = await workflowProblems({ "ci.yml": text }, tags);
+
+      expect(result.problems).toEqual(problems);
+      const lookups = result.calls.filter((call) => /\/git\/ref\/tags\//.test(call.args.join(" ")));
+      expect(lookups).toHaveLength(count + 1 > 25 ? 0 : count + 1);
+    },
+  );
+
+  it("the PR check fails closed when the API may not have listed every entry of .github/workflows (1,000 or more)", async () => {
+    const entries = Array.from({ length: 1000 }, (_, i) => ({ name: `n${i}.txt`, path: `.github/workflows/n${i}.txt`, type: "file" }));
+    const fake = fakeGh([{ match: /contents\/\.github\/workflows\?ref=/, reply: () => ok(entries) }]);
+
+    const problems = await checkWorkflowFiles(ghPullRequestSource(fake.gh, { repository: REPOSITORY, headSha: HEAD }));
+
+    expect(problems).toEqual([
+      ".github/workflows  [cap] the API listed 1000 entries of .github/workflows, the most it lists, so a workflow may be missing; the PR check fails closed",
+    ]);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  /** What gh reports once the hour's GITHUB_TOKEN quota, which every workflow of the repository shares, is spent. */
+  const rateLimited = (): RunResult => ({
+    code: 1,
+    stdout: '{"message":"API rate limit exceeded for installation ID 1.","status":"403"}',
+    stderr: "gh: API rate limit exceeded for installation ID 1. (HTTP 403)\n",
+  });
+
+  it.each([
+    { label: "the listing of .github/workflows", refused: /contents\/\.github\/workflows\?ref=/ },
+    { label: "a workflow file", refused: /application\/vnd\.github\.raw/ },
+    { label: "a pin's tag", refused: /\/git\/ref\/tags\// },
+  ])("the PR check fails closed when the API refuses a request, as once the hour's shared GITHUB_TOKEN quota is spent ($label)", async ({ refused }) => {
+    const { gh } = github({ "ci.yml": workflow() });
+    const limited: Runner = async (args, options) => (refused.test(args.join(" ")) ? rateLimited() : gh(args, options));
+
+    await expect(checkWorkflowFiles(ghPullRequestSource(limited, { repository: REPOSITORY, headSha: HEAD }))).rejects.toThrow(/HTTP 403/);
   });
 
   it("the PR check passes a PR whose head has no workflow directory", async () => {

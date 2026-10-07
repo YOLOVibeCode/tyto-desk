@@ -16,6 +16,20 @@ export const TITLE_MAX = 72;
 /** A tag of a tag of … a commit: more levels than this is no pin anyone writes. */
 const MAX_TAG_DEPTH = 5;
 
+/**
+ * What one run of the check reads (D85). `pr-title` runs on `pull_request_target`, on fork pull requests too, with the
+ * repository's `GITHUB_TOKEN`, whose REST quota (1,000 requests an hour) every workflow shares, so one run reads at most
+ * 25 workflow files and looks up at most 25 distinct pins (action and tag), each a ref and up to five peels: at most
+ * 1 + 25 + 25 × 6 = 176 requests. Above either cap it fails closed, reading or looking up none of them, and a request
+ * the API refuses (a spent quota too) throws, which fails the check. The cap bounds a run, not the hour: nothing limits
+ * how many runs fork pull requests start, and six full runs spend the hour's quota. That denies service until the hour
+ * resets and never passes a check.
+ */
+export const MAX_WORKFLOW_FILES = 25;
+export const MAX_PINS = 25;
+/** The contents API lists at most this many entries of a directory, so a listing this long may be missing some. */
+export const LISTING_LIMIT = 1000;
+
 const TITLE = new RegExp(`^(?:${TYPES.join("|")})(?:\\(([a-z0-9-]+)\\))?!?: \\S`);
 const SLICE_BRANCH = /^slice-([a-z0-9]+)\/[a-z0-9-]{1,50}$/;
 const PEOPLE_BRANCH = /^(?:feat|fix|docs|ci|chore)\/[a-z0-9-]{1,50}$/;
@@ -54,9 +68,11 @@ export function checkTitleAndBranch({ title, branch, fork }) {
 }
 
 /**
- * Where the PR check reads a pull request's head: its workflow files, and the commit an action's tag names.
+ * Where the PR check reads a pull request's head: the workflow directory's listing (the workflow files' paths, and how
+ * many entries the API listed), each workflow file, and the commit an action's tag names.
  * @typedef {{
- *   workflowFiles(): Promise<WorkflowFile[]>;
+ *   workflowPaths(): Promise<{ paths: string[]; entries: number }>;
+ *   workflowText(path: string): Promise<string>;
  *   tagCommit(repo: string, tag: string): Promise<string | null>;
  * }} PullRequestSource
  */
@@ -81,29 +97,33 @@ function gitObject(value) {
  */
 export function ghPullRequestSource(gh, { repository, headSha }) {
   return {
-    async workflowFiles() {
+    async workflowPaths() {
       const list = await gh(["api", "--method", "GET", `repos/${repository}/contents/.github/workflows?ref=${headSha}`]);
-      if (isNotFound(list)) return [];
+      if (isNotFound(list)) return { paths: [], entries: 0 };
       if (list.code !== 0) throw new GhError(["api", "contents/.github/workflows"], list);
-      const entries = JSON.parse(list.stdout);
-      /** @type {WorkflowFile[]} */
-      const files = [];
-      for (const entry of Array.isArray(entries) ? entries : []) {
+      const parsed = JSON.parse(list.stdout);
+      const entries = Array.isArray(parsed) ? parsed : [];
+      /** @type {string[]} */
+      const paths = [];
+      for (const entry of entries) {
         const { name, path, type } = /** @type {{ name?: unknown; path?: unknown; type?: unknown }} */ (entry ?? {});
         if (type !== "file" || typeof name !== "string" || typeof path !== "string" || !/\.ya?ml$/.test(name)) continue;
-        const args = [
-          "api",
-          "--method",
-          "GET",
-          "-H",
-          "Accept: application/vnd.github.raw",
-          `repos/${repository}/contents/${encodePath(path)}?ref=${headSha}`,
-        ];
-        const file = await gh(args);
-        if (file.code !== 0) throw new GhError(args, file);
-        files.push({ path, text: file.stdout });
+        paths.push(path);
       }
-      return files.sort((a, b) => a.path.localeCompare(b.path));
+      return { paths: paths.sort((a, b) => a.localeCompare(b)), entries: entries.length };
+    },
+    async workflowText(path) {
+      const args = [
+        "api",
+        "--method",
+        "GET",
+        "-H",
+        "Accept: application/vnd.github.raw",
+        `repos/${repository}/contents/${encodePath(path)}?ref=${headSha}`,
+      ];
+      const file = await gh(args);
+      if (file.code !== 0) throw new GhError(args, file);
+      return file.stdout;
     },
     async tagCommit(repo, tag) {
       const ref = ["api", "--method", "GET", `repos/${encodePath(repo)}/git/ref/tags/${encodePath(tag)}`];
@@ -126,28 +146,47 @@ export function ghPullRequestSource(gh, { repository, headSha }) {
 }
 
 /**
- * Applies the workflow rules to the pull request's workflow files and checks each pinned SHA against its tag.
+ * Applies the workflow rules to the pull request's workflow files and checks each pinned SHA against its tag, within
+ * the caps (MAX_WORKFLOW_FILES, MAX_PINS): above one, or when the listing may be cut short, it fails closed.
  * @param {PullRequestSource} source
  * @returns {Promise<string[]>} one line per problem: `file:line  [rule] detail`
  */
 export async function checkWorkflowFiles(source) {
-  const files = await source.workflowFiles();
+  const cap = ".github/workflows  [cap]";
+  const { paths, entries } = await source.workflowPaths();
+  if (entries >= LISTING_LIMIT) {
+    return [
+      `${cap} the API listed ${entries} entries of .github/workflows, the most it lists, so a workflow may be missing; the PR check fails closed`,
+    ];
+  }
+  if (paths.length > MAX_WORKFLOW_FILES) {
+    return [`${cap} the head has ${paths.length} workflow files; the PR check reads at most ${MAX_WORKFLOW_FILES}, so it fails closed`];
+  }
+  /** @type {WorkflowFile[]} */
+  const files = [];
+  for (const path of paths) files.push({ path, text: await source.workflowText(path) });
   const problems = checkWorkflows(files).map((v) => `${v.file}:${v.line ?? "?"}  [${v.rule}] ${v.detail}`);
+  const pins = files.flatMap((file) => actionPins(file.text).map((pin) => ({ file, pin })));
+  const distinct = new Set(pins.map(({ pin }) => `${pin.repo}@${pin.tag}`));
+  if (distinct.size > MAX_PINS) {
+    problems.push(
+      `${cap} the workflow files pin ${distinct.size} distinct actions (action and tag); the PR check looks up at most ${MAX_PINS}, so it fails closed`,
+    );
+    return problems;
+  }
   /** @type {Map<string, Promise<string | null>>} */
   const tags = new Map();
-  for (const file of files) {
-    for (const pin of actionPins(file.text)) {
-      const key = `${pin.repo}@${pin.tag}`;
-      let commit = tags.get(key);
-      if (commit === undefined) {
-        commit = source.tagCommit(pin.repo, pin.tag);
-        tags.set(key, commit);
-      }
-      const named = await commit;
-      const where = `${file.path}:${pin.line ?? "?"}  [pinned-sha]`;
-      if (named === null) problems.push(`${where} ${pin.repo} has no tag ${pin.tag}`);
-      else if (named !== pin.sha) problems.push(`${where} ${pin.repo}@${pin.sha} is not ${pin.tag}, which names ${named}`);
+  for (const { file, pin } of pins) {
+    const key = `${pin.repo}@${pin.tag}`;
+    let commit = tags.get(key);
+    if (commit === undefined) {
+      commit = source.tagCommit(pin.repo, pin.tag);
+      tags.set(key, commit);
     }
+    const named = await commit;
+    const at = `${file.path}:${pin.line ?? "?"}  [pinned-sha]`;
+    if (named === null) problems.push(`${at} ${pin.repo} has no tag ${pin.tag}`);
+    else if (named !== pin.sha) problems.push(`${at} ${pin.repo}@${pin.sha} is not ${pin.tag}, which names ${named}`);
   }
   return problems;
 }

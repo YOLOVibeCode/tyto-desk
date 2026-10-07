@@ -2,14 +2,18 @@
 
 The contract is [IMPLEMENTATION §23](./IMPLEMENTATION.md#23-delivery-branches-versions-deploy-paths-releases); this
 page is the runbook. Pull requests merge themselves when their checks pass, except changes to the pipeline and the
-agent rules, which you merge. release-please keeps a draft release PR open. When you want a release, you read what
-changed and merge that PR; CI builds and tests it, then waits for you to approve publication; your Mac takes it with
-`desk update`.
+agent rules, which you merge, or your agent session merges for you by your rule (IMPLEMENTATION D81: every check green
+on the exact head SHA and two independent security reviews of the full diff of every owner-merge path; a REFUSE stops
+the merge until a later review resolves it, and the session tells you why). release-please keeps a draft release PR
+open. When you want a release, you read what changed and merge that PR; CI builds and tests it, then waits for you to
+approve publication; your Mac takes it with `desk update`.
 
 > **TL;DR**
 >
 > 1. Land work as PRs titled with Conventional Commits (`feat(slice-1c): …`, `fix: …`). They merge themselves once
->    `pr-title` and `ci-ok` pass; a PR labeled `owner-merge` waits for you.
+>    `pr-title` and `ci-ok` pass; a PR labeled `owner-merge` waits for you, or for your agent session once every check
+>    is green on its exact head SHA and two independent security reviews of its full owner-merge diff approved that
+>    SHA, with no REFUSE left unresolved (D81).
 > 2. release-please keeps a draft `chore(main): release X.Y.Z` open with the changelog, and the live suite runs on it.
 >    When you want the release, read what changed (pre-flight), then
 >    `gh pr ready <n> && gh pr merge <n> --squash --match-head-commit <sha>`.
@@ -110,10 +114,18 @@ not that anyone read it. A stable release is the version you read and chose to c
   git log --oneline vPREV..origin/main
   git diff --stat vPREV..origin/main -- .github scripts/delivery packages/core/src/release \
     scripts/allowed-install-scripts.json .npmrc .gitleaks.toml scripts/lib/secrets.mjs package.json \
-    package-lock.json release-please-config.json CLAUDE.md AGENTS.md .claude .cursor
+    package-lock.json release-please-config.json docs/CONTRIBUTING.md \
+    ':(glob,icase)**/CLAUDE.md' ':(glob,icase)**/CLAUDE.local.md' ':(glob,icase)**/AGENTS.md' \
+    ':(glob,icase)**/AGENTS.override.md' ':(glob,icase)**/.claude/**' ':(glob,icase)**/.cursor/**' \
+    ':(glob,icase)**/.cursorrules' ':(glob,icase)**/.mcp.json'
+  git -c core.quotePath=false diff --name-only vPREV..origin/main | LC_ALL=C grep '[^ -~]'
   ```
 
-  Read every change to those paths in full (`git diff vPREV..origin/main -- <path>`) before you merge.
+  Those are the owner-merge paths (`scripts/delivery/owner-paths.json`; the agent rules count at any depth) and the
+  package files. `icase` folds ASCII letters only, while owner-merge folds names as macOS reads them (NFKC, then
+  without case, D82), so the last command lists every changed path with a character outside ASCII: read each as an
+  owner-merge path too. Read every change to them in full (`git diff vPREV..origin/main -- <path>`) before you merge,
+  those your agent session merged after its reviews (D81) included.
 - [ ] Read its `CHANGELOG.md` diff. A wrong section or a missing entry means a merged PR's title was wrong: add a
       `BEGIN_COMMIT_OVERRIDE` … `END_COMMIT_OVERRIDE` block with the right Conventional Commit to that merged PR's
       body, then `gh workflow run release-please.yml`. Never edit the changelog in the release PR.

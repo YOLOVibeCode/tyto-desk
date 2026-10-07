@@ -2,8 +2,9 @@
 # (stable). `test` runs the checks on macos-26; `pack` stamps the build and packs the runtime from a checkout of exactly
 # `ref`, with no cache. Until slice 1c adds `npm run pack` there is no runtime: `pack` stamps, reports
 # runtime=false, and uploads nothing. Until slice D2 adds scripts/delivery/install.sh it reports installer=false, and
-# ci-ok keeps the release PR red on either (D58, D67). DESK_NO_GUI=1: neither job starts the Chrome the runner image
-# ships.
+# ci-ok keeps the release PR red on either (D58, D67). `pack` hands on its artifact's id and sha256 digest, so edge's
+# `attest` and release's `publish` take exactly the bytes it uploaded, never an artifact another job of the run
+# uploaded under its name (D86). DESK_NO_GUI=1: neither job starts the Chrome the runner image ships.
 name: build-darwin
 
 on:
@@ -31,6 +32,12 @@ on:
       version:
         description: The stamped version
         value: ${{ jobs.pack.outputs.version }}
+      artifact-id:
+        description: The id of the artifact pack uploaded; attest and publish download it by this id alone (D86)
+        value: ${{ jobs.pack.outputs.artifact-id }}
+      artifact-digest:
+        description: The sha256 of the artifact pack uploaded, as upload-artifact reports it; checked before attest and publish (D86)
+        value: ${{ jobs.pack.outputs.artifact-digest }}
 
 permissions: {}
 
@@ -66,6 +73,8 @@ jobs:
       runtime: ${{ steps.runtime.outputs.runtime }}
       installer: ${{ steps.runtime.outputs.installer }}
       version: ${{ steps.stamp.outputs.version }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,6 +140,7 @@ jobs:
           fi
           echo "Desk $VERSION ($CHANNEL): packed $tarball." >> "$GITHUB_STEP_SUMMARY"
       - name: Upload the runtime (pr 7 days, edge 30, dry run 1, a release until it is published)
+        id: upload
         if: steps.runtime.outputs.runtime == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
