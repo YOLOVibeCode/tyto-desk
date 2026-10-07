@@ -71,11 +71,29 @@ const DEFAULT_TAG_PREFIX = "tag:yaml.org,2002:";
 /** git's own options that take the next word as their value, before the subcommand. */
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source"]);
 
-/** git subcommands that bring commits or files onto the runner (`git remote` only to update or `add -f`). */
-const GIT_FETCHES = new Set(["fetch", "fetch-pack", "checkout", "switch", "worktree", "clone", "pull", "restore"]);
+/**
+ * git subcommands that bring commits or files onto the runner, or apply a diff or patches there (`git remote` only to
+ * update or `add -f`).
+ */
+const GIT_BRINGS_CODE = new Set(["fetch", "fetch-pack", "checkout", "switch", "worktree", "clone", "pull", "restore", "apply", "am"]);
+
+/** `gh api` options that take the next word as their value. */
+const GH_API_VALUE_OPTIONS = new Set([
+  "-H", "--header", "-X", "--method", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq", "-t", "--template",
+  "--hostname", "-p", "--preview", "--cache",
+]);
+
+/** `env` options that take the next word as their value. */
+const ENV_VALUE_OPTIONS = new Set(["-u", "--unset", "-C", "--chdir", "-P"]);
 
 /** Shells whose flags and `-c` scripts the rules read. */
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "mksh"]);
+
+/**
+ * Variables a shell reads as it starts: SHELLOPTS turns set options on (xtrace among them), and BASH_ENV (bash) and ENV
+ * (sh) name a file it runs first, which can turn tracing on.
+ */
+const SHELL_START_VARIABLES = new Set(["SHELLOPTS", "BASH_ENV", "ENV"]);
 
 /**
  * A pull request's ref in any word: `refs/pull/…`, or `pull/<n>/head` and `pull/<n>/merge` as a word or a refspec's
@@ -85,6 +103,9 @@ const PULL_REF = /refs\/pull\/|(?:^|[\s:+"'=])pull\/[^\s/]+\/(?:head|merge)(?![\
 
 /** A download of a repository's code as an archive: the REST API's tarball and zipball, codeload, `/archive/`. */
 const CODE_ARCHIVE = /\/(?:tarball|zipball)(?:[/?]|$)|codeload\.github\.com|github\.com\/\S*\/archive\//i;
+
+/** A download of a file as it is at some commit: raw.githubusercontent.com (media. for LFS), or github.com's `/raw/`. */
+const RAW_DOWNLOAD = /(?:raw|media)\.githubusercontent\.com|github\.com\/\S*(?:\/raw\/|[?&]raw=)/i;
 
 /** Jobs whose output is attested or published: no cache may feed them, privileged or not. */
 const NO_CACHE_JOBS = new Set(["pack", "attest", "publish"]);
@@ -257,22 +278,119 @@ function npmInstallWithScripts(words) {
   return !ignoresScripts(rest);
 }
 
-/** Whether a simple command prints the environment or traces commands. @param {string[]} words */
-function printsEnvironment(words) {
+/** How many `-c`, `eval` or `env` scripts deep the rules read a command. */
+const MAX_SCRIPT_DEPTH = 3;
+
+/** An option name as bash and zsh compare it: zsh ignores case and underscores (`XTRACE`, `x_trace`). @param {string | undefined} name */
+function optionName(name) {
+  return (name ?? "").toLowerCase().replace(/_/g, "");
+}
+
+/**
+ * Whether a shell's or `set`'s arguments turn tracing on: a flag cluster with `x` (`-x`, `-ex`, `-eox`), `-o xtrace`
+ * (also at the end of a cluster, `-eo xtrace`, and as zsh spells it, `-o XTRACE`), or zsh's `--xtrace`. With `plus`,
+ * as `set` is read, a `+` cluster counts too, though `set +x` turns tracing off.
+ * @param {readonly string[]} args
+ * @param {{ plus?: boolean }} [options]
+ */
+function traceFlags(args, { plus = false } = {}) {
+  const sign = plus ? "[-+]" : "-";
+  const cluster = new RegExp(`^${sign}[a-zA-Z]*x[a-zA-Z]*$`);
+  const option = new RegExp(`^${sign}[a-zA-Z]*o$`);
+  return args.some((w, i) => cluster.test(w) || optionName(w) === "--xtrace" || (option.test(w) && optionName(args[i + 1]) === "xtrace"));
+}
+
+/**
+ * Whether a SHELLOPTS value turns tracing on (bash reads it from the environment at start), or may: one built from a
+ * variable or an expression, which the rules cannot read.
+ * @param {unknown} value
+ */
+function tracingShellOptions(value) {
+  return typeof value === "string" && (/[$`]/.test(value) || value.split(":").some((name) => optionName(name) === "xtrace"));
+}
+
+/**
+ * Whether a word sets a variable that makes a shell trace, or run a file, as it starts: SHELLOPTS that traces
+ * (tracingShellOptions), or BASH_ENV or ENV with any value, as `NAME=value` or as `NAME<<EOF`, the multiline form of a
+ * `$GITHUB_ENV` line. Any word counts, so an assignment before a command, `export`, `env` and
+ * `echo "…" >> "$GITHUB_ENV"` all do.
+ * @param {string} word
+ */
+function tracingAssignment(word) {
+  const match = /^([A-Za-z_][A-Za-z0-9_]*)(=|<<)([\s\S]*)$/.exec(word);
+  if (match === null || !SHELL_START_VARIABLES.has(match[1] ?? "")) return false;
+  return match[1] !== "SHELLOPTS" || match[2] === "<<" || tracingShellOptions(match[3]);
+}
+
+/**
+ * Whether an `env:` mapping (a workflow's, a job's or a step's) sets SHELLOPTS that traces, BASH_ENV or ENV
+ * (tracingAssignment), or is an expression the rules cannot read.
+ * @param {unknown} env
+ */
+function tracingEnvironment(env) {
+  if (typeof env === "string") return true;
+  const record = asRecord(env);
+  if (record === null) return false;
+  return Object.entries(record).some(([name, value]) => SHELL_START_VARIABLES.has(name) && (name !== "SHELLOPTS" || tracingShellOptions(value)));
+}
+
+/**
+ * The command `env` runs, past its options and assignments, or null when it runs none and so prints the environment.
+ * `-S` (`--split-string`) splits its value into words that stand in its place, as in `env -S "bash -x" {0}`.
+ * @param {readonly string[]} args the words after `env`
+ * @returns {string[] | null}
+ */
+function envCommand(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i] ?? "";
+    /** @type {{ value: string; next: number } | null} */
+    let split = null;
+    if (w === "-S" || w === "--split-string") split = { value: args[i + 1] ?? "", next: i + 2 };
+    else if (/^-S./.test(w)) split = { value: w.slice(2), next: i + 1 };
+    else if (w.startsWith("--split-string=")) split = { value: w.slice("--split-string=".length), next: i + 1 };
+    if (split !== null) return envCommand([...shellCommands(split.value).flat(), ...args.slice(split.next)]);
+    if (w === "--") {
+      const rest = args.slice(i + 1);
+      const at = rest.findIndex((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+      return at === -1 ? null : rest.slice(at);
+    }
+    if (ENV_VALUE_OPTIONS.has(w)) i += 1;
+    else if (!w.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) return args.slice(i);
+  }
+  return null;
+}
+
+/**
+ * Whether a simple command prints the environment or turns tracing on: `env` with no command, `printenv`, `export -p`,
+ * `declare -p` or `-x`, `compgen -e` or `-v`; `set` with a tracing flag (traceFlags), `shopt` with xtrace, zsh's
+ * `setopt` or `unsetopt` naming xtrace; a shell (`bash`, `sh`, `zsh`, `dash`, `ksh`, `mksh`, by name or by path)
+ * wherever it sits in the command (`env … bash`, `xargs bash`, `sudo -E bash`) with a tracing flag, or whose `-c`
+ * script does any of this, as `eval`'s script and the command `env` runs (`env -S` included) may; and any word that
+ * sets SHELLOPTS that traces, BASH_ENV or ENV (tracingAssignment).
+ * @param {string[]} words
+ * @param {number} [depth] how many `-c`, `eval` or `env` scripts deep this command is
+ * @returns {boolean}
+ */
+function printsEnvironment(words, depth = 0) {
+  if (words.some(tracingAssignment)) return true;
   const [name, ...args] = commandWords(words);
   if (name === undefined) return false;
-  const traces = (/** @type {string} */ w) => /^[-+][a-zA-Z]*x[a-zA-Z]*$/.test(w);
-  switch (name) {
-    case "env":
-      return args.every((w) => w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w));
+  const reads = (/** @type {string[]} */ command) => depth < MAX_SCRIPT_DEPTH && printsEnvironment(command, depth + 1);
+  const script = (/** @type {string} */ text) => shellCommands(text).some(reads);
+  switch (baseName(name)) {
+    case "env": {
+      const command = envCommand(args);
+      return command === null || reads(command);
+    }
     case "printenv":
       return true;
     case "set":
-      return args.some(traces) || args.some((w, i) => w === "-o" && args[i + 1] === "xtrace");
-    case "bash":
-    case "sh":
-    case "zsh":
-      return args.some((w) => w.startsWith("-") && !w.startsWith("--") && w.includes("x"));
+      return traceFlags(args, { plus: true });
+    case "shopt":
+      return args.some((w) => optionName(w) === "xtrace");
+    case "setopt":
+    case "unsetopt":
+      return args.some((w) => optionName(w).includes("xtrace"));
     case "export":
       return args.includes("-p");
     case "declare":
@@ -280,45 +398,28 @@ function printsEnvironment(words) {
       return args.some((w) => /^-[a-zA-Z]*[px][a-zA-Z]*$/.test(w));
     case "compgen":
       return args.includes("-e") || args.includes("-v");
+    case "eval":
+      return script(args.join(" "));
     default:
-      return false;
+      break;
   }
+  const shell = words.findIndex((w) => SHELLS.has(baseName(w)));
+  if (shell === -1) return false;
+  const shellArgs = words.slice(shell + 1);
+  if (traceFlags(shellArgs)) return true;
+  const flag = shellArgs.findIndex((w) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(w));
+  return flag !== -1 && script(shellArgs[flag + 1] ?? "");
 }
 
 /**
- * Whether a shell's arguments trace its commands: a flag cluster with `x` (`-x`, `-ex`, `-eox`), or `-o xtrace`
- * (also at the end of a cluster, `-eo xtrace`). `+x` turns tracing off.
- * @param {readonly string[]} args
- */
-function traceFlags(args) {
-  return args.some((w, i) => /^-[a-zA-Z]*x[a-zA-Z]*$/.test(w) || (/^-[a-zA-Z]*o$/.test(w) && args[i + 1] === "xtrace"));
-}
-
-/** Whether a SHELLOPTS value turns tracing on (bash reads it from the environment at start). @param {unknown} value */
-function tracingShellOptions(value) {
-  return typeof value === "string" && value.split(":").includes("xtrace");
-}
-
-/**
- * Whether a `shell:` (a step's, or `defaults.run.shell`) traces its commands or prints the environment: a POSIX shell,
- * past `env` and variable assignments, given a tracing flag or SHELLOPTS with xtrace, or a shell that is `env` or
+ * Whether a `shell:` (a step's, or `defaults.run.shell`) traces its commands or prints the environment, read as one
+ * command (printsEnvironment): a shell with a tracing flag or a `-c` script that traces (`bash -c "set -x; . {0}"`),
+ * one `env` runs (`env -S "bash -x" {0}`), SHELLOPTS that traces, BASH_ENV or ENV set before it, or `env` or
  * `printenv` itself.
  * @param {unknown} spec
  */
 function loudShell(spec) {
-  if (typeof spec !== "string") return false;
-  if (shellCommands(spec).some(printsEnvironment)) return true;
-  const words = spec.trim().split(/\s+/);
-  let i = 0;
-  while (i < words.length) {
-    const w = words[i] ?? "";
-    const assignment = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(w);
-    if (assignment !== null) {
-      if (assignment[1] === "SHELLOPTS" && tracingShellOptions(assignment[2])) return true;
-    } else if (w !== "env" && !COMMAND_PREFIXES.has(w)) break;
-    i += 1;
-  }
-  return SHELLS.has(baseName(words[i] ?? "")) && traceFlags(words.slice(i + 1));
+  return typeof spec === "string" && shellCommands(spec).some((words) => printsEnvironment(words));
 }
 
 /** Every string anywhere in `value`. @param {unknown} value @returns {string[]} */
@@ -638,11 +739,11 @@ function checkOne(file) {
       if (loudShell(asRecord(asRecord(job.defaults)?.run)?.shell)) {
         report([...where, "defaults", "run", "shell"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
       }
-      if (tracingShellOptions(asRecord(workflow.env)?.SHELLOPTS)) {
-        report(["env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope, and the workflow's SHELLOPTS traces its commands`);
+      if (tracingEnvironment(workflow.env)) {
+        report(["env"], "debug-output", `${id} holds a secret, an environment or a write scope, and the workflow's env makes its shells trace (SHELLOPTS with xtrace, BASH_ENV or ENV)`);
       }
-      if (tracingShellOptions(asRecord(job.env)?.SHELLOPTS)) {
-        report([...where, "env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
+      if (tracingEnvironment(job.env)) {
+        report([...where, "env"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell (SHELLOPTS with xtrace, BASH_ENV or ENV)`);
       }
     }
 
@@ -678,8 +779,8 @@ function checkOne(file) {
       if (privileged && loudShell(step.shell)) {
         report([...stepPath, "shell"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
       }
-      if (privileged && tracingShellOptions(asRecord(step.env)?.SHELLOPTS)) {
-        report([...stepPath, "env", "SHELLOPTS"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell`);
+      if (privileged && tracingEnvironment(step.env)) {
+        report([...stepPath, "env"], "debug-output", `${id} holds a secret, an environment or a write scope and must not trace its shell (SHELLOPTS with xtrace, BASH_ENV or ENV)`);
       }
       const scripts = [
         ...(typeof step.run === "string" ? [{ text: step.run, key: "run" }] : []),
@@ -697,11 +798,15 @@ function checkOne(file) {
         if (commands.some(npmInstallWithScripts)) {
           report([...stepPath, "run"], "ignore-scripts", "every npm ci or npm install passes --ignore-scripts itself");
         }
-        if (privileged && commands.some(printsEnvironment)) {
-          report([...stepPath, "run"], "debug-output", `${id} holds a secret, an environment or a write scope and must not print its environment`);
+        if (privileged && commands.some((words) => printsEnvironment(words))) {
+          report([...stepPath, "run"], "debug-output", `${id} holds a secret, an environment or a write scope and must not print its environment or trace its commands`);
         }
         if (pullRequestTarget && commands.some((words) => checksOutPullRequest(words))) {
-          report([...stepPath, "run"], "pull-request-target", "a pull_request_target workflow reads the pull request through the API, as data: no git fetch, clone or pull request ref, no gh repo clone, no code archive");
+          report(
+            [...stepPath, "run"],
+            "pull-request-target",
+            "a pull_request_target workflow reads the pull request as data, through the base's scripts: no git fetch, clone, apply or am, no pull request ref, no gh repo clone, gh pr checkout or gh pr diff, no patch, no code archive or raw file download, no gh api path the rules cannot read",
+          );
         }
       }
     });
@@ -710,19 +815,39 @@ function checkOne(file) {
 }
 
 /**
- * Commands that would bring the pull request's code onto the runner: git fetching anything (past git's own options,
- * `git -C . fetch`, and wherever git sits in the command, `env … git`, `xargs git`), any word naming a pull request ref
- * (`refs/pull/…`, `pull/<n>/head`), a download of a code archive (`gh api …/tarball`, `/zipball`, codeload), `gh pr
- * checkout`, `gh repo clone` and `gh repo fork --clone`, also inside `bash -c '…'`, `sh -c` or `eval`.
+ * Whether a `gh api` call's endpoint is one the rules cannot read: missing (handed over by `xargs` or a substitution),
+ * built from a variable or a substitution (`$…`, a backtick), or cut short by one (it ends in `/` or `=`). Such a path
+ * can name a tarball, a zipball or any file of the pull request where no rule sees it.
+ * @param {readonly string[]} args the words after `gh api`
+ */
+function unreadableEndpoint(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i] ?? "";
+    if (GH_API_VALUE_OPTIONS.has(w)) i += 1;
+    else if (w === "--" || !w.startsWith("-")) {
+      const endpoint = w === "--" ? args[i + 1] : w;
+      return endpoint === undefined || /[$`]/.test(endpoint) || /[/=]$/.test(endpoint);
+    }
+  }
+  return true;
+}
+
+/**
+ * Commands that would bring the pull request's code onto the runner: git fetching anything or applying a diff or
+ * patches (past git's own options, `git -C . fetch`, and wherever git sits in the command, `env … git`, `xargs git`;
+ * `apply` and `am` included), `patch`, any word naming a pull request ref (`refs/pull/…`, `pull/<n>/head`), a download
+ * of a code archive (`gh api …/tarball`, `/zipball`, codeload) or of a raw file (raw.githubusercontent.com, github.com's
+ * `/raw/`), `gh pr checkout`, `gh pr diff`, `gh repo clone` and `gh repo fork --clone`, and `gh api` on a path the rules
+ * cannot read (unreadableEndpoint), also inside `bash -c '…'`, `sh -c` or `eval`.
  * @param {string[]} words
  * @param {number} [depth] how many `-c` or `eval` scripts deep this command is
  * @returns {boolean}
  */
 function checksOutPullRequest(words, depth = 0) {
-  if (words.some((w) => PULL_REF.test(w) || CODE_ARCHIVE.test(w))) return true;
+  if (words.some((w) => PULL_REF.test(w) || CODE_ARCHIVE.test(w) || RAW_DOWNLOAD.test(w) || baseName(w) === "patch")) return true;
   // A script handed to a shell or eval, wherever it sits in the command (`env X=1 bash -c '…'`, `xargs sh -c '…'`).
   const shell = words.findIndex((w) => w === "eval" || SHELLS.has(baseName(w)));
-  if (shell !== -1 && depth < 3) {
+  if (shell !== -1 && depth < MAX_SCRIPT_DEPTH) {
     const args = words.slice(shell + 1);
     /** @type {string | null} */
     let script = null;
@@ -740,7 +865,7 @@ function checksOutPullRequest(words, depth = 0) {
       const w = rest[i] ?? "";
       if (GIT_VALUE_OPTIONS.has(w)) i += 1;
       else if (!w.startsWith("-")) {
-        if (GIT_FETCHES.has(w)) return true;
+        if (GIT_BRINGS_CODE.has(w)) return true;
         if (w === "remote") {
           const after = rest.slice(i + 1);
           const verb = after.find((word) => !word.startsWith("-"));
@@ -757,8 +882,10 @@ function checksOutPullRequest(words, depth = 0) {
       const at = rest.indexOf(group);
       return at !== -1 && rest.slice(at + 1).includes(verb);
     };
-    if (has("pr", "checkout") || has("repo", "clone")) return true;
+    if (has("pr", "checkout") || has("pr", "diff") || has("repo", "clone")) return true;
     if (has("repo", "fork") && words.slice(gh + 1).some((w) => w === "--clone" || w.startsWith("--clone="))) return true;
+    const group = words.slice(gh + 1).findIndex((w) => !w.startsWith("-"));
+    if (group !== -1 && words[gh + 1 + group] === "api" && unreadableEndpoint(words.slice(gh + 2 + group))) return true;
   }
   return false;
 }

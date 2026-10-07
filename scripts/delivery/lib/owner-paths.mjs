@@ -28,18 +28,31 @@ function matches(pattern, path) {
 }
 
 /**
+ * A name as the owner-merge match compares it: NFKC-normalized, then lowercased. macOS's file system ignores case, and
+ * folds more than ASCII's: `AGENTſ.md` (U+017F, the long s) opens `AGENTS.md` there, and `claude.md` opens `CLAUDE.md`.
+ * NFKC folds such letters, and other compatibility forms (the Kelvin sign, ligatures, fullwidth letters), to the plain
+ * letters they stand for, so every spelling that may open an agent rule matches it; a name that only looks like one
+ * counts too, which fails closed.
+ * @param {string} name
+ * @returns {string}
+ */
+export function foldName(name) {
+  return name.normalize("NFKC").toLowerCase();
+}
+
+/**
  * The owner-merge pattern `path` falls under, or null. Patterns are slash-separated names in which a `**` segment
  * stands for any number of directories: `dir/**` is everything under dir, a leading `**` segment puts a name at any
  * depth, the root included (Claude Code, Cursor and Codex read a nested CLAUDE.md, AGENTS.md or .claude/ too), and any
- * other pattern is one file. Compared without case: macOS reads `claude.md` as `CLAUDE.md`.
+ * other pattern is one file. Path and patterns compare folded (foldName), as macOS reads names.
  * @param {string} path a repository-relative path, as the API lists it
  * @param {readonly string[]} patterns
  * @returns {string | null}
  */
 export function ownerPathOf(path, patterns) {
-  const segments = path.toLowerCase().split("/");
+  const segments = foldName(path).split("/");
   for (const pattern of patterns) {
-    if (matches(pattern.toLowerCase().split("/"), segments)) return pattern;
+    if (matches(foldName(pattern).split("/"), segments)) return pattern;
   }
   return null;
 }

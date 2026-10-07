@@ -88,8 +88,8 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
 | Pull request | Auto-merge |
 |---|---|
 | Yours or an agent's | `gh pr merge --auto --squash`, right after `gh pr create` (once the interim rule has ended) |
-| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `packages/core/src/release/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `docs/CONTRIBUTING.md`, and at any depth `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `.claude/`, `.cursor/`, `.cursorrules`, `.mcp.json` (`scripts/delivery/owner-paths.json`); or one whose files the API did not list in full | never: `owner-merge.yml` turns auto-merge off and labels it `owner-merge`; the operator reads the diff and merges it, or the agent session acting for the operator merges it by rule 6 |
-| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml`, all of whose commits are Dependabot's and which touches no owner-merge path | turned on by `dependabot-auto-merge.yml` on Dependabot's own events, for the head commit it judged, once `main` requires `pr-title` and `ci-ok` (until then the operator merges it) |
+| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `packages/core/src/release/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `docs/CONTRIBUTING.md`, and at any depth `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `AGENTS.override.md`, `.claude/`, `.cursor/`, `.cursorrules`, `.mcp.json` (`scripts/delivery/owner-paths.json`, matched after NFKC normalization and without case, as macOS reads names); or one whose files the API did not list in full | never: `owner-merge.yml` turns auto-merge off and labels it `owner-merge`; the operator reads the diff and merges it, or the agent session acting for the operator merges it by rule 6 |
+| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml`, every commit of which `dependabot[bot]` authored and GitHub (`web-flow`) committed and signed, and which touches no owner-merge path | turned on by `dependabot-auto-merge.yml` on Dependabot's own events, for the head commit it judged, once `main` requires `pr-title` and `ci-ok` (until then the operator merges it) |
 | Dependabot: the weekly GitHub Actions group | never: the operator reads the new SHAs and the tags they claim, then merges it, or the agent session acting for the operator does by rule 6 |
 | Dependabot: anything else (runtime or bundled packages, esbuild, majors, the live image's base) | the operator decides |
 | The release PR, `chore(main): release X.Y.Z` | never: it opens as a draft; the operator marks it ready and merges it to release |
@@ -104,17 +104,29 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
    version, `.release-please-manifest.json`, or `CHANGELOG.md`.
 5. Never merge the release PR, mark it ready (`gh pr ready`), turn on its auto-merge, or push to its branch. Never
    approve a deployment: approving `publish` is the operator's release decision.
-6. Never turn on the auto-merge of a PR labeled `owner-merge`, and never remove the label. Merge one only as the agent
-   session acting for the operator, with the operator's `gh` login, and only after both (the operator's decision of
-   2026-10-06; IMPLEMENTATION §23.1, D81):
-   - every check is green on the PR's exact head SHA; and
-   - at least two independent security-review agents, neither of them the PR's author, have each posted a verdict
-     comment, `APPROVE` or `APPROVE_WITH_NITS`, naming that SHA in full, for example
-     `Security review (independent agent, workflows): APPROVE_WITH_NITS at <sha>`.
+6. Never turn on the auto-merge of a PR labeled `owner-merge`, and never remove the label. The owner merges one after
+   reading its diff, or the agent session acting for the owner merges it with the owner's `gh` login, by the owner's
+   decision (IMPLEMENTATION §23.1, D81). Asked on 2026-10-07 "who merges owner-merge PRs?", the owner chose "Merge
+   after a security review (Recommended)": "I merge them with your gh login, but only after all checks pass AND a
+   separate security-review agent reads the sensitive files' diff and signs off. A refusal stops the merge and I tell
+   you why." The session merges only when all of these hold:
 
-   Any `REFUSE` blocks the merge; a new head commit needs its own two approvals; nits become follow-up PRs. Merge with
-   `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or `--admin`. None of this covers the release
-   PR (rule 5). A change that needs an owner-merge path goes in its own PR, which says so in its body.
+   1. Every check is green on the PR's exact head SHA.
+   2. At least two independent security-review agents, neither of them the PR's author, each read the full diff of
+      every owner-merge path the PR changes and posted a verdict comment, `APPROVE` or `APPROVE_WITH_NITS`, that names
+      the full 40-character head SHA and lists the owner-merge files it read: a first line such as
+      `Security review (independent agent, workflows): APPROVE_WITH_NITS at <40-character sha>`, then
+      `Owner-merge files read in full: .github/workflows/ci.yml, scripts/delivery/lib/owner-merge.mjs`.
+   3. Only verdict comments posted by the owner's GitHub login count: the repository is public, and anyone can post the
+      same text. Compare each comment's `user.login` with `gh api user --jq .login`.
+   4. A `REFUSE` stops the merge. The session tells the owner which review refused and why before doing anything else.
+   5. A `REFUSE` keeps blocking, on its head and every later head, until a later approving review names each of its
+      blocking reasons as resolved. A new head needs its own two approvals.
+   6. The merge names the reviewed commit, `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or
+      `--admin`. Only the operator runs `github-setup.mjs --apply` (rule 7), and the release PR is never auto-merged
+      and stays the owner's alone (rule 5).
+
+   Nits become follow-up PRs. A change that needs an owner-merge path goes in its own PR, which says so in its body.
 7. Never run `npm run deploy`, `desk update`, `desk use`, `desk rollback`, the installed `desk`, or
    `scripts/delivery/github-setup.mjs --apply`: they change the operator's Mac or repository. Their prompts stop
    accidents, not a process that answers them, so this rule is what keeps you out. `npm run pack` and `github-setup.mjs`

@@ -43,6 +43,10 @@ describe("change detection", () => {
     ...ownerPathExamples(["docs", "docs/notes"]),
     ["**/CLAUDE.md", "docs/claude.md"],
     ["docs/CONTRIBUTING.md", "docs/CONTRIBUTING.md"],
+    ["**/AGENTS.override.md", "AGENTS.override.md"],
+    ["**/AGENTS.override.md", "docs/AGENTS.override.md"],
+    ["**/AGENTS.md (ſ, which macOS folds to s)", "AGENTſ.md"],
+    ["**/CLAUDE.md (fullwidth letters)", "docs/ＣＬＡＵＤＥ.md"],
   ])("change detection never calls an owner-merge path docs-only (%s: %s)", (_pattern, file) => {
     expect(classifyChanges(["docs/SPEC.md", file], { listed: 2, expected: 2, ownerPaths: OWNER_PATHS }).code).toBe(true);
   });

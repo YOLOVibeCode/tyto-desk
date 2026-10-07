@@ -7,6 +7,7 @@ import { ownerMerge, ownerMergeDecision } from "../../scripts/delivery/lib/owner
 import { readOwnerPaths } from "../../scripts/delivery/lib/owner-paths.mjs";
 import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
 import { fakeGh, ok, type GhCall } from "./fake-gh.ts";
+import { ruleGaps } from "./owner-merge-rule.ts";
 import { ownerPathExamples, ownerPaths as config } from "./owner-paths.ts";
 
 const REPOSITORY = "YOLOVibeCode/tyto-desk";
@@ -81,15 +82,14 @@ describe("owner-merge", () => {
     expect(writes(calls)).toEqual([`api --method POST repos/${REPOSITORY}/issues/7/labels --input -`]);
   });
 
-  it("owner-merge's comment says the owner merges the PR, or the session acting for them once every check is green on its head commit and two independent security reviews approved that commit", async () => {
+  it("owner-merge's comment states the owner's decision and every condition under which the session acting for the owner merges the PR", async () => {
     const { gh, calls } = github([".github/workflows/ci.yml"], { auto_merge: null, labels: [] });
 
     await ownerMerge(gh, { repository: REPOSITORY, number: 7, headRef: "feat/x", config });
 
     const body = commentOf(calls);
-    expect(body).toContain("every check is green on its head commit");
-    expect(body).toContain("two independent security-review agents");
-    expect(body).toContain("any REFUSE blocks it");
+    expect(ruleGaps(body)).toEqual([]);
+    expect(body).toContain("The owner merges it after reading its diff");
     expect(body).not.toContain("never merge it");
   });
 
@@ -122,10 +122,24 @@ describe("owner-merge", () => {
   });
 
   it.each([
+    { label: "ſ (U+017F), which macOS folds to s, in AGENTS.md", file: "AGENTſ.md" },
+    { label: "ſ in a nested AGENTS.md", file: "docs/AGENTſ.md" },
+    { label: "ſ in .mcp.json", file: ".mcp.jſon" },
+    { label: "ſ in scripts/delivery/", file: "ſcripts/delivery/x.mjs" },
+    { label: "the Kelvin sign (U+212A), which macOS folds to k, in packages/core/src/release/", file: "pacKages/core/src/release/x.ts" },
+    { label: "the ﬆ ligature (U+FB06) in scripts/allowed-install-scripts.json", file: "scripts/allowed-inﬆall-scripts.json" },
+    { label: "fullwidth letters in docs/CONTRIBUTING.md", file: "docs/ＣＯＮＴＲＩＢＵＴＩＮＧ.md" },
+  ])("owner-merge matches owner-merge paths after NFKC normalization and without case, as macOS folds a name to one ($label)", ({ file }) => {
+    expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(true);
+  });
+
+  it.each([
     "packages/node/CLAUDE.md",
     "docs/CLAUDE.md",
     "packages/core/src/AGENTS.md",
     "docs/agents.md",
+    "AGENTS.override.md",
+    "packages/node/AGENTS.override.md",
     "CLAUDE.local.md",
     "packages/node/CLAUDE.local.md",
     ".cursorrules",
@@ -137,13 +151,13 @@ describe("owner-merge", () => {
     "docs/CONTRIBUTING.md",
     "docs/contributing.md",
   ])(
-    "owner-merge treats CLAUDE.md, AGENTS.md and the other agent rules at any depth, CLAUDE.local.md, .cursorrules, .mcp.json and docs/CONTRIBUTING.md as owner-merge paths (%s)",
+    "owner-merge treats CLAUDE.md, AGENTS.md and the other agent rules at any depth, CLAUDE.local.md, AGENTS.override.md, .cursorrules, .mcp.json and docs/CONTRIBUTING.md as owner-merge paths (%s)",
     (file) => {
       expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(true);
     },
   );
 
-  it.each(["CONTRIBUTING.md", "docs/RELEASING.md", "docs/CLAUDE.md.txt", "packages/node/NOTCLAUDE.md", "docs/claude/notes.md", ".mcp.json.example"])(
+  it.each(["CONTRIBUTING.md", "docs/RELEASING.md", "docs/CLAUDE.md.txt", "packages/node/NOTCLAUDE.md", "docs/claude/notes.md", ".mcp.json.example", "AGENTS.override.md.bak"])(
     "owner-merge leaves a file that only resembles an agent rule alone (%s)",
     (file) => {
       expect(ownerMergeDecision({ files: [file], headRef: "feat/x", config }).ownerMerge).toBe(false);

@@ -9,8 +9,10 @@ on:
   push:
     branches: [main]
     # Everything but what ci-changes.mjs calls docs-only: docs/, root Markdown and LICENSE, less the owner-merge paths
-    # among them (the agent rules: CLAUDE.md, CLAUDE.local.md, AGENTS.md, .claude/, .cursor/, .cursorrules and .mcp.json
-    # at any depth, and docs/CONTRIBUTING.md).
+    # among them (the agent rules: CLAUDE.md, CLAUDE.local.md, AGENTS.md, AGENTS.override.md, .claude/, .cursor/,
+    # .cursorrules and .mcp.json at any depth, and docs/CONTRIBUTING.md). GitHub's filter compares names exactly, so a
+    # case or NFKC variant of one (`claude.md`), which change detection folds and calls code (D82), builds no edge
+    # release; such a file changes no runtime.
     paths:
       - "**"
       - "!docs/**"
@@ -20,6 +22,7 @@ on:
       - "**/CLAUDE.md"
       - "**/CLAUDE.local.md"
       - "**/AGENTS.md"
+      - "**/AGENTS.override.md"
       - "**/.claude/**"
       - "**/.cursor/**"
       - "**/.cursorrules"

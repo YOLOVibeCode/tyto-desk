@@ -292,6 +292,194 @@ describe("lint:workflows", () => {
       workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: git remote add pr \"$HEAD_URL\" && git remote update" }) }),
       "pull-request-target",
     ],
+    // D84: nor as a diff or patch to apply, a raw file, or an API path the lint cannot read.
+    [
+      "a pull_request_target workflow that downloads the pull request's diff with gh pr diff",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh pr diff "$PR" > pr.diff' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that applies a diff with git apply",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: git apply --index pr.diff" }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that applies patches with git am",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: git -C . am --3way < pr.patch" }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that applies a diff with patch -p1",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: patch -p1 < pr.diff" }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that pipes gh pr diff into git apply inside bash -c",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: `- run: bash -c 'gh pr diff "$PR" | git apply'` }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads a file from raw.githubusercontent.com",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: curl -sSfLO "https://raw.githubusercontent.com/$HEAD_REPO/$HEAD_SHA/package.json"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads a raw file through github.com",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: wget -q "https://github.com/$HEAD_REPO/raw/$HEAD_SHA/install.sh"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that downloads a raw file through a github.com ?raw= link",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: curl -sSfLO "https://github.com/$HEAD_REPO/blob/$HEAD_SHA/x.sh?raw=true"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that calls gh api on a path built from variables",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: gh api "repos/$REPO/$KIND/$HEAD_SHA" > pr.tgz' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that calls gh api on a path built from variables, after its options",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: |\n    gh api -X GET -H "Accept: application/vnd.github.raw" --paginate "${URL}"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that calls gh api on a path a command substitution builds",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: "- run: gh api repos/YOLOVibeCode/tyto-desk/`cat kind`/main > code" }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that hands gh api a path through xargs",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: echo "repos/$REPO/pulls/$PR" | xargs gh api' }) }),
+      "pull-request-target",
+    ],
+    // D84: no other form of tracing in a job that holds a secret, an environment or a write scope.
+    [
+      "a step shell that runs set -x through bash -c, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: '- run: echo hi\n  shell: bash -c "set -x; . {0}"' }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "a step shell that runs bash -x through env -S, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: '- run: echo hi\n  shell: env -S "bash -x" {0}' }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "bash -x through env --split-string= in a run, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: '- run: env --split-string="bash -x" ./x.sh' }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "zsh --xtrace in a run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: zsh --xtrace ./x.zsh" }) }),
+      "debug-output",
+    ],
+    [
+      "a job env that is an expression the rules cannot read, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { extra: "env: ${{ fromJSON(vars.JOB_ENV) }}" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "BASH_ENV in a job's env, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { extra: "env:\n  BASH_ENV: ./trace.sh" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "BASH_ENV in the workflow's env, when a job holds a write scope",
+      "release.yml",
+      workflow({ top: "permissions: {}\nenv:\n  BASH_ENV: ./trace.sh", jobs: job("publish", { extra: "environment: publish" }).replace("contents: read", "contents: write") }),
+      "debug-output",
+    ],
+    [
+      "ENV in a step's env, in a job with a secret",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: echo hi\n  env:\n    ENV: ./trace.sh\n    KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}" }) }),
+      "debug-output",
+    ],
+    [
+      "SHELLOPTS from an expression, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { extra: "env:\n  SHELLOPTS: ${{ vars.OPTS }}" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "bash -o xtrace in a run, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: "- run: bash -o xtrace ./scripts/x.sh" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "set -eo xtrace in a run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: |\n    set -eo xtrace\n    echo hi" }) }),
+      "debug-output",
+    ],
+    [
+      "shopt -os xtrace in a run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: shopt -os xtrace" }) }),
+      "debug-output",
+    ],
+    [
+      "setopt xtrace in a zsh run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: setopt XTRACE\n  shell: zsh {0}" }) }),
+      "debug-output",
+    ],
+    [
+      "sh -c with set -x in a run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: "- run: sh -c 'set -x; ./x.sh'" }) }),
+      "debug-output",
+    ],
+    [
+      "eval set -x in a run, in a job with an environment",
+      "release-please.yml",
+      workflow({ jobs: job("release-please", { extra: "environment: release-please", steps: '- run: eval "set -x"' }) }),
+      "debug-output",
+    ],
+    [
+      "env bash -x in a run, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: "- run: env LC_ALL=C /bin/bash -x ./x.sh" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "xargs bash -x in a run, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: "- run: echo ./x.sh | xargs bash -x" }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "SHELLOPTS with xtrace written to GITHUB_ENV, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: '- run: echo "SHELLOPTS=xtrace" >> "$GITHUB_ENV"' }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
+    [
+      "BASH_ENV exported in a run, in a job with a write scope",
+      "edge.yml",
+      workflow({ jobs: job("attest", { steps: '- run: export BASH_ENV="$RUNNER_TEMP/trace.sh"' }).replace("contents: read", "contents: read\n      id-token: write") }),
+      "debug-output",
+    ],
   ])("lint:workflows fails on %s", (_label, file, text, rule) => {
     expect(rulesBroken(file, text)).toEqual([rule]);
   });
@@ -372,7 +560,18 @@ describe("lint:workflows", () => {
         path: ".github/workflows/release.yml",
         text: workflow({
           top: "permissions: {}\ndefaults:\n  run:\n    shell: bash --noprofile --norc -euo pipefail {0}",
-          jobs: job("publish", { extra: "environment: publish\nenv:\n  SHELLOPTS: braceexpand" }).replace("contents: read", "contents: write"),
+          jobs: job("publish", {
+            extra: "environment: publish\nenv:\n  SHELLOPTS: braceexpand",
+            steps: [
+              "- run: |",
+              "    set -euo pipefail",
+              "    shopt -s nullglob dotglob",
+              '    echo "NODE_ENV=production" >> "$GITHUB_ENV"',
+              '    env -i PATH="$PATH" node scripts/x.mjs',
+              "    bash -e ./scripts/x.sh",
+              "  shell: env LC_ALL=C bash -eo pipefail {0}",
+            ].join("\n"),
+          }).replace("contents: read", "contents: write"),
         }),
       },
     ];
@@ -380,15 +579,17 @@ describe("lint:workflows", () => {
     expect(checkWorkflows(files)).toEqual([]);
   });
 
-  it("lint:workflows allows a pull_request_target workflow to read the pull request through the API, as data", () => {
+  it("lint:workflows allows a pull_request_target workflow to read the pull request as data: through the base's scripts, gh pr view, and gh api paths spelled out", () => {
     const text = workflow({
       on: "pull_request_target:\n    types: [opened]",
       jobs: job("owner-merge", {
         steps: [
-          '- run: gh api --method GET "repos/$REPO/pulls/$PR/files?per_page=100"',
-          '- run: gh pr view "$PR" --json files && gh pr diff "$PR" > pr.diff && gh pr comment "$PR" --body "$BODY"',
+          "- run: node scripts/delivery/owner-merge.mjs",
+          '- run: gh pr view "$PR" --json files,headRefOid && gh pr comment "$PR" --body "$BODY"',
+          '- run: gh pr merge --auto --squash --match-head-commit "$PR_HEAD_SHA" "$PR_URL"',
           "- run: |",
-          '    gh api -H "Accept: application/vnd.github.raw" "repos/$REPO/contents/.github/workflows/ci.yml?ref=$HEAD_SHA"',
+          "    gh api --method GET -H \"Accept: application/vnd.github+json\" repos/YOLOVibeCode/tyto-desk/rulesets --jq '.[].name'",
+          "    gh api graphql -f query='query { viewer { login } }'",
         ].join("\n"),
       }).replace("contents: read", "contents: read\n      pull-requests: write"),
     });

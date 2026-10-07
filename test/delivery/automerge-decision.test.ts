@@ -50,20 +50,28 @@ const FROM_ACTIONS = [
 /** The head commit of Dependabot's pull request (#6), as the event names it. */
 const HEAD = "f8e753e9257b286ffb694b44fc40f49f8e39b252";
 
+/** A GitHub account as the commits API names one. */
+type Account = { login: string; id: number; type: string };
+const DEPENDABOT: Account = { login: "dependabot[bot]", id: 49699333, type: "Bot" };
+const WEB_FLOW: Account = { login: "web-flow", id: 19864447, type: "User" };
+const SOMEONE: Account = { login: "alex", id: 1024025, type: "User" };
+
 /**
- * One entry of `GET repos/<r>/pulls/<n>/commits`, shaped like a real Dependabot commit: authored by dependabot[bot],
- * committed and signed by GitHub (web-flow).
+ * One entry of `GET repos/<r>/pulls/<n>/commits`, shaped like a real Dependabot commit (#6's f8e753e): authored by
+ * dependabot[bot], committed by GitHub (web-flow, `GitHub <noreply@github.com>`) and signed with GitHub's key, which
+ * GitHub verified (`valid`).
  */
-function commit(over: { sha?: string; login?: string | null; verified?: boolean } = {}) {
+function commit(over: { sha?: string; author?: Account | null; committer?: Account | null; verified?: boolean; reason?: string } = {}) {
   const verified = over.verified ?? true;
+  const committer = over.committer === undefined ? WEB_FLOW : over.committer;
   return {
     sha: over.sha ?? HEAD,
-    author: over.login === null ? null : { login: over.login ?? "dependabot[bot]", id: 49699333, type: "Bot" },
-    committer: { login: "web-flow", id: 19864447, type: "User" },
+    author: over.author === undefined ? DEPENDABOT : over.author,
+    committer,
     commit: {
       author: { name: "dependabot[bot]", email: "49699333+dependabot[bot]@users.noreply.github.com" },
-      committer: { name: "GitHub", email: "noreply@github.com" },
-      verification: { verified, reason: verified ? "valid" : "unsigned" },
+      committer: committer === WEB_FLOW ? { name: "GitHub", email: "noreply@github.com" } : { name: "Alex", email: "alex@example.test" },
+      verification: { verified, reason: over.reason ?? (verified ? "valid" : "unsigned") },
     },
   };
 }
@@ -186,14 +194,25 @@ describe("the auto-merge decision", () => {
   });
 
   const STRANGER = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d";
+  const NOT_AUTHORED = "commit f8e753e is not authored by dependabot[bot]";
+  const NOT_GITHUB = "commit f8e753e is not committed and signed by GitHub (web-flow)";
   it.each([
-    { label: "a commit someone else authored", pr: { commits: [commit({ sha: STRANGER, login: "rvegajr" }), commit()] }, reason: "commit 1a2b3c4 is not Dependabot's" },
-    { label: "a commit that names Dependabot but GitHub did not sign", pr: { commits: [commit({ verified: false })] }, reason: "commit f8e753e is not Dependabot's" },
-    { label: "a commit whose author is no GitHub account", pr: { commits: [commit({ login: null })] }, reason: "commit f8e753e is not Dependabot's" },
+    { label: "a commit someone else authored", pr: { commits: [commit({ sha: STRANGER, author: SOMEONE }), commit()] }, reason: "commit 1a2b3c4 is not authored by dependabot[bot]" },
+    { label: "a commit whose author is no GitHub account", pr: { commits: [commit({ author: null })] }, reason: NOT_AUTHORED },
+    { label: "an author with Dependabot's login but another account id", pr: { commits: [commit({ author: { ...DEPENDABOT, id: 1 } })] }, reason: NOT_AUTHORED },
+    {
+      label: "a commit with Dependabot's author email that someone else committed and signed with their own key",
+      pr: { commits: [commit({ committer: SOMEONE })] },
+      reason: NOT_GITHUB,
+    },
+    { label: "a commit whose committer is no GitHub account", pr: { commits: [commit({ committer: null })] }, reason: NOT_GITHUB },
+    { label: "a committer with web-flow's login but another account id", pr: { commits: [commit({ committer: { ...WEB_FLOW, id: 1 } })] }, reason: NOT_GITHUB },
+    { label: "a commit that names Dependabot but GitHub did not sign", pr: { commits: [commit({ verified: false })] }, reason: NOT_GITHUB },
+    { label: "a verification whose reason is not valid", pr: { commits: [commit({ reason: "unverified_email" })] }, reason: NOT_GITHUB },
     { label: "more commits than the API listed", pr: { commitCount: 251 }, reason: "the API listed only 1 of its 251 commits" },
     { label: "commits that end before the event's head", pr: { commits: [commit({ sha: STRANGER })] }, reason: "its commits do not end at the head commit the event named" },
     { label: "a head that moved after the event", pr: { head: STRANGER }, reason: "its head moved after the event" },
-  ])("the auto-merge decision refuses a PR with a commit Dependabot did not author, or a head it did not judge ($label)", async ({ pr, reason }) => {
+  ])("the auto-merge decision refuses a PR with a commit that dependabot[bot] did not author or GitHub (web-flow) did not commit and sign, or a head it did not judge ($label)", async ({ pr, reason }) => {
     const { gh } = dependabotPr(pr);
 
     expect(await decide(gh)).toEqual({ merge: false, reason });

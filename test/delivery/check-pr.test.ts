@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkTitleAndBranch, checkWorkflowFiles, ghPullRequestSource } from "../../scripts/delivery/lib/pr-check.mjs";
 import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
+import type { Runner, RunResult } from "../../scripts/delivery/lib/run.mjs";
 import { fakeGh, notFound, ok } from "./fake-gh.ts";
 import { repo, runScript } from "./helpers.ts";
 
@@ -264,6 +265,24 @@ describe("the PR check", () => {
       ".github/workflows  [cap] the API listed 1000 entries of .github/workflows, the most it lists, so a workflow may be missing; the PR check fails closed",
     ]);
     expect(fake.calls).toHaveLength(1);
+  });
+
+  /** What gh reports once the hour's GITHUB_TOKEN quota, which every workflow of the repository shares, is spent. */
+  const rateLimited = (): RunResult => ({
+    code: 1,
+    stdout: '{"message":"API rate limit exceeded for installation ID 1.","status":"403"}',
+    stderr: "gh: API rate limit exceeded for installation ID 1. (HTTP 403)\n",
+  });
+
+  it.each([
+    { label: "the listing of .github/workflows", refused: /contents\/\.github\/workflows\?ref=/ },
+    { label: "a workflow file", refused: /application\/vnd\.github\.raw/ },
+    { label: "a pin's tag", refused: /\/git\/ref\/tags\// },
+  ])("the PR check fails closed when the API refuses a request, as once the hour's shared GITHUB_TOKEN quota is spent ($label)", async ({ refused }) => {
+    const { gh } = github({ "ci.yml": workflow() });
+    const limited: Runner = async (args, options) => (refused.test(args.join(" ")) ? rateLimited() : gh(args, options));
+
+    await expect(checkWorkflowFiles(ghPullRequestSource(limited, { repository: REPOSITORY, headSha: HEAD }))).rejects.toThrow(/HTTP 403/);
   });
 
   it("the PR check passes a PR whose head has no workflow directory", async () => {

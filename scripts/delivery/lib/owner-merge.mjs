@@ -2,10 +2,10 @@
  * Owner-merge (docs/IMPLEMENTATION.md §23.1, D50, D81): a pull request that touches an owner-merge path
  * (`scripts/delivery/owner-paths.json`), the release PR, and a pull request whose files the API did not list in full,
  * lose their auto-merge, get the `owner-merge` label, and get one comment saying so. The owner merges them after
- * reading the diff, or, except the release PR, the agent session acting for the owner does once every check is green
- * on the head commit and two independent security reviews approved that commit (D81). When no such reason remains, the
- * label goes. `owner-merge.yml` runs the base branch's copy on `pull_request_target`, reading the pull request through
- * the API as data. Dependency-free: Node and gh only.
+ * reading the diff, or, except the release PR, the agent session acting for the owner does, by the owner's rule, which
+ * the comment states in full (D81). When no such reason remains, the label goes. `owner-merge.yml` runs the base
+ * branch's copy on `pull_request_target`, reading the pull request through the API as data. Dependency-free: Node and
+ * gh only.
  */
 import { ghJson, ghOk, pullRequestFiles } from "./gh.mjs";
 import { ownerPathOf } from "./owner-paths.mjs";
@@ -44,27 +44,51 @@ export function ownerMergeDecision({ files, headRef, config, listed = files.leng
   return { ownerMerge: reasons.size > 0, reasons: [...reasons] };
 }
 
+/**
+ * The owner's decision, in the owner's words: asked on 2026-10-07 who merges owner-merge PRs, the owner chose "Merge
+ * after a security review (Recommended)" (D81).
+ */
+export const OWNER_DECISION =
+  "I merge them with your gh login, but only after all checks pass AND a separate security-review agent reads the sensitive files' diff and signs off. A refusal stops the merge and I tell you why.";
+
+/** Every condition under which the agent session acting for the owner merges an owner-merge PR (CONTRIBUTING rule 6, D81). */
+const SESSION_RULE = [
+  "1. Every check is green on the exact head SHA.",
+  "2. At least two independent security-review agents, neither of them its author, each read the full diff of every owner-merge path it changes and posted a verdict comment, APPROVE or APPROVE_WITH_NITS, that names the full 40-character head SHA and lists the owner-merge files it read.",
+  "3. Only verdict comments posted by the owner's GitHub login count (each comment's `user.login`): the repository is public, and anyone can post the same text.",
+  "4. A REFUSE stops the merge, and the session tells the owner which review refused and why before doing anything else.",
+  "5. A REFUSE keeps blocking, on its head and every later head, until a later approving review names each of its blocking reasons as resolved.",
+  "6. The merge is `gh pr merge <n> --squash --match-head-commit <sha>`, never `--auto` or `--admin`. Only the operator runs `github-setup.mjs --apply`, and the release PR is never auto-merged.",
+];
+
 /** @param {string[]} reasons @param {readonly string[]} paths */
 function commentBody(reasons, paths) {
   const what = reasons.map((reason) => (paths.includes(reason) ? `\`${reason}\`` : reason)).join(", ");
-  const who = reasons.includes(RELEASE_PR)
-    ? [
-        "Merging it releases Desk: only the owner marks it ready and merges it, by hand (RELEASING; IMPLEMENTATION",
-        "§23.8). Agents never merge it, mark it ready, turn its auto-merge on, or remove the label.",
-      ]
-    : [
-        "It changes the delivery pipeline, release code or the agent rules, or the API did not list all of its files. The",
-        "owner merges it after reading its diff, or the agent session acting for the owner merges it with the owner's gh,",
-        "and only once every check is green on its head commit and at least two independent security-review agents (not",
-        "its author) posted APPROVE or APPROVE_WITH_NITS verdict comments naming that commit; any REFUSE blocks it",
-        "(CONTRIBUTING, rule 6; IMPLEMENTATION §23.1, D81). Agents never turn its auto-merge on or remove the label.",
-      ];
-  const text = [
-    `This pull request is owner-merge (${what}).`,
-    ...who,
-    "Auto-merge is off and is turned off again whenever someone turns it on.",
-  ].join(" ");
-  return `${text}\n\n${MARKER}`;
+  const off = "Auto-merge is off and is turned off again whenever someone turns it on.";
+  if (reasons.includes(RELEASE_PR)) {
+    const text = [
+      `This pull request is owner-merge (${what}).`,
+      "Merging it releases Desk: only the owner marks it ready and merges it, by hand (RELEASING; IMPLEMENTATION §23.8).",
+      "Agents never merge it, mark it ready, turn its auto-merge on, or remove the label.",
+      off,
+    ].join(" ");
+    return `${text}\n\n${MARKER}`;
+  }
+  return [
+    [
+      `This pull request is owner-merge (${what}).`,
+      "It changes the delivery pipeline, release code or the agent rules, or the API did not list all of its files.",
+      off,
+      "Agents never turn its auto-merge on or remove the label.",
+    ].join(" "),
+    [
+      "The owner merges it after reading its diff, or the agent session acting for the owner merges it with the owner's gh login.",
+      `The owner's decision (2026-10-07): "${OWNER_DECISION}"`,
+      "The session merges only when all of these hold (CONTRIBUTING, rule 6; IMPLEMENTATION §23.1, D81):",
+    ].join(" "),
+    SESSION_RULE.join("\n"),
+    MARKER,
+  ].join("\n\n");
 }
 
 /**

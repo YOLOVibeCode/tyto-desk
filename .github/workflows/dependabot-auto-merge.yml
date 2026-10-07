@@ -2,10 +2,10 @@
 # repository, and only on events Dependabot itself sent (a push by anyone else never turns auto-merge back on):
 # fetch-metadata (never skip-verification) reads what changed, and main's dependency-free automerge-decision.mjs
 # decides. Only patch updates of allowlisted dev tools (@types/*, typescript, vitest, yaml), every member of a group
-# included, whose every commit Dependabot authored and GitHub signed, and which touch no owner-merge path, get
-# auto-merge, for the head commit the decision judged alone, and only once main's rules require pr-title and ci-ok
-# (the interim rule: until then gh pr merge --auto would merge at once, before the checks). Any other gets a comment
-# naming why the owner merges it. No npm ci, no checkout of the pull request.
+# included, whose every commit dependabot[bot] authored and GitHub itself (web-flow) committed and signed, and which
+# touch no owner-merge path, get auto-merge, for the head commit the decision judged alone, and only once main's rules
+# require pr-title and ci-ok (the interim rule: until then gh pr merge --auto would merge at once, before the checks).
+# Any other gets a comment naming why the owner merges it. No npm ci, no checkout of the pull request.
 name: dependabot-auto-merge
 
 on:

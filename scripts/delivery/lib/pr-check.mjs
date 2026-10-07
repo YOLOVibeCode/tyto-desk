@@ -18,9 +18,12 @@ const MAX_TAG_DEPTH = 5;
 
 /**
  * What one run of the check reads (D85). `pr-title` runs on `pull_request_target`, on fork pull requests too, with the
- * repository's `GITHUB_TOKEN`, whose REST quota (1,000 requests an hour) every workflow shares, so the check reads at
- * most 25 workflow files and looks up at most 25 distinct pins (action and tag), each a ref and up to five peels:
- * at most 1 + 25 + 25 × 6 = 176 requests. Above either cap it fails closed, reading or looking up none of them.
+ * repository's `GITHUB_TOKEN`, whose REST quota (1,000 requests an hour) every workflow shares, so one run reads at most
+ * 25 workflow files and looks up at most 25 distinct pins (action and tag), each a ref and up to five peels: at most
+ * 1 + 25 + 25 × 6 = 176 requests. Above either cap it fails closed, reading or looking up none of them, and a request
+ * the API refuses (a spent quota too) throws, which fails the check. The cap bounds a run, not the hour: nothing limits
+ * how many runs fork pull requests start, and six full runs spend the hour's quota. That denies service until the hour
+ * resets and never passes a check.
  */
 export const MAX_WORKFLOW_FILES = 25;
 export const MAX_PINS = 25;

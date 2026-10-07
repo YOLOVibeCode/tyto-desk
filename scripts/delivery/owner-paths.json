@@ -1,5 +1,5 @@
 {
-  "$comment": "Owner-merge paths (docs/IMPLEMENTATION.md §23.1, D50, D61, D81, D82). A pull request that touches one changes the pipeline, code a privileged job runs, or what every later agent obeys: owner-merge.yml labels it owner-merge and turns its auto-merge off, change detection never calls it docs-only, and Dependabot's auto-merge refuses it. The owner merges it after reading the diff, or the session acting for the owner does after two independent security reviews of its head commit (D81). A `**` segment stands for any number of directories, none included: `dir/**` is everything under dir, `**/CLAUDE.md` is a CLAUDE.md at any depth, the root included, and other entries are exact files. Matched without case. Always read from the base branch. `branches` is the release PR's branch (scripts/delivery/lib/release-branch.mjs).",
+  "$comment": "Owner-merge paths (docs/IMPLEMENTATION.md §23.1, D50, D61, D81, D82). A pull request that touches one changes the pipeline, code a privileged job runs, or what every later agent obeys: owner-merge.yml labels it owner-merge and turns its auto-merge off, change detection never calls it docs-only, and Dependabot's auto-merge refuses it. The owner merges it after reading the diff, or the session acting for the owner does by D81's rule: every check green on its exact head SHA, two independent security reviews of the full diff of every owner-merge path it changes, and no REFUSE left unresolved. A `**` segment stands for any number of directories, none included: `dir/**` is everything under dir, `**/CLAUDE.md` is a CLAUDE.md at any depth, the root included, and other entries are exact files. Matched after NFKC normalization and without case, as macOS reads names (D82). Always read from the base branch. `branches` is the release PR's branch (scripts/delivery/lib/release-branch.mjs).",
   "paths": [
     ".github/**",
     "scripts/delivery/**",
@@ -14,6 +14,7 @@
     "**/CLAUDE.md",
     "**/CLAUDE.local.md",
     "**/AGENTS.md",
+    "**/AGENTS.override.md",
     "**/.claude/**",
     "**/.cursor/**",
     "**/.cursorrules",

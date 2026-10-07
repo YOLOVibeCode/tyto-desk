@@ -5,10 +5,11 @@
  * provide ships. Everything else waits for the owner, esbuild above all, which writes every byte Desk ships.
  *
  * And only Dependabot's own pull request, as the event named it (D83): every commit on it authored by dependabot[bot]
- * and signed by GitHub, its commits ending at the head commit the event named, its head still that commit, and none of
- * its files an owner-merge path (`owner-paths.json`, or a file list the API cut short). The workflow runs only on events
- * Dependabot sent and turns auto-merge on only while the head is that commit (`--match-head-commit`), so a push by
- * anyone else never turns auto-merge on; a later push that touches an owner-merge path turns it off (owner-merge.yml).
+ * and committed and signed by GitHub itself (web-flow, with a signature GitHub verified as valid), its commits ending
+ * at the head commit the event named, its head still that commit, and none of its files an owner-merge path
+ * (`owner-paths.json`, or a file list the API cut short). The workflow runs only on events Dependabot sent and turns
+ * auto-merge on only while the head is that commit (`--match-head-commit`), so a push by anyone else never turns
+ * auto-merge on; a later push that touches an owner-merge path turns it off (owner-merge.yml).
  *
  * And only once `main` requires the checks (the interim rule, D54): with no ruleset requiring `pr-title` and `ci-ok`,
  * `gh pr merge --auto` merges a pull request whose checks are still running or failing at once. Until `github-setup
@@ -25,8 +26,16 @@ import { ownerMergeDecision } from "./owner-merge.mjs";
 const ALLOWED_NAMES = new Set(["typescript", "vitest", "yaml"]);
 const ALLOWED_TEXT = "@types/*, typescript, vitest, yaml";
 
-/** Dependabot's account: the author of every commit on a pull request that merges itself. */
+/** Dependabot's account, by login and id: the author of every commit on a pull request that merges itself. */
 export const DEPENDABOT = "dependabot[bot]";
+export const DEPENDABOT_ID = 49699333;
+
+/**
+ * GitHub's own committer account, by login and id: `GitHub <noreply@github.com>`, whose key signs the commits GitHub
+ * writes itself, Dependabot's among them. The committer of every commit on a pull request that merges itself.
+ */
+export const WEB_FLOW = "web-flow";
+export const WEB_FLOW_ID = 19864447;
 
 /** The checks `main`'s ruleset requires, and the app they must come from: GitHub Actions (§23.1, §23.2). */
 export const REQUIRED_CHECKS = ["pr-title", "ci-ok"];
@@ -103,11 +112,25 @@ function shortSha(sha) {
   return typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha) ? sha.slice(0, 7) : "(unknown)";
 }
 
+/** @typedef {{ login?: unknown; id?: unknown } | null | undefined} ApiAccount */
+
+/** Whether the commits API's account is `login` with `id`. @param {ApiAccount} account @param {string} login @param {number} id */
+function isAccount(account, login, id) {
+  return account?.login === login && account.id === id;
+}
+
 /**
  * Why a Dependabot pull request may not merge itself, judged from what the API reported about it, or null. It must
- * still be at the head commit the event named, with every commit listed, the list ending at that head, and each commit
- * authored by dependabot[bot] and signed by GitHub (`verification.verified`; a forged author email is never signed);
- * and none of its files may be an owner-merge path.
+ * still be at the head commit the event named, with every commit listed (as many as its `commits` count) and the list
+ * ending at that head; none of its files may be an owner-merge path; and each commit must be Dependabot's as GitHub
+ * wrote it (D83):
+ * - authored by the account `dependabot[bot]` (`author.login` and `author.id` 49699333, the account GitHub resolves the
+ *   author email to), and
+ * - committed by GitHub itself (`committer.login` `web-flow` and `committer.id` 19864447, `GitHub <noreply@github.com>`)
+ *   with a signature GitHub verified (`commit.verification.verified` true and `reason` `valid`).
+ * GitHub checks a signature against the committer's keys, never the author's: a commit that carries Dependabot's author
+ * email but that someone else committed and signed with their own key is `verified` too. With `web-flow` as committer,
+ * only GitHub's own key verifies, so GitHub wrote the commit, with dependabot[bot] as its author.
  * @param {{ headSha: string; pull: unknown; commits: readonly unknown[]; files: string[]; listed: number; ownerPaths: string[] }} pr
  *   `pull` is `GET repos/<r>/pulls/<n>`, `commits` its commit list, `files` and `listed` its file list (pullRequestFiles)
  * @returns {string | null}
@@ -121,12 +144,14 @@ export function pullRequestRefusal({ headSha, pull, commits, files, listed, owne
   const last = /** @type {{ sha?: unknown } | undefined} */ (commits.at(-1));
   if (last?.sha !== headSha) return "its commits do not end at the head commit the event named";
   for (const entry of commits) {
-    const { sha, author, commit } =
-      /** @type {{ sha?: unknown; author?: { login?: unknown } | null; commit?: { verification?: { verified?: unknown } } }} */ (
+    const { sha, author, committer, commit } =
+      /** @type {{ sha?: unknown; author?: ApiAccount; committer?: ApiAccount; commit?: { verification?: { verified?: unknown; reason?: unknown } } }} */ (
         entry ?? {}
       );
-    if (author?.login !== DEPENDABOT || commit?.verification?.verified !== true) {
-      return `commit ${shortSha(sha)} is not Dependabot's`;
+    if (!isAccount(author, DEPENDABOT, DEPENDABOT_ID)) return `commit ${shortSha(sha)} is not authored by ${DEPENDABOT}`;
+    const verification = commit?.verification;
+    if (!isAccount(committer, WEB_FLOW, WEB_FLOW_ID) || verification?.verified !== true || verification.reason !== "valid") {
+      return `commit ${shortSha(sha)} is not committed and signed by GitHub (${WEB_FLOW})`;
     }
   }
   const owner = ownerMergeDecision({
