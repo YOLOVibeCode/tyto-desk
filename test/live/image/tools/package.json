@@ -1,0 +1,12 @@
+{
+  "name": "desk-live-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "npm tools only the live image has (docs/IMPLEMENTATION.md §17.3): agent-browser for its bundled linux-arm64 binary, and the Puppeteer and Playwright cores for the guarded-endpoint tests. The image installs them with npm ci --ignore-scripts.",
+  "license": "MIT",
+  "dependencies": {
+    "agent-browser": "0.38.1",
+    "playwright-core": "1.63.0",
+    "puppeteer-core": "25.12.0"
+  }
+}

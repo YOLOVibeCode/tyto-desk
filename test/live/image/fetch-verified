@@ -1,0 +1,28 @@
+#!/bin/bash
+# fetch-verified <url> <sha256> <dest>: download an https URL to <dest> only when its sha256 matches. A <dest> that
+# already has that sha256 is kept as it is. The image build uses it for Node; scripts/live.mjs uses it to keep the
+# pinned Chrome .deb in its cache, because Google prunes old builds from its pool. A download cut short by SIGKILL
+# (docker rm --force) skips the trap and leaves its .part file behind; one older than an hour is removed first (a
+# younger one may be another run's download in progress).
+set -euo pipefail
+usage="usage: fetch-verified <https-url> <sha256> <dest>"
+url="${1:?$usage}"
+sum="${2:?$usage}"
+dest="${3:?$usage}"
+case "$url" in https://*) ;; *) echo "fetch-verified: https URLs only" >&2; exit 2 ;; esac
+[[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "fetch-verified: not a sha256" >&2; exit 2; }
+
+if [ -f "$dest" ] && echo "$sum  $dest" | sha256sum --check --strict --status -; then
+  echo "fetch-verified: $(basename "$dest") is cached and verified"
+  exit 0
+fi
+mkdir -p "$(dirname "$dest")"
+find "$(dirname "$dest")" -maxdepth 1 -type f -name "$(basename "$dest").*.part" -mmin +60 -delete
+part="$(mktemp "$dest.XXXXXX.part")"
+trap 'rm -f "$part"' EXIT
+curl --fail --silent --show-error --location --retry 3 --proto '=https' --proto-redir '=https' --output "$part" "$url"
+echo "$sum  $part" | sha256sum --check --strict --quiet -
+chmod 0644 "$part"
+mv -f "$part" "$dest"
+trap - EXIT
+echo "fetch-verified: $(basename "$dest") downloaded and verified"
