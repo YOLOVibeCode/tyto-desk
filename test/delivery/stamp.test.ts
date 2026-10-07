@@ -16,6 +16,7 @@ const now = () => new Date("2026-10-06T18:00:00.250Z");
 const project = {
   "package.json": `${JSON.stringify({ name: "x", version: "0.3.0" })}\n`,
   ".nvmrc": "26.10.0\n",
+  "scripts/delivery/node-runtime.json": `${JSON.stringify({ version: "26.10.0", platforms: {} })}\n`,
   ".gitignore": "dist/\nnode_modules/\n",
   "a.txt": "a\n",
 };
@@ -69,6 +70,14 @@ describe("the stamp", () => {
     const outside = await mkdtemp(join(tmpdir(), "out-"));
     expect((await runScript(stamp, ["--out", outside], { cwd: root })).code).toBe(0);
     expect(existsSync(join(outside, "version.json"))).toBe(true);
+  });
+
+  it("the stamp names Desk Terminal's pinned Node, from scripts/delivery/node-runtime.json", async () => {
+    const pinned = { ...project, "scripts/delivery/node-runtime.json": `${JSON.stringify({ version: "26.11.1", platforms: {} })}\n` };
+    const { root } = await gitCheckout(pinned, "slice-1c/walking-skeleton");
+
+    expect((await runScript(stamp, [], { cwd: root })).code).toBe(0);
+    expect(JSON.parse(await readFile(join(root, "dist", "version.json"), "utf8")).node).toBe("26.11.1");
   });
 
   it.each([".", "..cache", "packages/x"])(
