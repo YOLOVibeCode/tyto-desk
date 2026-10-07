@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { FileLogSink, logCrashes } from "@desk/node";
 import { serveDaemon } from "./daemon-process.ts";
 import { NodePtySpawner } from "./node-pty-spawner.ts";
 
@@ -7,8 +9,13 @@ import { NodePtySpawner } from "./node-pty-spawner.ts";
  * (daemon-process.ts), which the offline suite tests; this entry adds the one thing it never loads: the PTY package.
  */
 export async function runDaemon(input: { deskHome: string; env: NodeJS.ProcessEnv; version: string }): Promise<number> {
+  const log = new FileLogSink(join(input.deskHome, "logs", "ptyd.log"));
+  logCrashes(process, log, (code) => {
+    void log.flushed().then(() => process.exit(code));
+  });
   return serveDaemon({
     ...input,
+    log,
     spawner: new NodePtySpawner(),
     uid: typeof process.getuid === "function" ? process.getuid() : null,
     umask: (mask) => process.umask(mask),

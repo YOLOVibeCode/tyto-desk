@@ -73,13 +73,17 @@ export { ensurePanel, type PanelResult } from "./launch/panel.ts";
 export { pollUntil } from "./launch/poll.ts";
 export { applyChromeSettings, BACKGROUND_MODE_WARNING } from "./launch/settings.ts";
 export { runWatch, type WatchPorts } from "./watch/watch.ts";
+export { RESTART_QUESTION, daemonRestart, deskStatus, type StatusPorts } from "./status/status.ts";
 export { QUIT_ALL_QUESTION, quit, type QuitInput, type QuitPorts, type QuitResult } from "./quit/quit.ts";
 export { SETTINGS_PREFS } from "./ports/chrome-settings.ts";
 export { confirmToQuitOn } from "./chrome/local-state.ts";
 export { filterTargetList, guardedVersion, routeGatewayHttp, type GatewayRoute } from "./gateway/http.ts";
 export { GatewayConnection, HiddenTargets, focusGuardOn, isDeskUrl, type FocusCheck, type GatewayStep, type TargetFacts } from "./gateway/policy.ts";
+export { LAYOUT_BYTES_MAX, LAYOUT_DEPTH_MAX, LAYOUT_VERSION, TABS_MAX, checkLayout, defaultLayout, parseStoredLayout, type Layout, type LayoutNode, type LayoutTab } from "./layout/layout.ts";
+export type { LogEvent } from "./log/events.ts";
+export { SecretRedactor } from "./log/redactor.ts";
 export { httpGuard, type HttpGuardRequest, type HttpGuardResult } from "./net/http-guard.ts";
-export { DAEMON_START_MS, startHost, type DaemonCommand, type HostInput, type HostStart } from "./nmhost/host.ts";
+export { DAEMON_START_MS, hostStateFor, startHost, type DaemonCommand, type HostInput, type HostStart } from "./nmhost/host.ts";
 export { PanelController, type PanelPorts } from "./panel/panel-controller.ts";
 export type * from "./ports/index.ts";
 export {

@@ -104,7 +104,9 @@ describe("the native host's relay", () => {
     const dialed = await new UnixDaemonDialer(daemon.path).connect();
     if (!dialed.ok) throw new Error("no connection");
     const stdin = new PassThrough();
-    const done = relay({ stdin, stdout: new PassThrough(), socket: dialed.link });
+    const stdout = new PassThrough();
+    const written = collect(stdout);
+    const done = relay({ stdin, stdout, socket: dialed.link });
     const socket = await daemon.connection;
     const received: Buffer[] = [];
     socket.on("data", (chunk: Buffer) => received.push(chunk));
@@ -115,6 +117,7 @@ describe("the native host's relay", () => {
 
     expect(await done).toBe(1);
     expect(Buffer.concat(received).length).toBe(0);
+    expect(payloads(written())).toEqual([{ type: "host", state: "dropped" }]);
     daemon.server.close();
   });
 

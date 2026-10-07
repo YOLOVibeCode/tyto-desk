@@ -28,6 +28,8 @@ export { FakePty, FakePtySpawner } from "./fake-pty-spawner.ts";
 export { FakeTmux } from "./fake-tmux.ts";
 export { MemoryAppVersions } from "./memory-app-versions.ts";
 export { MemoryConfigStore } from "./memory-config-store.ts";
+export { MemoryLayoutStore } from "./memory-layout-store.ts";
+export { MemoryLogSink } from "./memory-log-sink.ts";
 export { MemoryNativeHostDir } from "./memory-native-host-dir.ts";
 export { MemoryTextFiles } from "./memory-text-files.ts";
 export { ScriptedPrompter } from "./scripted-prompter.ts";

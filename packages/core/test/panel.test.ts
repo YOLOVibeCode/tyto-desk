@@ -172,6 +172,8 @@ describe("the side panel", () => {
 
     const waits: number[] = [];
     for (let attempt = 0; attempt < 6; attempt += 1) {
+      // Each connection lived past 1 s: a host that keeps closing at once is "Host failed" instead.
+      await clock.advance(1_500);
       const before = clock.sleeps.length;
       connector.last().drop();
       waits.push(clock.sleeps[before] ?? -1);
@@ -203,5 +205,108 @@ describe("the side panel", () => {
     connector.last().deliver({ type: "eval", code: "alert(1)" });
 
     expect(view.pane().screen).toBe("");
+  });
+
+});
+
+describe("the panel's states (docs/IMPLEMENTATION.md §9's panel-state table)", () => {
+  /** Lets the panel's reconnect wait run, as long as the backoff allows. */
+  async function waitOut(clock: FakeClock): Promise<void> {
+    await clock.advance(2_000);
+  }
+
+  it("the panel shows Not installed and stops when Chrome finds no native host", async () => {
+    const { connector, view, clock, panel } = setup();
+    panel.start();
+
+    connector.last().drop("Specified native messaging host not found.");
+    await waitOut(clock);
+
+    expect(view.bannerText).toBe("Desk isn't installed for this profile: run desk install");
+    expect(connector.channels).toHaveLength(1);
+  });
+
+  it("the panel shows Host failed and stops after the host's port closes within 1 s, three times", async () => {
+    const { connector, view, clock, panel } = setup();
+    panel.start();
+
+    for (let i = 0; i < 3; i += 1) {
+      const before = clock.sleeps.length;
+      connector.last().drop();
+      await clock.advance(clock.sleeps[before] ?? 0);
+    }
+    await waitOut(clock);
+
+    expect(view.bannerText).toBe("Desk couldn't start its terminal host: run desk doctor");
+    expect(connector.channels).toHaveLength(3);
+  });
+
+  it("the panel shows Install damaged and stops when the host says so", async () => {
+    const { connector, view, clock, panel } = setup();
+    panel.start();
+
+    connector.last().deliver({ type: "host", state: "install-damaged" });
+    connector.last().drop();
+    await waitOut(clock);
+
+    expect(view.bannerText).toBe("Desk's install is damaged: run desk install");
+    expect(connector.channels).toHaveLength(1);
+  });
+
+  it("the panel shows Daemon unreachable and retries with backoff", async () => {
+    const { connector, view, clock, panel } = setup();
+    panel.start();
+    await clock.advance(1_500);
+
+    connector.last().deliver({ type: "host", state: "no-daemon" });
+    connector.last().drop();
+    const banner = view.bannerText;
+    await waitOut(clock);
+
+    expect(banner).toBe("The terminal daemon isn't running: run desk doctor");
+    expect(connector.channels).toHaveLength(2);
+  });
+
+  it("the panel shows Message limit and stops after three identical host drops", async () => {
+    const { connector, view, clock, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello());
+
+    for (let i = 0; i < 3; i += 1) {
+      await clock.advance(1_500);
+      connector.last().deliver({ type: "host", state: "dropped" });
+      connector.last().drop();
+      await waitOut(clock);
+    }
+
+    expect(view.bannerText).toBe("Desk hit a message limit: run desk doctor");
+    expect(connector.channels).toHaveLength(3);
+  });
+
+  it("the panel shows Updated with Restart now, which asks the daemon to restart", () => {
+    const { connector, view, panel } = setup();
+    panel.start();
+
+    connector.last().deliver({ type: "error", code: "E_STALE", message: "no protocol version in common" });
+    view.bannerAction?.run();
+
+    expect(view.bannerText).toBe("Desk was updated. Restart the terminal daemon now? tmux sessions survive.");
+    expect(view.bannerAction?.label).toBe("Restart now");
+    expect(connector.last().posted.at(-1)).toEqual({ type: "shutdown", mode: "restart" });
+  });
+
+  it.each([
+    [{ type: "notice", kind: "tmux-line-missing" }, "Agents can't see this Desk until the tmux line is added (desk install); then open a new pane"],
+    [{ type: "notice", kind: "agents-paused" }, "Agents are paused: desk agents resume lets them drive this Desk again"],
+    [{ type: "alert", kind: "terminal-attached" }, "Something is attached to this terminal: DevTools, or a CDP client on the raw port"],
+    [{ type: "alert", kind: "agent-state-saved" }, "A Desk agent session saved browser state into your agent-browser files"],
+  ])("the panel shows the notice %j in its banner", (message, text) => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello());
+
+    connector.last().deliver(message);
+
+    expect(view.bannerText).toBe(text);
   });
 });

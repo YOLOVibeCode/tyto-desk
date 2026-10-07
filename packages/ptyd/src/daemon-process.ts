@@ -2,8 +2,9 @@ import { access, lstat, mkdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 import { userInfo } from "node:os";
-import { Daemon, PROTOCOL_MAX, PROTOCOL_MIN, planPaneShell, type InstanceLock, type PtySpawner } from "@desk/core";
-import { FileConfigStore, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed } from "@desk/node";
+import { Daemon, PROTOCOL_MAX, PROTOCOL_MIN, planPaneShell, type InstanceLock, type LogSink, type PtySpawner } from "@desk/core";
+import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed } from "@desk/node";
+import { NodeLayoutStore } from "./layout-store.ts";
 import { UnixMessageServer } from "./message-server.ts";
 
 /** Where tmux usually is, when the config names none (§7.4). */
@@ -25,6 +26,8 @@ export type ServeDaemonInput = {
   signals: DaemonSignals;
   /** `run/ptyd.lock`; by default it records the build, the protocol range and the start (§7.1). */
   lock?: InstanceLock;
+  /** `logs/ptyd.log` by default (§4.4). */
+  log?: LogSink;
 };
 
 function errorCode(err: unknown): string | undefined {
@@ -108,6 +111,8 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
       }
       return planPaneShell({ pane, config, deskHome, home, parent: env, version, tmux, files, loginShell: new NodeLoginShell() });
     },
+    layouts: new NodeLayoutStore(deskHome),
+    log: input.log ?? new FileLogSink(join(deskHome, "logs", "ptyd.log")),
     onShutdown: () => {
       void server.close().then(async () => {
         await lock.release();

@@ -1,8 +1,8 @@
 import { jsonStringBytes } from "./split.ts";
 
 /**
- * Protocol v1 (docs/IMPLEMENTATION.md §7.2), the part slice 1c speaks: negotiation, one pane's input and output, the
- * daemon's pane list, and the extension calls the launcher relays to the service worker. Every message a Desk process
+ * Protocol v1 (docs/IMPLEMENTATION.md §7.2): negotiation, panes' input and output, the layout, the daemon's pane list,
+ * the extension calls it relays to the service worker, and the alerts and states `desk` and `desk watch` report. Every message a Desk process
  * reads passes these parsers; anything they do not know, including an unknown key, is dropped. They never echo input.
  */
 
@@ -34,8 +34,36 @@ export type List = { type: "list"; id: string };
 export type ExtCall = { type: "ext.call"; id: string; op: ExtOp; args?: unknown };
 export type ExtResult = { type: "ext.result"; id: string; ok: boolean; value?: unknown; error?: string };
 export type Shutdown = { type: "shutdown"; mode: "stop" | "restart" };
+export type LayoutGet = { type: "layout.get"; id: string };
+/** A layout the daemon checks against §7.2's limits before it saves it (`checkLayout`). */
+export type LayoutPut = { type: "layout.put"; id: string; layout: unknown };
+export type Ack = { type: "ack"; pane: string; n: number };
+export type Visibility = { type: "visibility"; state: "visible" | "hidden" };
+export type Detach = { type: "detach"; pane: string };
+export type Close = { type: "close"; id: string; pane: string };
+/** From `desk watch`: something the panels must show (`terminal-attached`, `agent-state-saved`). */
+export type AlertIn = { type: "alert"; kind: string };
+export type AgentsState = { type: "agents.state"; paused: boolean };
+export type GatewayState = { type: "gateway.state"; clients: number };
 
-export type ClientMessage = Hello | Open | In | Resize | List | ExtCall | ExtResult | Shutdown;
+export type ClientMessage =
+  | Hello
+  | Open
+  | In
+  | Resize
+  | List
+  | ExtCall
+  | ExtResult
+  | Shutdown
+  | LayoutGet
+  | LayoutPut
+  | Ack
+  | Visibility
+  | Detach
+  | Close
+  | AlertIn
+  | AgentsState
+  | GatewayState;
 
 export type PaneSummary = { id: string; alive: boolean };
 export type HelloReply = { type: "hello"; v: number; build: string; panes: PaneSummary[]; notices: string[] };
@@ -52,8 +80,17 @@ export type Panes = {
   panels: { window: number }[];
   /** The service worker's connection: whether it is up, and how many times it connected since the daemon started. */
   sw: { connected: boolean; connects: number };
+  /** Clients on the guarded endpoint, as `desk watch` last reported them. */
+  gatewayClients: number;
+  /** Whether agents are paused (`desk agents pause`). */
+  paused: boolean;
 };
 export type Notice = { type: "notice"; kind: string };
+export type LayoutMessage = { type: "layout"; id?: string; layout: Record<string, unknown> };
+export type Closed = { type: "closed"; pane: string };
+export type Alert = { type: "alert"; kind: string };
+/** From the native host itself, not the daemon (§9's panel states): why it is about to end. */
+export type HostState = { type: "host"; state: "install-damaged" | "no-daemon" | "dropped" };
 
 export type ErrorCode = "E_PROTO" | "E_STALE" | "E_VERB" | "E_NOPANE" | "E_LIMIT" | "E_SPAWN" | "E_NOEXT";
 
@@ -78,6 +115,10 @@ export type DaemonMessage =
   | Detached
   | Panes
   | Notice
+  | LayoutMessage
+  | Closed
+  | Alert
+  | HostState
   | ErrorMessage
   | ExtCall
   | ExtResult;
@@ -155,6 +196,15 @@ const CLIENT_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
     optional: { value: isAnything, error: isText(200) },
   },
   shutdown: { required: { type: isType("shutdown"), mode: isOneOf(["stop", "restart"]) } },
+  "layout.get": { required: { type: isType("layout.get"), id: isRequestId } },
+  "layout.put": { required: { type: isType("layout.put"), id: isRequestId, layout: isRecord } },
+  ack: { required: { type: isType("ack"), pane: isPaneId, n: isWhole(0, 2 ** 31 - 1) } },
+  visibility: { required: { type: isType("visibility"), state: isOneOf(["visible", "hidden"]) } },
+  detach: { required: { type: isType("detach"), pane: isPaneId } },
+  close: { required: { type: isType("close"), id: isRequestId, pane: isPaneId } },
+  alert: { required: { type: isType("alert"), kind: isText(64) } },
+  "agents.state": { required: { type: isType("agents.state"), paused: isBoolean } },
+  "gateway.state": { required: { type: isType("gateway.state"), clients: isWhole(0, 10_000) } },
 };
 
 const isPaneSummary = (value: unknown) => shaped(value, { id: isPaneId, alive: isBoolean });
@@ -183,9 +233,15 @@ const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
       panes: isListOf(isPaneListEntry, 64),
       panels: isListOf((value) => shaped(value, { window: windowId }), 64),
       sw: (value) => shaped(value, { connected: isBoolean, connects: isWhole(0, 2 ** 31 - 1) }),
+      gatewayClients: isWhole(0, 10_000),
+      paused: isBoolean,
     },
   },
   notice: { required: { type: isType("notice"), kind: isText(64) } },
+  layout: { required: { type: isType("layout"), layout: isRecord }, optional: { id: isRequestId } },
+  closed: { required: { type: isType("closed"), pane: isPaneId } },
+  alert: { required: { type: isType("alert"), kind: isText(64) } },
+  host: { required: { type: isType("host"), state: isOneOf(["install-damaged", "no-daemon", "dropped"]) } },
   error: {
     required: { type: isType("error"), code: isOneOf(CODES), message: isText(200) },
     optional: { id: isRequestId, pane: isPaneId },

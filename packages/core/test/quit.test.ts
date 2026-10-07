@@ -14,6 +14,7 @@ import {
   FakeProcessInfo,
   FakeProcessSignals,
   MemoryConfigStore,
+  MemoryLogSink,
   MemoryTextFiles,
   ScriptedPrompter,
 } from "../src/testing/index.ts";
@@ -44,15 +45,16 @@ function setup(options: { answers?: boolean; singleton?: boolean; closes?: boole
   const signals = new FakeProcessSignals(log);
   const files = new MemoryTextFiles();
   const prompter = new ScriptedPrompter(options.consent ?? []);
+  const audit = new MemoryLogSink();
   lifecycle.onClose = () => {
     if (options.closes !== false) devTools.answering = false;
   };
   const run = (all = false) =>
     quit(
-      { config: new MemoryConfigStore(config), profileFor: () => profile, processes, devTools, browser, files, clock, lock, signals, daemon, prompter },
+      { config: new MemoryConfigStore(config), profileFor: () => profile, processes, devTools, browser, files, clock, lock, signals, daemon, prompter, log: audit },
       { deskHome, all },
     );
-  return { log, clock, devTools, lifecycle, browser, profile, processes, daemon, lock, signals, files, prompter, run };
+  return { log, audit, clock, devTools, lifecycle, browser, profile, processes, daemon, lock, signals, files, prompter, run };
 }
 
 describe("desk quit", () => {
@@ -240,5 +242,20 @@ describe("desk quit --all", () => {
 
     expect(result).toEqual({ code: 64, message: "desk quit --all needs an interactive terminal to ask you first" });
     expect(desk.lifecycle.closes).toBe(0);
+  });
+
+  it.each([
+    ["confirmed", [true] as const, 0],
+    ["declined", [false] as const, 77],
+    ["without a terminal", ["no-tty"] as const, 64],
+  ])("desk quit --all writes one audit line with its exit code when %s, and plain desk quit writes none", async (_, consent, exit) => {
+    const desk = setup({ consent: [...consent] });
+    const plain = setup();
+
+    await desk.run(true);
+    await plain.run(false);
+
+    expect(desk.audit.events).toEqual([{ event: "consent", operation: "quit-all", exit }]);
+    expect(plain.audit.events).toEqual([]);
   });
 });

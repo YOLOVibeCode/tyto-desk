@@ -23,6 +23,7 @@ async function echoServer(path: string) {
       lines.push(line);
       peer.send({ type: "notice", kind: `echo:${line.length}` });
     },
+    refused: (size) => peer.send({ type: "notice", kind: `refused:${size}` }),
     closed: () => {
       closed += 1;
     },
@@ -93,8 +94,10 @@ describe("the daemon's Unix socket", () => {
     const { server, lines, closed } = await echoServer(path);
     const flood = await client(path);
     const ended = new Promise((resolve) => flood.once("close", resolve));
+    const answered = readLines(flood, 1);
 
     flood.write("x".repeat(1024 * 1024 + 1));
+    expect(await answered).toEqual([{ type: "notice", kind: "refused:1048577" }]);
     await ended;
     const other = await client(path);
     const reply = readLines(other, 1);
@@ -107,7 +110,7 @@ describe("the daemon's Unix socket", () => {
     await server.close();
   });
 
-  it("the message server accepts at most 32 connections", async () => {
+  it("the daemon accepts at most 32 connections", async () => {
     const path = await socketPath();
     const { server } = await echoServer(path);
     const sockets = await Promise.all(Array.from({ length: 32 }, () => client(path)));
@@ -161,6 +164,6 @@ describe("the daemon's Unix socket", () => {
     const realHome = process.env.DESK_TEST_REAL_HOME ?? userInfo().homedir;
     const server = new UnixMessageServer(join(realHome, ".desk-test-guard-probe", "ptyd.sock"));
 
-    await expect(server.listen(() => ({ receive: () => undefined, closed: () => undefined }))).rejects.toThrow(/real home directory/);
+    await expect(server.listen(() => ({ receive: () => undefined, refused: () => undefined, closed: () => undefined }))).rejects.toThrow(/real home directory/);
   });
 });

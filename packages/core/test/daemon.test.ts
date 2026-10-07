@@ -1,15 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type PaneShell } from "../src/index.ts";
-import { FakeClock, FakePtySpawner } from "../src/testing/index.ts";
+import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type Layout, type PaneShell } from "../src/index.ts";
+import { FakeClock, FakePtySpawner, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 const OTHER = "p_m9x1d4f6hz";
 
 /** A connection to the daemon that keeps what the daemon sent it. */
-type Peer = { sent: DaemonMessage[]; closed: boolean; send(line: object): void; hangUp(): void; last(): DaemonMessage | undefined };
+type Peer = {
+  sent: DaemonMessage[];
+  closed: boolean;
+  send(line: object): void;
+  sendRaw(line: string): void;
+  refuse(size: number): void;
+  hangUp(): void;
+  last(): DaemonMessage | undefined;
+};
 
-function setup(options: { notice?: string | null } = {}) {
+function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } = {}) {
   const spawner = new FakePtySpawner();
+  const layouts = options.layouts ?? new MemoryLayoutStore();
+  const log = new MemoryLogSink();
   const clock = new FakeClock();
   const shutdowns: string[] = [];
   const shells: string[] = [];
@@ -28,6 +38,8 @@ function setup(options: { notice?: string | null } = {}) {
       };
     },
     onShutdown: (mode) => shutdowns.push(mode),
+    layouts,
+    log,
   });
   const connect = (): Peer => {
     const sent: DaemonMessage[] = [];
@@ -35,6 +47,8 @@ function setup(options: { notice?: string | null } = {}) {
       sent,
       closed: false,
       send: (line: object) => connection.receive(JSON.stringify(line)),
+      sendRaw: (line: string) => connection.receive(line),
+      refuse: (size: number) => connection.refused(size),
       hangUp: () => connection.closed(),
       last: () => sent.at(-1),
     };
@@ -53,7 +67,7 @@ function setup(options: { notice?: string | null } = {}) {
     await settle();
     return peer;
   };
-  return { daemon, spawner, clock, shutdowns, shells, connect, client };
+  return { daemon, spawner, clock, shutdowns, shells, layouts, log, connect, client };
 }
 
 /** Lets the daemon's pending promises run. */
@@ -289,6 +303,8 @@ describe("the terminal daemon", () => {
       panes: [{ id: PANE, alive: true, owned: true }],
       panels: [{ window: 7 }],
       sw: { connected: true, connects: 1 },
+      gatewayClients: 0,
+      paused: false,
     });
   });
 
@@ -375,6 +391,18 @@ describe("the terminal daemon", () => {
     ["cli", { type: "ext.result", id: "x1", ok: true }],
     ["panel", { type: "ext.call", id: "r1", op: "windows" }],
     ["watch", { type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 }],
+    ["sw", { type: "layout.get", id: "r1" }],
+    ["sw", { type: "close", id: "r1", pane: PANE }],
+    ["cli", { type: "layout.put", id: "r1", layout: { version: 1, activeTab: null, ui: {}, tabs: [] } }],
+    ["cli", { type: "close", id: "r1", pane: PANE }],
+    ["cli", { type: "alert", kind: "terminal-attached" }],
+    ["cli", { type: "gateway.state", clients: 1 }],
+    ["panel", { type: "agents.state", paused: true }],
+    ["panel", { type: "alert", kind: "terminal-attached" }],
+    ["panel", { type: "gateway.state", clients: 1 }],
+    ["watch", { type: "layout.put", id: "r1", layout: { version: 1, activeTab: null, ui: {}, tabs: [] } }],
+    ["watch", { type: "shutdown", mode: "stop" }],
+    ["watch", { type: "agents.state", paused: true }],
   ])("a %s client sending %j gets E_VERB", async (kind, message) => {
     const { client } = setup();
     const peer = await client(kind);
@@ -422,5 +450,175 @@ describe("the terminal daemon", () => {
     stale.send({ type: "shutdown", mode: "restart" });
 
     expect(shutdowns).toEqual(["restart"]);
+  });
+
+});
+
+const TAB = "t_k2m9q3x7ab";
+const layoutWith = (pane: string): Layout => ({
+  version: 1,
+  activeTab: TAB,
+  ui: { fontSize: 13 },
+  tabs: [{ id: TAB, focus: pane, zoomed: null, root: { pane } }],
+});
+
+describe("the terminal daemon's protocol and lifecycle (slice 2a)", () => {
+  it("replies and errors echo the request id, and pane errors name the pane", async () => {
+    const { client } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "list", id: "r-list" });
+    const listed = panel.last();
+    panel.send({ type: "layout.get", id: "r-layout" });
+    await settle();
+    const layout = panel.last();
+    panel.send({ type: "close", id: "r-close", pane: PANE });
+    const closeError = panel.last();
+    panel.send({ type: "in", pane: OTHER, data: "x" });
+    const inError = panel.last();
+
+    expect(listed).toMatchObject({ type: "panes", id: "r-list" });
+    expect(layout).toMatchObject({ type: "layout", id: "r-layout" });
+    expect(closeError).toEqual({ type: "error", id: "r-close", pane: PANE, code: "E_NOPANE", message: "no such pane, or not its owner" });
+    expect(inError).toEqual({ type: "error", pane: OTHER, code: "E_NOPANE", message: "no such pane, or not its owner" });
+  });
+
+  it("a line over 1 MiB gets E_PROTO and only its size is logged", async () => {
+    const { client, log } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    panel.refuse(1_048_577);
+
+    expect(panel.last()).toEqual({ type: "error", code: "E_PROTO", message: "the message was malformed" });
+    expect(log.events).toEqual([{ event: "line-refused", size: 1_048_577 }]);
+  });
+
+  it("a malformed line's content never reaches a log, even through a parser error message", async () => {
+    const { client, log } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    const truncated = '{"type":"in","pane":"desk-canary-7f3e","data":';
+    const unknownShape = '{"type":"open","id":"desk-canary-7f3e"}';
+    panel.sendRaw(truncated);
+    panel.sendRaw(unknownShape);
+
+    expect(log.events).toEqual([
+      { event: "bad-line", size: truncated.length },
+      { event: "bad-line", size: unknownShape.length },
+    ]);
+    expect(JSON.stringify(log.events)).not.toContain("canary");
+  });
+
+  it("layout.put saves the layout and broadcasts it to every panel", async () => {
+    const { client, layouts } = setup();
+    const first = await client("panel", { window: 7 });
+    const second = await client("panel", { window: 8 });
+    first.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    first.send({ type: "layout.put", id: "r2", layout: layoutWith(PANE) });
+    await settle();
+
+    expect(layouts.saved).toEqual([layoutWith(PANE)]);
+    expect(first.sent).toContainEqual({ type: "layout", layout: layoutWith(PANE) });
+    expect(second.last()).toEqual({ type: "layout", layout: layoutWith(PANE) });
+  });
+
+  it("layout.get answers with the saved layout", async () => {
+    const layouts = new MemoryLayoutStore({ layout: layoutWith(PANE), recovered: false });
+    const { client } = setup({ layouts });
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    panel.send({ type: "layout.get", id: "r2" });
+    await settle();
+
+    expect(panel.last()).toEqual({ type: "layout", id: "r2", layout: layoutWith(PANE) });
+  });
+
+  it.each([
+    ["over 64 KiB", () => ({ ...layoutWith(PANE), ui: { fontSize: 13, filler: "x".repeat(70_000) } })],
+    [
+      "deeper than 16",
+      () => {
+        let root: object = { pane: PANE };
+        for (let i = 0; i < 17; i += 1) root = { split: "row", ratio: 0.5, a: root, b: { pane: PANE } };
+        return { ...layoutWith(PANE), tabs: [{ id: TAB, focus: PANE, zoomed: null, root }] };
+      },
+    ],
+    ["naming an unknown pane", () => layoutWith(OTHER)],
+  ])("layout.put %s gets E_LIMIT", async (_, layout) => {
+    const { client, layouts } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    panel.send({ type: "layout.put", id: "r2", layout: layout() });
+    await settle();
+
+    expect(panel.last()).toEqual({ type: "error", id: "r2", code: "E_LIMIT", message: "over a protocol limit" });
+    expect(layouts.saved).toEqual([]);
+  });
+
+  it("a corrupt or newer state file is moved aside and the daemon continues with its live panes", async () => {
+    const layouts = new MemoryLayoutStore({ layout: null, recovered: true });
+    const { client, log } = setup({ layouts });
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    panel.send({ type: "layout.get", id: "r2" });
+    await settle();
+    const answer = panel.last();
+
+    expect(log.events).toContainEqual({ event: "state-recovered", file: "layout" });
+    expect(answer).toMatchObject({ type: "layout", id: "r2" });
+    expect(JSON.stringify(answer)).toContain(PANE);
+  });
+
+  it("alerts from desk watch and the agents' state from desk reach every panel, and list reports them", async () => {
+    const { client } = setup();
+    const panel = await client("panel", { window: 7 });
+    const watch = await client("watch");
+    const cli = await client("cli");
+
+    watch.send({ type: "alert", kind: "terminal-attached" });
+    const alert = panel.last();
+    watch.send({ type: "gateway.state", clients: 2 });
+    cli.send({ type: "agents.state", paused: true });
+    const paused = panel.last();
+    cli.send({ type: "list", id: "r1" });
+
+    expect(alert).toEqual({ type: "alert", kind: "terminal-attached" });
+    expect(paused).toEqual({ type: "notice", kind: "agents-paused" });
+    expect(cli.last()).toMatchObject({ type: "panes", id: "r1", gatewayClients: 2, paused: true });
+  });
+
+  it("close ends the pane's shell with SIGHUP and answers closed", async () => {
+    const { client, spawner } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    panel.send({ type: "close", id: "r2", pane: PANE });
+    panel.send({ type: "list", id: "r3" });
+
+    expect(spawner.pty().signals).toEqual(["SIGHUP"]);
+    expect(panel.sent).toContainEqual({ type: "closed", pane: PANE });
+    expect(panel.last()).toMatchObject({ type: "panes", panes: [] });
+  });
+
+  it("detach lets go of the pane, whose shell keeps running", async () => {
+    const { client, spawner } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 80, rows: 24 });
+    await settle();
+
+    panel.send({ type: "detach", pane: PANE });
+    panel.send({ type: "list", id: "r2" });
+
+    expect(spawner.pty().signals).toEqual([]);
+    expect(panel.last()).toMatchObject({ type: "panes", panes: [{ id: PANE, alive: true, owned: false }] });
   });
 });

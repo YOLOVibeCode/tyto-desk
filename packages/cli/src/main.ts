@@ -1,13 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseVersionInfo, versionLine, type Prompter, type VersionInfo } from "@desk/core";
-import { ConfigFileError } from "@desk/node";
+import { ConfigFileError, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
 import { cdpCommand } from "./cdp.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
 import { TtyPrompter } from "./prompter.ts";
 import { quitCommand } from "./quit.ts";
+import { daemonRestartCommand, statusCommand } from "./status.ts";
 import { tabCommand } from "./tab.ts";
 import { watchCommand } from "./watch.ts";
 
@@ -29,6 +30,8 @@ const USAGE = [
   "       desk quit [--all]          close the Desk Chrome; --all also stops the terminal daemon and desk watch",
   "       desk cdp [--raw] [--ws]    the guarded endpoint for CDP clients; --raw the browser's own port",
   "       desk tab current|mine      the tab you are looking at, or this pane's agent tab (made in the background)",
+  "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
+  "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -88,7 +91,25 @@ export async function main(input: MainInput): Promise<number> {
       else fail(result.code, result.message);
       return result.code;
     }
+    if (command === "status") {
+      if (rest.length !== 0) return usage();
+      const result = await statusCommand({ deskHome, version: version.info.version });
+      say(result.message);
+      return result.code;
+    }
+    if (command === "daemon") {
+      if (rest.length !== 1 || rest[0] !== "restart") return usage();
+      const result = await daemonRestartCommand({ deskHome, version: version.info.version, prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout) });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      await result.finish?.();
+      return result.code;
+    }
     if (command === "watch" && rest.length === 0) {
+      const watchLog = new FileLogSink(join(deskHome, "logs", "watch.log"));
+      logCrashes(process, watchLog, (code) => {
+        void watchLog.flushed().then(() => process.exit(code));
+      });
       const until = new Promise<void>((resolve) => {
         process.once("SIGTERM", () => resolve());
         process.once("SIGHUP", () => resolve());

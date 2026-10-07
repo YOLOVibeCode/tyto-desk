@@ -66,6 +66,8 @@ describe("protocol v1 messages the daemon sends", () => {
         panes: [{ id: "p_k2m9q3x7ab", alive: true, owned: true }],
         panels: [{ window: 1052 }],
         sw: { connected: true, connects: 1 },
+        gatewayClients: 0,
+        paused: false,
       },
     ],
   ])("the panel and the CLI read %j", (message) => {

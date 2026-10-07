@@ -22,9 +22,31 @@ export type PanelPorts = {
 /** What each notice from the daemon says in the panel's banner. */
 const NOTICES: Readonly<Record<string, string>> = {
   "tmux-line-missing": "Agents can't see this Desk until the tmux line is added (desk install); then open a new pane",
+  "agents-paused": "Agents are paused: desk agents resume lets them drive this Desk again",
+};
+
+/** What each alert from `desk watch` says (§9's panel states: notices and alerts). */
+const ALERTS: Readonly<Record<string, string>> = {
+  "terminal-attached": "Something is attached to this terminal: DevTools, or a CDP client on the raw port",
+  "agent-state-saved": "A Desk agent session saved browser state into your agent-browser files",
 };
 
 const EXITED = "\r\n[the shell exited: press Enter for a new one]\r\n";
+
+/** §9's panel-state table: what the banner says in each state. */
+const STATES = {
+  notInstalled: "Desk isn't installed for this profile: run desk install",
+  hostFailed: "Desk couldn't start its terminal host: run desk doctor",
+  installDamaged: "Desk's install is damaged: run desk install",
+  noDaemon: "The terminal daemon isn't running: run desk doctor",
+  messageLimit: "Desk hit a message limit: run desk doctor",
+  updated: "Desk was updated. Restart the terminal daemon now? tmux sessions survive.",
+} as const;
+
+/** A host whose port closes this soon after it opened, without a hello, counts as one that failed to start. */
+const QUICK_CLOSE_MS = 1_000;
+/** Quick closes, and identical host drops, the panel tries before it stops (§9). */
+const TRIES = 3;
 
 /** What the banner says when the daemon cannot give this panel's pane a shell; Enter tries again. */
 const PANE_ERRORS: Readonly<Partial<Record<ErrorCode, string>>> = {
@@ -50,6 +72,14 @@ export class PanelController {
   private opens = 0;
   private focused = false;
   private failed = false;
+  /** The panel stopped reconnecting; its banner says why. */
+  private stopped = false;
+  /** A host state the banner shows, which a reconnect must not overwrite. */
+  private hostBanner = false;
+  private openedAt = 0;
+  private greeted = false;
+  private quickCloses = 0;
+  private drops = 0;
 
   constructor(ports: PanelPorts) {
     this.ports = ports;
@@ -60,16 +90,30 @@ export class PanelController {
   }
 
   private connect(): void {
+    if (this.stopped) return;
     const channel = this.ports.connector.open();
     this.channel = channel;
+    this.openedAt = this.ports.clock.now();
+    this.greeted = false;
     channel.onMessage((message) => {
       if (this.channel === channel) this.receive(parseDaemonMessage(message));
     });
-    channel.onDisconnect(() => {
+    channel.onDisconnect((error) => {
       if (this.channel !== channel) return;
       this.channel = null;
       this.attached = false;
-      this.ports.view.banner("Reconnecting to the Desk terminal…");
+      if (error !== null && /not found/i.test(error)) {
+        this.stop(STATES.notInstalled);
+        return;
+      }
+      if (this.stopped) return;
+      const quick = !this.greeted && this.ports.clock.now() - this.openedAt < QUICK_CLOSE_MS;
+      this.quickCloses = quick ? this.quickCloses + 1 : 0;
+      if (this.quickCloses >= TRIES) {
+        this.stop(STATES.hostFailed);
+        return;
+      }
+      if (!this.hostBanner) this.ports.view.banner("Reconnecting to the Desk terminal…");
       void this.ports.clock.sleep(this.backoff.next()).then(() => this.connect());
     });
     channel.post({
@@ -86,13 +130,33 @@ export class PanelController {
     this.channel?.post(message);
   }
 
+  /** Stops reconnecting, and says why. */
+  private stop(text: string): void {
+    this.stopped = true;
+    this.ports.view.banner(text);
+  }
+
   private receive(message: DaemonMessage | null): void {
     if (message === null) return;
     switch (message.type) {
       case "hello":
         this.backoff.reset();
+        this.greeted = true;
+        this.quickCloses = 0;
+        this.drops = 0;
+        this.hostBanner = false;
         this.ports.view.banner(null);
         this.attach(message.panes);
+        return;
+      case "host":
+        if (message.state === "install-damaged") this.stop(STATES.installDamaged);
+        else if (message.state === "no-daemon") {
+          this.hostBanner = true;
+          this.ports.view.banner(STATES.noDaemon);
+        } else {
+          this.drops += 1;
+          if (this.drops >= TRIES) this.stop(STATES.messageLimit);
+        }
         return;
       case "snapshot":
         if (message.pane !== this.paneId || this.term === null) return;
@@ -121,7 +185,8 @@ export class PanelController {
       }
       case "error": {
         if (message.code === "E_STALE") {
-          this.ports.view.banner("Desk was updated. Restart the terminal daemon to use it; tmux sessions survive");
+          // Every daemon understands shutdown, even after E_STALE (§7.2); the host starts the current version's next.
+          this.ports.view.banner(STATES.updated, { label: "Restart now", run: () => this.post({ type: "shutdown", mode: "restart" }) });
           return;
         }
         const text = PANE_ERRORS[message.code];
@@ -132,6 +197,13 @@ export class PanelController {
         this.ports.view.banner(text);
         return;
       }
+      case "alert": {
+        const text = ALERTS[message.kind];
+        if (text !== undefined) this.ports.view.banner(text);
+        return;
+      }
+      case "layout":
+      case "closed":
       case "panes":
       case "ext.call":
       case "ext.result":

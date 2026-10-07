@@ -86,10 +86,17 @@ export class UnixMessageServer implements MessageServer {
       },
       close: () => socket.end(),
     });
+    let refused = false;
     socket.on("data", (chunk: Buffer) => {
+      if (refused) return;
       const result = decoder.push(chunk);
       for (const line of result.lines) handle.receive(text.decode(line));
-      if (!result.ok) socket.destroy();
+      if (!result.ok) {
+        // Over 1 MiB: the daemon answers E_PROTO and logs the size, then the connection ends.
+        refused = true;
+        handle.refused(result.size);
+        socket.end();
+      }
     });
     socket.on("error", () => undefined);
     socket.on("close", () => {

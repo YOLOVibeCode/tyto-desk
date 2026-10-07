@@ -7,6 +7,7 @@ import type { ConfigStore } from "../ports/config-store.ts";
 import type { DaemonClient } from "../ports/daemon-client.ts";
 import type { DevToolsHttp } from "../ports/dev-tools-http.ts";
 import type { InstanceLock } from "../ports/instance-lock.ts";
+import type { LogSink } from "../ports/log-sink.ts";
 import type { ProcessInfo } from "../ports/process-info.ts";
 import type { ProcessSignals } from "../ports/process-signals.ts";
 import type { Prompter } from "../ports/prompter.ts";
@@ -24,6 +25,8 @@ export type QuitPorts = {
   signals: ProcessSignals;
   daemon: DaemonClient;
   prompter: Prompter;
+  /** `desk.log`, for the consent audit line (§6.3). */
+  log: LogSink;
 };
 
 export type QuitInput = { deskHome: string; all: boolean };
@@ -53,6 +56,13 @@ type ChromeOutcome = { ok: true; closed: boolean; message: string } | { ok: fals
  * terminal, also stops `desk watch` (SIGTERM to the pid holding `run/watch.lock`) and then the daemon, last.
  */
 export async function quit(ports: QuitPorts, input: QuitInput): Promise<QuitResult> {
+  const result = await quitPlan(ports, input);
+  // §6.3: each consent operation writes one audit line with its exit code, never names or values.
+  if (input.all) ports.log.write({ event: "consent", operation: "quit-all", exit: result.code });
+  return result;
+}
+
+async function quitPlan(ports: QuitPorts, input: QuitInput): Promise<QuitResult> {
   if (input.all) {
     const consent = await ports.prompter.confirm(QUIT_ALL_QUESTION);
     if (!consent.ok) return { code: 64, message: "desk quit --all needs an interactive terminal to ask you first" };
