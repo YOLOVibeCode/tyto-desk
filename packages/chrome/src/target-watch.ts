@@ -33,6 +33,8 @@ export class CdpTargetWatch implements TargetWatch {
     const desk = `chrome-extension://${this.extensionId}/`;
     const panel = `${desk}panel.html`;
     const known = new Map<string, Known>();
+    // Every panel target seen, kept after it is destroyed: Chrome may report a crash after the destruction.
+    const panelIds = new Set<string>();
     const panels = () => [...known.values()].filter((target) => target.url.startsWith(panel)).length;
     let reported = -1;
     const report = () => {
@@ -49,6 +51,7 @@ export class CdpTargetWatch implements TargetWatch {
           if (info === null) return;
           const before = known.get(info.targetId);
           known.set(info.targetId, { url: info.url, attached: info.attached });
+          if (info.url.startsWith(panel)) panelIds.add(info.targetId);
           if (info.url.startsWith(desk) && info.attached && before?.attached !== true) onEvent({ type: "desk-attached" });
           report();
           return;
@@ -60,7 +63,7 @@ export class CdpTargetWatch implements TargetWatch {
         }
         case "Target.targetCrashed": {
           const targetId = params.targetId;
-          if (typeof targetId === "string" && known.get(targetId)?.url.startsWith(panel) === true) onEvent({ type: "panel-crashed" });
+          if (typeof targetId === "string" && panelIds.has(targetId)) onEvent({ type: "panel-crashed" });
           return;
         }
         default:

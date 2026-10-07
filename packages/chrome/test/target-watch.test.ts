@@ -89,4 +89,14 @@ describe("desk watch's target watch (docs/IMPLEMENTATION.md §6.4)", () => {
     expect(handle).toBeNull();
     expect(cdp.closed).toBe(true);
   });
+
+  it("a panel crash Chrome reports after destroying the panel's target still counts", async () => {
+    const { events, event, target } = await followed();
+
+    event("Target.targetCreated", target("P1", PANEL));
+    event("Target.targetDestroyed", { targetId: "P1" });
+    event("Target.targetCrashed", { targetId: "P1", status: "crashed", errorCode: 5 });
+
+    expect(events.filter((e) => e.type === "panel-crashed")).toEqual([{ type: "panel-crashed" }]);
+  });
 });

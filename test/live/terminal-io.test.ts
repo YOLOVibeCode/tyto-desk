@@ -150,7 +150,9 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       await typeLine("tmux kill-session -t desklive");
       await saveResult("terminal-full-screen", { vimBefore, vimAfter, tmuxBefore, tmuxAfter });
 
-      expect(vimAfter).toEqual(vimBefore);
+      // The panel's height may change across the relaunch (desk watch's alert line), so vi's filler rows may differ.
+      const vimText = (shown: string[]) => shown.filter((line) => line !== "~" && line !== "");
+      expect(vimText(vimAfter)).toEqual(vimText(vimBefore));
       // tmux's status line ends with a clock, which may move on during the re-attach.
       const steady = (shown: string[]) => shown.filter((line) => line.includes("[desklive]") || line.includes("inside-tmux")).map((line) => line.replace(/\d{1,2}:\d{2}.*$/, ""));
       expect(steady(tmuxAfter)).toEqual(steady(tmuxBefore));
