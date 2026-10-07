@@ -66,7 +66,15 @@ export type ClientMessage =
   | GatewayState;
 
 export type PaneSummary = { id: string; alive: boolean };
-export type HelloReply = { type: "hello"; v: number; build: string; panes: PaneSummary[]; notices: string[] };
+export type HelloReply = {
+  type: "hello";
+  v: number;
+  build: string;
+  panes: PaneSummary[];
+  notices: string[];
+  /** `terminal.closeOnExit`: a pane whose shell exits is removed (§7.3). */
+  closeOnExit?: boolean;
+};
 export type Snapshot = { type: "snapshot"; pane: string; part: number; last: boolean; cols: number; rows: number; data: string };
 export type Out = { type: "out"; pane: string; data: string };
 export type Exit = { type: "exit"; pane: string; code: number | null; signal: number | null };
@@ -219,6 +227,7 @@ const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
       panes: isListOf(isPaneSummary, 64),
       notices: isListOf(isText(64), 16),
     },
+    optional: { closeOnExit: isBoolean },
   },
   snapshot: {
     required: { type: isType("snapshot"), pane: isPaneId, part: isWhole(0, 10_000), last: isBoolean, ...size, data: isText(2 ** 20) },

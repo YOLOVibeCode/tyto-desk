@@ -3,7 +3,14 @@ export type TerminalSize = { cols: number; rows: number };
 
 /** One pane's terminal on the panel's page. */
 export type TerminalPane = {
-  write(data: string): void;
+  /** Writes `data`; `done` runs once the terminal has parsed it (flow control acks count those, §7.3). */
+  write(data: string, done?: () => void): void;
+  /** Pastes text the panel already sanitized; the terminal adds the bracketed-paste markers when the program asked. */
+  paste(text: string): void;
+  /** Whether the program in the terminal turned on bracketed paste. */
+  bracketedPasteMode(): boolean;
+  /** Text the user pasted or dropped, before the terminal sees it (§10). */
+  onPaste(listener: (text: string) => void): void;
   /** Clears the screen, scrollback and modes, as before a snapshot. */
   reset(): void;
   size(): TerminalSize;
@@ -24,4 +31,6 @@ export interface TerminalView {
   create(paneId: string): TerminalPane;
   /** Shows a line above the terminal, with a button when `action` is given, or hides it with `null`. */
   banner(text: string | null, action?: BannerAction): void;
+  /** Asks the user a yes-or-no question in the panel ("Paste 3 lines?"). */
+  confirm(question: string): Promise<boolean>;
 }

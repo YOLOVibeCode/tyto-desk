@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type Layout, type PaneShell } from "../src/index.ts";
-import { FakeClock, FakePtySpawner, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
+import { FakeClock, FakePtySpawner, FakeTerminalMirror, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 const OTHER = "p_m9x1d4f6hz";
@@ -18,6 +18,7 @@ type Peer = {
 
 function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } = {}) {
   const spawner = new FakePtySpawner();
+  const mirror = new FakeTerminalMirror();
   const layouts = options.layouts ?? new MemoryLayoutStore();
   const log = new MemoryLogSink();
   const clock = new FakeClock();
@@ -40,6 +41,8 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
     onShutdown: (mode) => shutdowns.push(mode),
     layouts,
     log,
+    mirror,
+    scrollback: 5000,
   });
   const connect = (): Peer => {
     const sent: DaemonMessage[] = [];
@@ -67,7 +70,7 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
     await settle();
     return peer;
   };
-  return { daemon, spawner, clock, shutdowns, shells, layouts, log, connect, client };
+  return { daemon, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client };
 }
 
 /** Lets the daemon's pending promises run. */
@@ -106,7 +109,7 @@ describe("the terminal daemon", () => {
     expect(spawner.spawned.map((s) => s.options)).toEqual([
       { file: "/bin/zsh", args: ["-l"], cwd: "/Users/alex", env: { HOME: "/Users/alex", DESK_PANE: PANE }, cols: 100, rows: 30 },
     ]);
-    expect(panel.last()).toEqual({ type: "snapshot", pane: PANE, part: 0, last: true, cols: 100, rows: 30, data: "" });
+    expect(panel.last()).toEqual({ type: "snapshot", pane: PANE, part: 0, last: true, cols: 100, rows: 30, data: '<screen "">' });
   });
 
   it("the owner's input reaches the shell and the shell's output reaches only the owner", async () => {
@@ -200,7 +203,8 @@ describe("the terminal daemon", () => {
     expect(spawner.pty().signals).toEqual([]);
     expect(spawner.spawned).toHaveLength(1);
     expect(again.sent[0]).toEqual({ type: "hello", v: 1, build: "0.3.0", panes: [{ id: PANE, alive: true }], notices: [] });
-    expect(again.last()).toMatchObject({ type: "snapshot", pane: PANE, data: "" });
+    // The mirror kept what the shell printed while no panel owned it (slice 2b).
+    expect(again.last()).toMatchObject({ type: "snapshot", pane: PANE, data: '<screen "nobody sees this\\r\\n">' });
   });
 
   it("a shell that exits is reported to its owner, and the next open of that pane starts a new one", async () => {
@@ -620,5 +624,214 @@ describe("the terminal daemon's protocol and lifecycle (slice 2a)", () => {
 
     expect(spawner.pty().signals).toEqual([]);
     expect(panel.last()).toMatchObject({ type: "panes", panes: [{ id: PANE, alive: true, owned: false }] });
+  });
+});
+
+describe("the terminal daemon's output, attach and flow control (slice 2b)", () => {
+  /** A panel in window 7 that opened PANE at 100×30, its shell started and its first snapshot taken. */
+  async function opened() {
+    const desk = setup();
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    return { ...desk, panel, pty: desk.spawner.pty(), screen: desk.mirror.screen() };
+  }
+
+  const outs = (sent: DaemonMessage[]) => sent.filter((m) => m.type === "out").map((m) => (m.type === "out" ? m.data : ""));
+  const snapshots = (sent: DaemonMessage[]) => sent.filter((m) => m.type === "snapshot").map((m) => (m.type === "snapshot" ? m.data : ""));
+
+  it("output produced while a pane is being opened appears exactly once, after its snapshot", async () => {
+    const { pty, screen, client, clock } = await opened();
+    pty.print("A");
+    await clock.advance(10);
+    const second = await client("panel", { window: 8 });
+    screen.holding = true;
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    pty.print("B");
+    screen.release();
+    await settle();
+    await clock.advance(10);
+
+    const types = second.sent.map((m) => m.type).filter((t) => t === "snapshot" || t === "out");
+    expect(types).toEqual(["snapshot", "out"]);
+    expect(snapshots(second.sent).join("")).toContain('"A"');
+    expect(snapshots(second.sent).join("")).not.toContain("B");
+    expect(outs(second.sent)).toEqual(["B"]);
+  });
+
+  it("a snapshot ends with the unfinished escape sequence at the flush point", async () => {
+    const { pty, client, clock } = await opened();
+    pty.print("x\u001b[3");
+    await clock.advance(10);
+    const second = await client("panel", { window: 8 });
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(snapshots(second.sent).join("")).toMatch(/\u001b\[3$/);
+  });
+
+  it("the daemon's snapshot replays the modes serialize does not write, before the unfinished escape", async () => {
+    const { pty, client, clock } = await opened();
+    pty.print("\u001b[?1006h\u001b[?25l\u001b[4 qok\u001b]0;ti");
+    await clock.advance(10);
+    const second = await client("panel", { window: 8 });
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(snapshots(second.sent).join("")).toMatch(/\u001b\[\?1006h\u001b\[\?25l\u001b\[4 q\u001b\]0;ti$/);
+  });
+
+  it("re-attaching a pane in the alternate screen resizes it to rows-1 and back", async () => {
+    const { pty, screen, client } = await opened();
+    screen.altScreen = true;
+    const sizesBefore = pty.sizes.length;
+    const second = await client("panel", { window: 8 });
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(pty.sizes.slice(sizesBefore)).toEqual([
+      [100, 29],
+      [100, 30],
+    ]);
+  });
+
+  it("re-attaching a plain shell never resizes it", async () => {
+    const { pty, client } = await opened();
+    const sizesBefore = pty.sizes.length;
+    const second = await client("panel", { window: 8 });
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(pty.sizes.slice(sizesBefore)).toEqual([]);
+  });
+
+  it("the first output after 4 ms of quiet is sent at once", async () => {
+    const { pty, panel, clock } = await opened();
+    await clock.advance(5);
+
+    pty.print("hello");
+
+    expect(outs(panel.sent)).toEqual(["hello"]);
+  });
+
+  it("bursts are coalesced into messages of at most 65,536 characters", async () => {
+    const { pty, panel, clock } = await opened();
+    await clock.advance(5);
+    pty.print("a");
+    const chunk = "b".repeat(10_000);
+
+    for (let i = 0; i < 15; i += 1) pty.print(chunk);
+    await clock.advance(4);
+
+    const sent = outs(panel.sent);
+    expect(sent[0]).toBe("a");
+    expect(sent.slice(1).every((data) => data.length <= 65_536)).toBe(true);
+    expect(sent.slice(1).length).toBe(3);
+    expect(sent.join("")).toBe(`a${chunk.repeat(15)}`);
+  });
+
+  it("the PTY pauses above 100,000 unacknowledged characters and resumes below 5,000", async () => {
+    const { pty, panel, clock } = await opened();
+    await clock.advance(5);
+
+    pty.print("x".repeat(100_001));
+    await clock.advance(4);
+    const paused = pty.paused;
+    panel.send({ type: "ack", pane: PANE, n: 96_000 });
+
+    expect(paused).toBe(true);
+    expect(pty.paused).toBe(false);
+  });
+
+  it("an owner over the limit for 10 s is detached as stuck and the pane resumes", async () => {
+    const { pty, panel, clock } = await opened();
+    await clock.advance(5);
+
+    pty.print("x".repeat(150_000));
+    await clock.advance(10_004);
+
+    expect(panel.sent).toContainEqual({ type: "detached", pane: PANE, reason: "stuck" });
+    expect(pty.paused).toBe(false);
+  });
+
+  it("opening an exited pane again gives its new shell a new mirror and disposes the old one", async () => {
+    const { pty, panel, mirror } = await opened();
+    pty.end({ code: 0, signal: null });
+    await settle();
+
+    panel.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(mirror.screens.map((screen) => screen.disposed)).toEqual([true, false]);
+  });
+
+  it("the PTY pauses while its mirror is more than 1,000,000 characters behind, and resumes once the mirror catches up", async () => {
+    const { pty, panel, screen, clock } = await opened();
+    panel.send({ type: "visibility", state: "hidden" });
+    await clock.advance(5);
+    screen.holding = true;
+
+    pty.print("x".repeat(600_000));
+    const under = pty.paused;
+    pty.print("y".repeat(400_001));
+    const over = pty.paused;
+    screen.release();
+    await settle();
+
+    expect([under, over, pty.paused]).toEqual([false, true, false]);
+  });
+
+  it("a PTY paused for its owner stays paused while only the mirror catches up", async () => {
+    const { pty, screen, clock } = await opened();
+    await clock.advance(5);
+    screen.holding = true;
+
+    pty.print("x".repeat(1_000_001));
+    await clock.advance(4);
+    screen.release();
+    await settle();
+
+    expect(pty.paused).toBe(true);
+  });
+
+  it("a hidden owner receives no output and never pauses the PTY", async () => {
+    const { pty, panel, clock } = await opened();
+    panel.send({ type: "visibility", state: "hidden" });
+    await clock.advance(5);
+    const before = outs(panel.sent).length;
+
+    pty.print("x".repeat(200_000));
+    await clock.advance(10_004);
+
+    expect(outs(panel.sent).length).toBe(before);
+    expect(pty.paused).toBe(false);
+    expect(panel.sent).not.toContainEqual({ type: "detached", pane: PANE, reason: "stuck" });
+  });
+
+  it("the mirror never writes to the PTY", async () => {
+    const { pty, screen, client, clock } = await opened();
+    pty.print("\u001b[6n\u001b[c");
+    await clock.advance(10);
+    const second = await client("panel", { window: 8 });
+
+    second.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(screen.written).toContain("\u001b[6n");
+    expect(pty.written).toEqual([]);
+  });
+
+  it("exit reports the code and signal to the owner", async () => {
+    const { pty, panel } = await opened();
+
+    pty.end({ code: null, signal: 9 });
+
+    expect(panel.last()).toEqual({ type: "exit", pane: PANE, code: null, signal: 9 });
   });
 });

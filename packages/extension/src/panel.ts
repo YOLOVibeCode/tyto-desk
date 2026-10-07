@@ -1,5 +1,5 @@
 import { PanelController } from "@desk/core";
-import { BrowserClock, ChromeHostConnector, WebCryptoRandom } from "./chrome-adapters.ts";
+import { BrowserClock, ChromeHostConnector, DocumentVisibility, WebCryptoRandom } from "./chrome-adapters.ts";
 import { deskBuild } from "./desk-build.ts";
 import { XtermView } from "./xterm-view.ts";
 
@@ -33,6 +33,7 @@ async function start(): Promise<void> {
     build: deskBuild(),
     windowId: current.id,
     focusOnLoad: new URLSearchParams(location.search).get("focus") !== "0",
+    visibility: new DocumentVisibility(),
   }).start();
 }
 

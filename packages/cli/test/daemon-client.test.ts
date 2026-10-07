@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Daemon, type PaneShell } from "@desk/core";
-import { FakeClock, FakePtySpawner, MemoryLayoutStore, MemoryLogSink } from "@desk/core/testing";
+import { FakeClock, FakePtySpawner, FakeTerminalMirror, MemoryLayoutStore, MemoryLogSink } from "@desk/core/testing";
 import { UnixMessageServer } from "@desk/ptyd";
 import { DaemonExtensionBridge, UnixDaemonClient } from "../src/index.ts";
 
@@ -19,6 +19,8 @@ async function daemonAt(onShutdown: (mode: "stop" | "restart") => void = () => u
     onShutdown,
     layouts: new MemoryLayoutStore(),
     log: new MemoryLogSink(),
+    mirror: new FakeTerminalMirror(),
+    scrollback: 5000,
   });
   const server = new UnixMessageServer(path);
   await server.listen((peer) => daemon.connect(peer));

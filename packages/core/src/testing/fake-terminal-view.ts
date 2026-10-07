@@ -8,6 +8,9 @@ export class FakeTerminalPane implements TerminalPane {
   focuses = 0;
   disposed = false;
   current: TerminalSize;
+  readonly pastes: string[] = [];
+  bracketed = true;
+  private readonly pasteListeners: ((text: string) => void)[] = [];
   private readonly inputListeners: ((data: string) => void)[] = [];
   private readonly resizeListeners: ((size: TerminalSize) => void)[] = [];
 
@@ -16,8 +19,26 @@ export class FakeTerminalPane implements TerminalPane {
     this.current = size;
   }
 
-  write(data: string): void {
+  write(data: string, done?: () => void): void {
     this.screen += data;
+    done?.();
+  }
+
+  paste(text: string): void {
+    this.pastes.push(text);
+  }
+
+  bracketedPasteMode(): boolean {
+    return this.bracketed;
+  }
+
+  onPaste(listener: (text: string) => void): void {
+    this.pasteListeners.push(listener);
+  }
+
+  /** The user pastes `text`. */
+  userPastes(text: string): void {
+    for (const listener of this.pasteListeners) listener(text);
   }
 
   reset(): void {
@@ -62,6 +83,9 @@ export class FakeTerminalView implements TerminalView {
   readonly panes: FakeTerminalPane[] = [];
   bannerText: string | null = null;
   bannerAction: BannerAction | null = null;
+  /** The questions the panel asked, and the answers the test gives, in order (no answer means no). */
+  readonly questions: string[] = [];
+  readonly answers: boolean[] = [];
   private readonly size: TerminalSize;
 
   constructor(size: TerminalSize = { cols: 100, rows: 30 }) {
@@ -77,6 +101,11 @@ export class FakeTerminalView implements TerminalView {
   banner(text: string | null, action?: BannerAction): void {
     this.bannerText = text;
     this.bannerAction = action ?? null;
+  }
+
+  async confirm(question: string): Promise<boolean> {
+    this.questions.push(question);
+    return this.answers.shift() ?? false;
   }
 
   /** The latest pane, failing the test when there is none. */
