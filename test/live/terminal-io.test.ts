@@ -242,10 +242,17 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
         { label: "the first panel's offer", timeoutMs: 20_000 },
       );
       const panels = (await targets(first.cdp)).filter((t) => t.url.startsWith(PANEL_URL)).length;
-      await saveResult("terminal-second-window", { banner, panels });
+      // Bring it here, then close the second window: the first panel owns the pane again, in a window nothing covers.
+      await evaluate(first.cdp, first.session, "document.querySelector('#banner button')?.click(), true");
+      const back = await waitFor(async () => ((await evaluate<string>(first.cdp, first.session, "deskTest.banner()")) === "" ? true : null), {
+        label: "the pane back in the first window",
+      }).catch(() => false);
+      await first.cdp.send("Target.closeTarget", { targetId: page }).catch(() => undefined);
+      await saveResult("terminal-second-window", { banner, panels, back });
 
       expect(banner).toContain("Bring it here");
       expect(panels).toBe(2);
+      expect(back).toBe(true);
     },
     120_000,
   );
@@ -254,6 +261,7 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
     "keystroke-to-echo p50 and p95 are recorded",
     async () => {
       const second = await connectPanel(false);
+      // The pane's owner, in the window the second-window test left in front.
       await waitFor(async () => (await screen(second)).length > 0, { label: "a screen" });
       await typeLine("cat", second);
       const times: number[] = [];
