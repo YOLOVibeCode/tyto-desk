@@ -1,22 +1,41 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { findInstallHooks, lockedInstallHooks, unreviewedInstallHooks } from "../scripts/lib/install-scripts.mjs";
+import {
+  findInstallHooks,
+  lockedInstallHooks,
+  npmProjectProblems,
+  npmrcSettings,
+  unreviewedInstallHooks,
+} from "../scripts/lib/install-scripts.mjs";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("../scripts/check-install-scripts.mjs", import.meta.url));
+const allowlist = fileURLToPath(new URL("../scripts/allowed-install-scripts.json", import.meta.url));
 
 type Manifest = { name: string; version: string; scripts?: Record<string, string> };
+
+/** What every npm project's own .npmrc holds: the repo's supply-chain settings. */
+const SETTINGS = "ignore-scripts=true\nsave-exact=true\n";
+/** The npm project of its own that the repo has: the live image's tools. */
+const TOOLS = "test/live/image/tools";
+
+/** Writes `text` at `path` (relative) under `root`, with its directories. */
+async function put(root: string, path: string, text: string): Promise<void> {
+  await mkdir(dirname(join(root, path)), { recursive: true });
+  await writeFile(join(root, path), text);
+}
 
 /** A checkout with an installed dependency tree and an allowlist, in a temp directory. */
 async function checkout(packages: Array<{ dir: string; manifest: Manifest; gyp?: boolean }>, allowed = {}) {
   const root = await mkdtemp(join(tmpdir(), "install-scripts-"));
   await mkdir(join(root, "scripts"));
   await writeFile(join(root, "scripts", "allowed-install-scripts.json"), JSON.stringify(allowed));
+  await writeFile(join(root, ".npmrc"), SETTINGS);
   for (const pkg of packages) {
     const dir = join(root, "node_modules", pkg.dir);
     await mkdir(dir, { recursive: true });
@@ -32,6 +51,16 @@ async function lockedCheckout(packages: Record<string, Record<string, unknown>>,
   const lock = { name: "x", lockfileVersion: 3, requires: true, packages: { "": { name: "x" }, ...packages } };
   await writeFile(join(root, "package-lock.json"), JSON.stringify(lock));
   return root;
+}
+
+/** An npm project of its own at `dir`: a package.json, a package-lock.json unless `lock` is false, and `npmrc`. */
+async function npmProject(root: string, dir: string, npmrc: string | null, lock = true): Promise<void> {
+  await put(root, `${dir}/package.json`, JSON.stringify({ name: "tools", private: true }));
+  if (lock) {
+    const lockfile = { name: "tools", lockfileVersion: 3, requires: true, packages: { "": { name: "tools" } } };
+    await put(root, `${dir}/package-lock.json`, JSON.stringify(lockfile));
+  }
+  if (npmrc !== null) await put(root, `${dir}/.npmrc`, npmrc);
 }
 
 async function lint(root: string): Promise<{ code: number; stderr: string }> {
@@ -145,5 +174,93 @@ describe("lint:install-scripts", () => {
     );
 
     expect((await lint(root)).code).toBe(0);
+  });
+
+  it.each([
+    ["it runs shell commands", "execSync"],
+    ["ldd --version, on Linux", "ldd --version"],
+    ["npm prefix -g", "npm prefix -g"],
+    ["which, for Chrome on Linux", "`which`"],
+    ["the download from GitHub when its binary is absent", "downloads it from the GitHub release"],
+    ["that nothing checks the download", "no checksum or signature"],
+    ["the marker it writes", "bin/.install-method"],
+    ["the relink of a global agent-browser's bin, even on a local install", "even on a local install"],
+  ])("the install-script allowlist says everything agent-browser 0.38.1's postinstall would do: %s", async (_label, words) => {
+    const allowed = JSON.parse(await readFile(allowlist, "utf8")) as Record<string, string>;
+
+    expect(allowed["agent-browser@0.38.1"]).toContain(words);
+  });
+});
+
+describe("lint:install-scripts and the repo's npm projects", () => {
+  it("lint:install-scripts passes when every npm project sets ignore-scripts=true and save-exact=true in its own .npmrc", async () => {
+    const root = await checkout([]);
+    await npmProject(root, TOOLS, SETTINGS);
+
+    expect(await lint(root)).toEqual({ code: 0, stderr: "" });
+  });
+
+  it.each([
+    ["without an .npmrc", null, "test/live/image/tools/.npmrc is missing"],
+    ["whose .npmrc does not set ignore-scripts", "save-exact=true\n", "does not set ignore-scripts=true"],
+    ["whose .npmrc does not set save-exact", "ignore-scripts=true\n", "does not set save-exact=true"],
+    ["whose .npmrc sets ignore-scripts=false", "ignore-scripts=false\nsave-exact=true\n", "does not set ignore-scripts=true"],
+    ["whose .npmrc turns ignore-scripts off again further down", `${SETTINGS}ignore-scripts=false\n`, "does not set ignore-scripts=true"],
+    ["whose .npmrc sets ignore-scripts only in a comment", "# ignore-scripts=true\nsave-exact=true\n", "does not set ignore-scripts=true"],
+    ["whose .npmrc sets ignore-scripts only under a [section]", "save-exact=true\n[tools]\nignore-scripts=true\n", "does not set ignore-scripts=true"],
+  ])("lint:install-scripts fails on an npm project of its own %s", async (_label, npmrc, problem) => {
+    const root = await checkout([]);
+    await npmProject(root, TOOLS, npmrc);
+
+    const result = await lint(root);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(TOOLS);
+    expect(result.stderr).toContain(problem);
+  });
+
+  it("lint:install-scripts fails when the checkout's own .npmrc does not set ignore-scripts=true and save-exact=true", async () => {
+    const root = await checkout([]);
+    await writeFile(join(root, ".npmrc"), "fund=false\n");
+
+    expect(await npmProjectProblems(root)).toEqual([".npmrc does not set ignore-scripts=true or save-exact=true"]);
+  });
+
+  it("lint:install-scripts fails on an npm project of its own whose lockfile it does not read", async () => {
+    const root = await checkout([]);
+    await npmProject(root, "test/fixtures/other-tools", SETTINGS);
+
+    const result = await lint(root);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/test\/fixtures\/other-tools is an npm project of its own.*OTHER_LOCKFILE_DIRS/);
+  });
+
+  it("lint:install-scripts fails on an npm project of its own without a package-lock.json", async () => {
+    const root = await checkout([]);
+    await npmProject(root, TOOLS, SETTINGS, false);
+
+    expect(await npmProjectProblems(root)).toEqual([`${TOOLS} has no package-lock.json: every install there must be pinned`]);
+  });
+
+  it("lint:install-scripts reads the root's workspaces as the root's own npm project, which its .npmrc covers", async () => {
+    const root = await checkout([]);
+    await put(root, "package.json", JSON.stringify({ name: "x", workspaces: ["packages/core"] }));
+    await put(root, "packages/core/package.json", JSON.stringify({ name: "@x/core" }));
+
+    expect(await npmProjectProblems(root)).toEqual([]);
+  });
+
+  it.each([
+    ["key=value", "ignore-scripts=true", "true"],
+    ["spaces around the =", "  ignore-scripts = true  ", "true"],
+    ["a comment after the value", "ignore-scripts=true # every one", "true"],
+    ["a quoted value", 'ignore-scripts="true"', "true"],
+    ["a bare key, which ini reads as true", "ignore-scripts", "true"],
+    ["the last of two lines", "ignore-scripts=true\nignore-scripts=false", "false"],
+    ["a commented-out line", "# ignore-scripts=true\n; ignore-scripts=true", undefined],
+    ["a key under a [section]", "[section]\nignore-scripts=true", undefined],
+  ])("lint:install-scripts reads an .npmrc as npm does: %s", (_label, text, value) => {
+    expect(npmrcSettings(text).get("ignore-scripts")).toBe(value);
   });
 });

@@ -103,6 +103,13 @@ jobs:
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm audit signatures
+      # The live image's npm tools are an npm project of their own, with their own lockfile and .npmrc (§2, D81).
+      - name: npm ci --ignore-scripts (the live image's tools)
+        working-directory: test/live/image/tools
+        run: npm ci --ignore-scripts
+      - name: npm audit signatures (the live image's tools)
+        working-directory: test/live/image/tools
+        run: npm audit signatures
       - run: npm run lint:imports
       - run: npm run lint:extension
       - run: npm run lint:listen

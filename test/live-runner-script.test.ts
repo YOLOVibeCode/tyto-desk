@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -459,6 +459,32 @@ describe("the live runner script, driving a stub docker", () => {
     expect(inCi.slice(2)).toEqual(onMac.slice(2));
     expect(inCi.join(" ")).toContain("--network none");
   });
+
+  it.each(modes)(
+    "phase 2 mounts the checkout's allowlisted top-level files and directories read-only, and nothing else of it ($mode)",
+    async ({ scenario, options }) => {
+      const live = await harness((home) => ({ ...scenario(home), phase2: { done: 0, exit: 0 } }));
+      await mkdir(join(live.checkout, ".git"));
+      await writeFile(join(live.checkout, ".git", "config"), "[core]\n");
+      await writeFile(join(live.checkout, ".env.local"), "DESK_EXAMPLE=1\n");
+      await mkdir(join(live.checkout, "docs"));
+      await writeFile(join(live.checkout, "docs", "notes.md"), "notes\n");
+      await mkdir(join(live.checkout, "scripts"));
+      await writeFile(join(live.checkout, "scripts", "live.mjs"), "\n");
+      await symlink("/etc/hosts", join(live.checkout, "vitest.extra.config.ts"));
+
+      const { code } = await live.run(options);
+      const call = await phase2Call(live);
+      const binds = call.filter((arg, i) => call[i - 1] === "--mount" && arg.startsWith("type=bind,"));
+
+      expect(code).toBe(0);
+      expect(binds).toEqual(
+        [".npmrc", "package-lock.json", "package.json", "packages", "scripts", "test"].map(
+          (name) => `type=bind,source=<repo>/${name},target=/src/${name},readonly`,
+        ),
+      );
+    },
+  );
 
   it("with --ci the live runner refuses before any docker command while Ubuntu's AppArmor limits unprivileged user namespaces", async () => {
     const live = await harness(inActions);

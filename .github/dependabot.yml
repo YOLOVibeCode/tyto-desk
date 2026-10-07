@@ -2,7 +2,9 @@
 # and scope of a bot's title). Only patch updates of @types/*, typescript, vitest and yaml merge themselves
 # (dependabot-auto-merge.yml, once main's rules require pr-title and ci-ok, D69); the weekly GitHub Actions group is an
 # owner-merge path; everything else waits for the owner. Version updates wait out a cooldown; security updates have
-# none. The live image's base is named literally in /test/live/image/Dockerfile, pinned by digest (slice 1b, D78).
+# none. The live image's base is named literally in /test/live/image/Dockerfile, pinned by digest (slice 1b, D78), and
+# its npm tools are a project of their own in /test/live/image/tools, all runtime dependencies, so none of their
+# updates is in the class that merges itself (D81).
 version: 2
 updates:
   - package-ecosystem: npm
@@ -45,4 +47,15 @@ updates:
       default-days: 7
     commit-message:
       prefix: test # test(deps): …
+      include: scope
+  - package-ecosystem: npm
+    directory: "/test/live/image/tools"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    commit-message:
+      prefix: test # test(deps): … in /test/live/image/tools
       include: scope

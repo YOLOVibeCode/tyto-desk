@@ -5,8 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { shellCommands } from "../scripts/delivery/lib/workflow-rules.mjs";
 import {
   CACHE_VOLUME,
   CHROME_CACHE_DIR,
@@ -34,6 +36,7 @@ import {
   installInputs,
   leftoverContainers,
   phase1RunArgs,
+  phase2RepoEntries,
   phase2RunArgs,
   repoPathAllowed,
   runnerArgs,
@@ -49,6 +52,31 @@ import { setup as containerGuard } from "./live/setup/container-guard.ts";
 const run = promisify(execFile);
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const GiB = 1024 ** 3;
+
+/**
+ * The argv of every child process a script starts with npm, read from its syntax tree: a call whose first argument is
+ * the string "npm" (or a path ending in /npm) and whose second is an array of strings. Any other call that names npm in
+ * its first argument (a shell string, an argv that is not literal) is `null`.
+ */
+function npmProcesses(text: string, file: string): Array<string[] | null> {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const found: Array<string[] | null> = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const [command, argv] = node.arguments;
+      if (command !== undefined && ts.isStringLiteralLike(command) && /(?:^|\/)npm(?:\s|$)/.test(command.text)) {
+        const words =
+          /(?:^|\/)npm$/.test(command.text) && argv !== undefined && ts.isArrayLiteralExpression(argv)
+            ? argv.elements.map((element) => (ts.isStringLiteralLike(element) ? element.text : null))
+            : [null];
+        found.push(words.every((word) => word !== null) ? (words as string[]) : null);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+}
 
 const home = "/Users/alex";
 const colima = { name: "colima", endpoint: "unix:///Users/alex/.colima/default/docker.sock" };
@@ -378,7 +406,60 @@ describe("the live runner's containers", () => {
     ]);
   });
 
-  it("phase 2 runs the suite with no network, the lab's limits and seccomp profile, the repo read-only and the dependency volume", () => {
+  it("phase 1 installs the dependencies with npm ci --ignore-scripts, and starts npm no other way", async () => {
+    const install = await readFile(`${repo}test/live/harness/install.mjs`, "utf8");
+
+    expect(npmProcesses(install, "install.mjs")).toEqual([["ci", "--ignore-scripts", "--no-audit", "--no-fund"]]);
+  });
+
+  it.each([
+    ["an npm install without --ignore-scripts", 'spawn("npm", ["install"]);', [["install"]]],
+    ["npm by its path", 'execFile("/usr/local/bin/npm", ["ci"]);', [["ci"]]],
+    ["npm in a shell string", 'exec("npm ci --ignore-scripts");', [null]],
+    ["an argv that is not literal", 'spawn("npm", args);', [null]],
+  ])("the npm-process reader in this test sees %s", (_label, text, found) => {
+    expect(npmProcesses(text, "x.mjs")).toEqual(found);
+  });
+
+  it("phase 2 mounts only the repo's allowlisted top-level files and directories: never .git, .env files, other directories, or a symbolic link", () => {
+    const entries = [
+      { name: "package.json", kind: "file" },
+      { name: "package-lock.json", kind: "file" },
+      { name: ".npmrc", kind: "file" },
+      { name: "tsconfig.base.json", kind: "file" },
+      { name: "vitest.config.ts", kind: "file" },
+      { name: "vitest.live.config.ts", kind: "file" },
+      { name: "packages", kind: "dir" },
+      { name: "scripts", kind: "dir" },
+      { name: "test", kind: "dir" },
+      { name: ".git", kind: "dir" },
+      { name: ".env", kind: "file" },
+      { name: ".env.local", kind: "file" },
+      { name: "node_modules", kind: "dir" },
+      { name: "test-results", kind: "dir" },
+      { name: "docs", kind: "dir" },
+      { name: "dist", kind: "dir" },
+      { name: "README.md", kind: "file" },
+      { name: "tsconfig.json", kind: "other" },
+      { name: "packages", kind: "other" },
+      { name: "package.json", kind: "dir" },
+      { name: "tsconfig,readonly=false.json", kind: "file" },
+    ] as const;
+
+    expect(phase2RepoEntries(entries)).toEqual([
+      ".npmrc",
+      "package-lock.json",
+      "package.json",
+      "packages",
+      "scripts",
+      "test",
+      "tsconfig.base.json",
+      "vitest.config.ts",
+      "vitest.live.config.ts",
+    ]);
+  });
+
+  it("phase 2 runs the suite with no network, the lab's limits and seccomp profile, the repo's allowlisted entries read-only and the dependency volume", () => {
     const args = phase2RunArgs({
       context: "colima",
       name: "desk-live-run-1a2b3c4d",
@@ -386,6 +467,7 @@ describe("the live runner's containers", () => {
       started: 1_700_000_000_000,
       image: "desk-live:0123456789abcdef",
       repo: "/Users/alex/Dev/tyto-desk",
+      repoEntries: ["package.json", "packages", "test"],
       depsVolume: "desk-live-deps-0123456789abcdef",
       run: "1a2b3c4d",
       vitestArgs: ["pty"],
@@ -399,7 +481,9 @@ describe("the live runner's containers", () => {
       "--network", "none", "--shm-size", "1g", "--memory", "3g", "--cpus", "3", "--pids-limit", "2048",
       "--security-opt", "seccomp=/Users/alex/Dev/tyto-desk/test/live/chrome-seccomp.json",
       "--security-opt", "no-new-privileges",
-      "--mount", "type=bind,source=/Users/alex/Dev/tyto-desk,target=/src,readonly",
+      "--mount", "type=bind,source=/Users/alex/Dev/tyto-desk/package.json,target=/src/package.json,readonly",
+      "--mount", "type=bind,source=/Users/alex/Dev/tyto-desk/packages,target=/src/packages,readonly",
+      "--mount", "type=bind,source=/Users/alex/Dev/tyto-desk/test,target=/src/test,readonly",
       "--mount", "type=volume,source=desk-live-deps-0123456789abcdef,target=/work/node_modules,readonly",
       "--env", "DESK_IN_CONTAINER=1",
       "--env", "DESK_LIVE_RUN=1a2b3c4d",
@@ -445,7 +529,7 @@ describe("the live runner's containers", () => {
     ]);
   });
 
-  it("in GitHub Actions phase 2 is the Mac's: no network, the lab's limits and seccomp profile, the repo and dependencies read-only, through the default context", () => {
+  it("in GitHub Actions phase 2 is the Mac's: no network, the lab's limits and seccomp profile, the repo's allowlisted entries and dependencies read-only, through the default context", () => {
     const args = phase2RunArgs({
       context: CI_CONTEXT,
       name: "desk-live-run-1a2b3c4d",
@@ -453,6 +537,7 @@ describe("the live runner's containers", () => {
       started: 1_700_000_000_000,
       image: "desk-live:0123456789abcdef",
       repo: "/home/runner/work/tyto-desk/tyto-desk",
+      repoEntries: ["package.json", "test"],
       depsVolume: "desk-live-deps-0123456789abcdef",
       run: "1a2b3c4d",
       vitestArgs: [],
@@ -466,7 +551,8 @@ describe("the live runner's containers", () => {
       "--network", "none", "--shm-size", "1g", "--memory", "3g", "--cpus", "3", "--pids-limit", "2048",
       "--security-opt", "seccomp=/home/runner/work/tyto-desk/tyto-desk/test/live/chrome-seccomp.json",
       "--security-opt", "no-new-privileges",
-      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk,target=/src,readonly",
+      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/package.json,target=/src/package.json,readonly",
+      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/test,target=/src/test,readonly",
       "--mount", "type=volume,source=desk-live-deps-0123456789abcdef,target=/work/node_modules,readonly",
       "--env", "DESK_IN_CONTAINER=1",
       "--env", "DESK_LIVE_RUN=1a2b3c4d",
@@ -547,6 +633,60 @@ describe("the live runner in GitHub Actions, as live-run.yml runs it", () => {
     expect(upload?.if).toMatch(/^always\(\)/);
     expect(upload?.with?.path).toBe("test-results/");
     expect(RESULTS_DIR.startsWith(String(upload?.with?.path))).toBe(true);
+  });
+
+  it("live-run.yml uploads the results only after a step before it, run whatever the suite did, found them safe to upload", async () => {
+    const { steps } = await liveRun();
+    const check = steps.findIndex((step) => step.id === "results");
+    const upload = steps.findIndex((step) => step.uses?.split("@")[0] === "actions/upload-artifact");
+
+    expect(check).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(upload);
+    expect(steps[check]?.if).toMatch(/^always\(\)/);
+    expect(steps[upload]?.if).toMatch(/^always\(\) && .*steps\.results\.outcome == 'success'/);
+  });
+
+  /** Runs live-run.yml's own results step, as GitHub runs a step with no shell, in a directory `arrange` filled. */
+  const resultsStep = async (arrange: (dir: string) => Promise<unknown>) => {
+    const { steps } = await liveRun();
+    const dir = await mkdtemp(join(tmpdir(), "live-run-results-"));
+    const script = join(await mkdtemp(join(tmpdir(), "live-run-step-")), "step.sh");
+    await writeFile(script, steps.find((step) => step.id === "results")?.run ?? "exit 3");
+    await arrange(dir);
+    return run("bash", ["--noprofile", "--norc", "-e", script], { cwd: dir, env: { PATH: "/usr/bin:/bin" }, timeout: 20_000 }).then(
+      ({ stdout }) => ({ code: 0, stdout }),
+      (failure: { code?: number; stdout?: string }) => ({ code: failure.code ?? -1, stdout: failure.stdout ?? "" }),
+    );
+  };
+  const results = (dir: string) => mkdir(join(dir, "test-results", "live", "chrome"), { recursive: true });
+
+  it.each([
+    ["a symbolic link to a file", async (dir: string) => {
+      await results(dir);
+      await symlink("/etc/hosts", join(dir, "test-results", "live", "environment.json"));
+    }],
+    ["a symbolic link to a directory", async (dir: string) => {
+      await results(dir);
+      await symlink("/etc", join(dir, "test-results", "live", "chrome", "profile"));
+    }],
+    ["test-results itself as a symbolic link", (dir: string) => symlink("/etc", join(dir, "test-results"))],
+  ])("live-run.yml refuses to upload results that hold %s, and prints none of their names", async (_label, arrange) => {
+    const { code, stdout } = await resultsStep(arrange);
+
+    expect(code).toBe(1);
+    expect(stdout).toMatch(/^::error title=live::/m);
+    expect(stdout).not.toMatch(/environment\.json|profile|\/etc/);
+  });
+
+  it.each([
+    ["results of plain files and directories", async (dir: string) => {
+      await results(dir);
+      await writeFile(join(dir, "test-results", "live", "vitest.json"), "{}");
+      await writeFile(join(dir, "test-results", "live", "chrome", "chrome.log"), "log");
+    }],
+    ["a run that left no test-results/", async () => undefined],
+  ])("live-run.yml's check before the upload lets through %s", async (_label, arrange) => {
+    expect((await resultsStep(arrange)).code).toBe(0);
   });
 
   it.each([
@@ -705,6 +845,16 @@ describe("the live image and the files it sees", () => {
     expect(pin.deb).toMatch(/^google-chrome-stable_\d+\.\d+\.\d+\.\d+-\d+_arm64\.deb$/);
     expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(pin.url).toBe(`https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/${pin.deb}`);
+  });
+
+  it("the live image installs its npm tools with npm ci --ignore-scripts, and runs npm for nothing else but its version", async () => {
+    const dockerfile = await readFile(`${repo}test/live/image/Dockerfile`, "utf8");
+    const npm = shellCommands(dockerfile).filter((words) => words.some((word) => word === "npm" || word.endsWith("/npm")));
+
+    expect(npm).toEqual([
+      ["npm", "--version"],
+      ["npm", "ci", "--ignore-scripts"],
+    ]);
   });
 
   it("the live image names its Debian base literally, pinned by digest, so Dependabot can read and bump it", async () => {

@@ -1,10 +1,11 @@
 // @ts-check
 /**
  * Phase 2 of the live harness, inside the container (docs/IMPLEMENTATION.md §17.3). The runner starts it with no
- * network, the repo read-only at /src, and the dependency volume read-only at /work/node_modules. It refuses to run
- * anywhere but the Linux test container, copies the allowlisted repo files into /work, starts Xvfb :99 at 1440×900×24
- * with its framebuffer in a file the tests read, records the versions it runs against, and runs the live suite
- * (vitest.live.config.ts) into /home/lab/results.
+ * network, the repo's allowlisted top-level files and directories each read-only under /src (never the whole checkout),
+ * and the dependency volume read-only at /work/node_modules. It refuses to run anywhere but the Linux test container,
+ * copies the allowlisted repo files into /work (leaving out what the allowlist leaves out below the top level, such as
+ * nested node_modules or .env files), starts Xvfb :99 at 1440×900×24 with its framebuffer in a file the tests read,
+ * records the versions it runs against, and runs the live suite (vitest.live.config.ts) into /home/lab/results.
  *
  * Whatever happens after the guard, it then writes environment.json (with the failure, if one stopped it), prints
  * `::desk-live-done:: <run> <exit code>` and waits for stdin to close: the runner copies the results out with docker cp

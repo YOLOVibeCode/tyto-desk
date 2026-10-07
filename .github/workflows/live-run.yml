@@ -9,6 +9,10 @@
 # never in a registry (D60): the runner's --ci mode keeps it under ~/.cache/desk-live/chrome/<sha256>/, which this job
 # restores before the suite and saves only on main after a miss (PR and tag runs read main's entries); live.yml keeps
 # the entry alive every three days.
+#
+# The results come out of the container with docker cp, which keeps symbolic links, and upload-artifact follows them.
+# The runner deletes results that hold anything but plain files and directories, but a job cancelled or timed out in
+# between would not, so the upload also waits for a step that checks test-results/ itself (D81).
 name: live-run
 
 on:
@@ -75,8 +79,24 @@ jobs:
         with:
           path: ~/.cache/desk-live/chrome
           key: ${{ steps.chrome.outputs.key }}
-      - name: Upload the results (screenshots, logs)
+      - name: Are the results plain files and directories? (upload-artifact follows symbolic links)
+        id: results
         if: always() && steps.suite.outputs.present == 'true'
+        run: |
+          if [ ! -e test-results ] && [ ! -L test-results ]; then
+            echo "No test-results/: nothing to upload."
+            exit 0
+          fi
+          if ! unsafe="$(find test-results ! -type d ! -type f -exec printf x \;)"; then
+            echo "::error title=live::test-results/ could not be checked, so nothing is uploaded."
+            exit 1
+          fi
+          if [ -n "$unsafe" ]; then
+            echo "::error title=live::test-results/ holds ${#unsafe} entries that are not plain files or directories, such as symbolic links, so nothing is uploaded."
+            exit 1
+          fi
+      - name: Upload the results (screenshots, logs)
+        if: always() && steps.suite.outputs.present == 'true' && steps.results.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: desk-live-results-${{ github.run_attempt }}

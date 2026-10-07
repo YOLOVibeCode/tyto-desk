@@ -52,7 +52,10 @@ export const RESULTS_DIR = "test-results/live";
  */
 export const USERNS_LIMIT = "kernel.apparmor_restrict_unprivileged_userns";
 
-/** Where the container sees the repo (read-only), where the suite runs from, and where it leaves its results. */
+/**
+ * Where the container sees the repo's files (read-only: phase 1's package files, phase 2's allowlisted top-level
+ * entries), where the suite runs from, and where it leaves its results.
+ */
 export const SRC = "/src";
 export const WORK = "/work";
 export const RESULTS = "/home/lab/results";
@@ -450,21 +453,41 @@ export function phase1RunArgs({ context, name, runner, started, image, repo, ins
 }
 
 /**
+ * The checkout's top-level entries that phase 2 mounts, each read-only at `/src/<name>`, as phase 1 mounts only its own
+ * files: the files and directories repoPathAllowed lets the container see, so `.git`, `.env` files and everything else
+ * at the top of the checkout stay out of the container entirely. Never a symbolic link, which docker would resolve on
+ * the host, and never a name that `--mount`'s comma-separated fields could not carry.
+ * @param {readonly { name: string; kind: "file" | "dir" | "other" }[]} entries the checkout's top level, as lstat sees it
+ * @returns {string[]} names, in code-unit order
+ */
+export function phase2RepoEntries(entries) {
+  const names = entries
+    .filter(({ name, kind }) => {
+      if (!/^[A-Za-z0-9._-]+$/.test(name)) return false;
+      if (kind === "file") return repoPathAllowed(name);
+      return kind === "dir" && repoPathAllowed(`${name}/file`);
+    })
+    .map(({ name }) => name);
+  return [...new Set(names)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
  * Phase 2: the suite, with no network, the lab's limits and seccomp profile (Chrome's sandbox stays on), a pid limit,
- * no new privileges, the repo read-only and the dependency volume read-only. `--interactive` keeps the container's stdin
- * open: it is the runner's lifeline, so a container whose runner died ends itself, and `--rm` removes it.
+ * no new privileges, the repo's allowlisted top-level entries (phase2RepoEntries) read-only, and the dependency volume
+ * read-only. `--interactive` keeps the container's stdin open: it is the runner's lifeline, so a container whose runner
+ * died ends itself, and `--rm` removes it.
  * @param {{ context: EngineContext; name: string; runner: string; started: number; image: string; repo: string;
- *   depsVolume: string; run: string; vitestArgs: readonly string[] }} input
+ *   repoEntries: readonly string[]; depsVolume: string; run: string; vitestArgs: readonly string[] }} input
  * @returns {string[]}
  */
-export function phase2RunArgs({ context, name, runner, started, image, repo, depsVolume, run, vitestArgs }) {
+export function phase2RunArgs({ context, name, runner, started, image, repo, repoEntries, depsVolume, run, vitestArgs }) {
   return [
     ...["--context", context, "run", "--rm", "--interactive", "--pull", "never"],
     ...containerFlags({ name, runner, started }),
     ...["--network", "none", "--shm-size", "1g", "--memory", "3g", "--cpus", "3", "--pids-limit", "2048"],
     ...["--security-opt", `seccomp=${repo}/test/live/chrome-seccomp.json`],
     ...["--security-opt", "no-new-privileges"],
-    ...mountFlag("bind", repo, SRC, true),
+    ...repoEntries.flatMap((entry) => mountFlag("bind", `${repo}/${entry}`, `${SRC}/${entry}`, true)),
     ...mountFlag("volume", depsVolume, `${WORK}/node_modules`, true),
     ...["--env", "DESK_IN_CONTAINER=1"],
     ...["--env", `DESK_LIVE_RUN=${run}`],

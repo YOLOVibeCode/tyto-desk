@@ -12,8 +12,9 @@
  *            and is streamed into the build context.
  *   phase 1  (network on) npm ci --ignore-scripts into desk-live-deps-<hash of the package files>, once per change,
  *            with only the package files mounted.
- *   phase 2  docker run --rm --network none with the lab's limits and seccomp profile, the repo read-only and the
- *            dependency volume; the results come out with docker cp into test-results/live/.
+ *   phase 2  docker run --rm --network none with the lab's limits and seccomp profile, the repo's allowlisted top-level
+ *            files and directories read-only (never the whole checkout) and the dependency volume; the results come
+ *            out with docker cp into test-results/live/.
  *
  * Every container is named desk-live-* and labelled with this runner; leftovers of dead runs are removed first, and no
  * more Desk containers run at once than the VM's memory allows (two at most: the VM also runs the operator's own).
@@ -52,6 +53,7 @@ import {
   leftoverContainers,
   mountFlag,
   phase1RunArgs,
+  phase2RepoEntries,
   phase2RunArgs,
   runnerArgs,
   userNamespaceRefusal,
@@ -731,6 +733,19 @@ export async function runLive(options) {
   };
 
   /**
+   * The checkout's top-level entries phase 2 mounts. The directory listing does not follow links: a symbolic link is
+   * neither a file nor a directory in it, so it is never mounted.
+   * @returns {Promise<string[]>}
+   */
+  const repoEntries = async () =>
+    phase2RepoEntries(
+      (await readdir(repo, { withFileTypes: true })).map((entry) => ({
+        name: entry.name,
+        kind: entry.isFile() ? "file" : entry.isDirectory() ? "dir" : "other",
+      })),
+    );
+
+  /**
    * Phase 2: this run's results only. Exits with the container's status once its results are out; a run that ended
    * before its done line, or whose results could not be copied out, fails.
    * @param {string} image
@@ -742,8 +757,9 @@ export async function runLive(options) {
     // Only a run that may start its suite clears the previous results, so a refused run leaves another's alone.
     await rm(resultsDir, { recursive: true, force: true });
     const name = containerName("run");
+    const mounted = await repoEntries();
     const { code, done, copied } = await phase2(
-      phase2RunArgs({ context, name, runner, started: now(), image, repo, depsVolume, run, vitestArgs }),
+      phase2RunArgs({ context, name, runner, started: now(), image, repo, repoEntries: mounted, depsVolume, run, vitestArgs }),
       name,
     );
     if (stopping) return 130;
