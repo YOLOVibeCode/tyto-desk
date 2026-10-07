@@ -771,7 +771,7 @@ never deletes it [source `policy.rs`, `actions.rs:2809-2846`]:
 | paused | `{"default": "deny", "allow": ["close"]}` | `desk agents pause`; `desk agents resume` (consent) restores strict or open |
 
 The policy covers agent-browser actions only; raw CDP and the guarded endpoint never filter cookies. Under strict,
-`tyto brief` shows its cookie and storage sections as refused (slice 4b checks that Tyto tolerates a refused step).
+`tyto brief` shows its cookie and storage sections as refused (slice 4c checks that Tyto tolerates a refused step).
 
 **Pane environment** (gated, §7.1): `AGENT_BROWSER_CONFIG=~/.desk/agent-browser.json` (replaces, never merges with, your
 `~/.agent-browser/config.json` [RF, AB]), `AGENT_BROWSER_SESSION=desk-<pane>`, `DESK_CDP_URL=http://127.0.0.1:<gateway
@@ -1244,8 +1244,9 @@ from a `slice-<id>/<topic>` branch, titled `<type>(slice-<id>): …`, which merg
 the owner merges when it touches an owner-merge path, or the session acting for the owner by the owner's rule (§23.1,
 D81: every check green on its exact head SHA, two independent security reviews of the full diff of every owner-merge
 path it changes, and no REFUSE left unresolved). Until slice D1's rulesets are applied, every PR merges
-by the interim rule (§23.1). Tests marked live run in the VM. Order: 1a, D1, 1b, 1c, 2a, 2b, 3a, 3b, 4a, 4b, 5 with
-D2, 6, 7, 8; X1 when the user approves.
+by the interim rule (§23.1). Tests marked live run in the VM. Order: 1a, D1, 1b, 1c, 3a, 4a, 4b, 2a, 2b, 3b, 4c, 5
+with D2, 6, 7, 8; X1 when the user approves. After 1c, persistence (3a) and the focus guard (4a, 4b) come before the
+terminal work, by the owner's call of 2026-10-07 (D101).
 
 ### Slice 1a — Scaffold, laws, pure core, CI
 
@@ -1497,10 +1498,15 @@ Done when: latency, throughput, and show time meet SPEC §8, or the gap is filed
 - `doctor treats a missing confirm_to_quit in Local State as on`
 - live `persistent and session cookies, localStorage, IndexedDB, a saved password and three tabs with back history survive 10 quit-and-desk cycles` (the password added through `passwordsPrivate`)
 - live `after SIGKILL, desk restores the tabs without the Restore pages prompt and keeps state older than 40 s`
-- live `after chrome://restart, Chrome answers on the same port with the same profile and the panel is back within 5 s`
+- live `after chrome://restart, Chrome answers on the same port with the same profile` (the panel's return is slice 3b's, D101)
 - live `after the last window is closed and Chrome quits, desk opens a window with the panel` (and records what session restore brought back)
 
+`desk quit --all` stops a `desk watch` only once slice 4a brings one; until then its test holds the watch's lock with a
+fake pid.
+
 ### Slice 3b — Classification, reuse, watch
+
+`desk watch` exists from slice 4a, serving the guarded endpoint; 3b gives it the rest of §6.4 (D101).
 
 - `classification decides <decision> for <singleton, port, listener>` (it.each over §6.1's table)
 - `classification treats an unverifiable listener as another program`
@@ -1514,11 +1520,11 @@ Done when: latency, throughput, and show time meet SPEC §8, or the gap is filed
 - `desk watch reopens the panel only where one was open and never focuses the terminal`
 - `desk watch relaunches Chrome after a crash at most twice in 10 minutes`
 - `desk watch never relaunches after desk quit`
-- `desk replaces a desk watch that runs another version and never stops the daemon`
 - `desk watch quits Chrome after 10 minutes without a window`
 - `desk watch raises the terminal-attached alert when a Desk extension target becomes attached`
 - `desk watch reopens a crashed panel`
 - `desk config new-port picks a new guarded port and warns that running tmux sessions keep the old URL`
+- live `after chrome://restart the panel is back within 5 s` (from slice 3a, D101)
 - live `desk reuses a Chrome whose service worker was stopped`
 - live `closing the last window and running desk brings back a window with the panel and every pane re-attached`
 - live `a page input keeps its typed text while watch reopens the panel`
@@ -1528,8 +1534,14 @@ Done when: check and live green.
 
 ### Slice 4a — Guarded endpoint
 
-`desk cdp` and `DESK_CDP_URL` switch to the guarded endpoint (agent-browser follows in slice 4b).
+`desk cdp` and `DESK_CDP_URL` switch to the guarded endpoint (agent-browser follows in slice 4b). `desk watch` arrives
+here with one duty: a single instance under `run/watch.lock`, started by `desk` (§6.1 step 13), serving the guarded
+endpoint (§12). Relaunch, idle quit, the panel's reopen and the alerts stay in slice 3b; `gateway.state` waits for slice
+2a's protocol (D101).
 
+- `desk starts desk watch when run/watch.lock is free and leaves a live watch of its own version running`
+- `desk replaces a desk watch that runs another version and never stops the daemon` (from slice 3b, D101)
+- `desk watch exits 0 on SIGTERM after closing the guarded endpoint and releasing its lock`
 - `the guarded endpoint listens on 127.0.0.1 only`
 - `it refuses a WebSocket upgrade with any Origin header (403)`
 - `it answers 500 to a Host that is not 127.0.0.1 or localhost`
@@ -1550,27 +1562,41 @@ Done when: check and live green.
 Done when: check and live green. The operator may now run MANUAL-CHECKS Run A (optional): the guarded endpoint is
 in place before Desk first runs on the Mac.
 
-### Slice 4b — Agents drive the Desk browser
+### Slice 4b — Agents stay out of your way: the focus guard
 
-Agent config on the guarded endpoint, the policy and pause, `desk agents`, `desk tab current|mine`, the skill, the
-tmux line, the focus-guard measurement, and two upstream issues for agent-browser (a token or opt-out for the stream
-server; config keys that flags cannot override).
+Agent config on the guarded endpoint, `desk tab current|mine`, and the focus guard (§12) with its measurement: an
+agent's tab never takes your tab or your keyboard (SPEC §8, §9; D101).
 
 - `the agent-browser config points cdp at the guarded endpoint with restoreSave never, pinTab, contentBoundaries, idleTimeout 15m and Desk's policy`
 - `a new install writes the open policy`
+- `the focus guard gives Target.createTarget without newWindow background: true`
+- `the focus guard answers {} to Target.activateTarget and Page.bringToFront for a tab that is not the active tab of the last-focused window`
+- `the focus guard passes Target.activateTarget and Page.bringToFront for the tab already active in the last-focused window`
+- `/json/activate/<id> goes through the focus guard`
+- `the focus guard treats a window list the worker does not answer as no active tab`
+- `with focusGuard off every focus method passes unchanged`
+- `desk tab current answers with the active tab of the last-focused Desk window`
+- `desk tab mine returns the pane's grouped tab and creates it in the background when missing`
+- live `the user's active tab and focused view do not change when an agent opens or uses its tab` (decides `focusGuard: auto`)
+- live `screenshot, snapshot and click work on a background agent tab`
+
+Done when: check and live green; the PR records the focus measurements with the guard off and on, what they did to
+background-tab screenshots and frozen-tab wake, and the `auto` decision (D3).
+
+### Slice 4c — Agent controls
+
+The policy and pause, `desk agents`, the skill, the tmux line, and two upstream issues for agent-browser (a token or
+opt-out for the stream server; config keys that flags cannot override). Split from slice 4b (D101).
+
 - `the strict policy denies cookie, storage, state, credential and HAR actions` (held since slice 1c, D100)
 - `desk agents pause writes a deny-all policy that still allows close`
 - `desk agents resume asks on a TTY and restores the previous mode`
 - `desk config agent-policy open asks on a TTY`
 - `desk agents detach runs agent-browser close with Desk's config and none of the caller's restore, namespace, cdp or session-name variables`
-- `desk tab current answers with the active tab of the last-focused Desk window`
-- `desk tab mine returns the pane's grouped tab and creates it in the background when missing`
 - `desk cdp warns when the caller's agent-browser config has a restore key`
 - `the desk skill pre-approves no plugin, cookies, state, storage, eval, network, dashboard, install or connect command and no state-changing desk command`
 - `install appends the tmux line once, after consent, and applies it to a running tmux server`
 - `desk watch warns when agent-browser saved a file whose name contains -desk-`
-- live `the user's active tab and focused view do not change when an agent opens or uses its tab` (decides `focusGuard: auto`)
-- live `screenshot, snapshot and click work on a background agent tab`
 - live `desk agents pause makes the next agent-browser command from a Desk pane fail with a policy denial`
 - live `~/.agent-browser/config.json and sessions/ are byte-identical after the run, including desk agents detach from a shell with a seeded restore key`
 - live `a tmux session created from a pane sees the Desk variables and one created outside Desk does not`
@@ -1773,7 +1799,7 @@ provenance check · an update that moves to an older version on its own · a run
 | Agent commands change the user's tab or focus; background-tab screenshots and frozen-tab wake under the focus guard | unverified | yes | slice 4b |
 | `Target.createTarget {background: true}` keeps the user's tab | unverified | yes | slice 4b |
 | agent-browser's first `open` over the Desk port opens its page in a tab of its own, and nothing else | observed (live, slice 1c's review): agent-browser 0.38.1's first `open` opened the fixture in a new tab of the Desk window, and a second new tab with `about:blank`; no tab already open was navigated | yes | slice 4b |
-| `tyto brief` tolerates a refused step; `agent-browser screenshot` without a path writes a temp file | unverified | yes | slice 4b |
+| `tyto brief` tolerates a refused step; `agent-browser screenshot` without a path writes a temp file | unverified | yes | slice 4c |
 | Tab groups come back with session restore | documented | yes | slice 4b |
 | Loading extensions over the port keeps working in later Chrome versions | verified on 155 only | weekly live CI | ongoing; doctor |
 | `open -n -a … --args` passes flags and gives Chrome its own privacy identity | inferred | no | M1, M2 |
@@ -1913,6 +1939,7 @@ hardening that followed slice D1's security reviews (PR #5) and the reviews of t
 | D98 | Installs and launchers (slice 1c's review). Installing an installed version changes nothing of it (§23.5 rule 1): installed.json keeps the entry it recorded, or, without one, records the installed copy's build (`AppVersions.build`; amends §3), and the message says when the runtime given was another build of that version. A damaged installed.json stops the install before it stages, asks, or switches anything. `AppVersions.stage` also requires the staged files.sha256 to be the text it read and verified. The launchers hold `DESK_HOME` only single-quoted, never in a comment or between double quotes, and print their message with `printf '%s\n'` | Every pack stamps a new `builtAt`, so a second deploy of one commit is another build of an installed version, and installed.json named a build and an install time that no installed file had. A damaged installed.json was found after `current` had switched, so the rerun lost the real `previous`. A list rewritten during the copy would have been installed unverified. A `DESK_HOME` holding `$(…)`, a backtick or a newline ran as shell code |
 | D99 | Guards around the CDP connection and the other adapters (slice 1c's review). `DevToolsHttp.version(port)` returns a WebSocket URL only when it is Chrome's browser endpoint on 127.0.0.1 at the port it asked; the browser connector takes only such a URL, and it and `openWebSocket` apply the Vitest port guard before connecting (§0). `CodeSigning`, `AppVersions.stage`'s source and `ChromeProcess.version`'s app apply the path guard | The connector opened a WebSocket on any 127.0.0.1 port, so a test could have driven the operator's Chrome or Desk; whatever answers on the Desk port could have sent the launch to another one |
 | D100 | Deviations and sentences recorded (slice 1c's review). `codesign` gets 60 s, not §6.6's 3 s. The ports `Clock.sleep`, `DevToolsHttp.version`, `DaemonClient.open` and `DaemonDialer.connect` take no `AbortSignal` yet (amends D90's list of §3 changes): each adapter applies its §6.6 budget, and the slice that first cancels one early adds it. Slice 1c's tests already hold these sentences of later slices, which the walking skeleton needed, and §19 marks them: 2a's `hello with no common version gets E_STALE and the daemon keeps running`, `shutdown is accepted after E_STALE`, `a second daemon exits when a live daemon holds the lock`, `a dead daemon's lock is reclaimed` and `the daemon refuses to start when ~/.desk is a symlink, not 0700, or not yours`; 2b's `open from another panel takes the pane and tells the previous owner it was taken` and `only the owner's resize changes the PTY size`; 4b's `the strict policy denies cookie, storage, state, credential and HAR actions`; D2's `an older Desk keeps the installed.json keys it does not know when it writes the file`; 6's `the manifest declares the strict CSP and no external connections` and `the extension never uses innerHTML, eval or chrome.debugger.attach`. Slice 1c's Done-when says nothing ran on the Mac during development, but a pack's Desk Terminal ran `desk --version` and `codesign --verify --strict` there once (no window, nothing in `~/.desk`); D93 now cites `build-darwin.yml`'s check instead, and whether that run stands is the owner's call. The live runner's script tests are two files that run in parallel, and the offline suite's stub executables (`fakeExecutable`, the runner's stub docker, the launchers' Desk Terminal) are hard links to one file per kind | Ad hoc signing and `--verify --strict` hash all of Desk Terminal's Node, about 100 MB. A sentence a slice holds early has no failing test left for the slice that lists it, so §19 says where it is held. A rule the slice broke is recorded rather than dropped. npm test took 27 s on the Mac, close to SPEC §8's 30 s: macOS checks every new executable file the first time it runs (about 0.3 s, one file at a time), and a hard link is the same file. It now takes about 8 s |
+| D101 | Slice order after 1c: 3a, 4a, 4b, 2a, 2b, 3b, 4c, 5 with D2, 6, 7, 8 (the owner, 2026-10-07). Asked about the state of Desk, the owner named two daily pains, signing in to sites again and again and an agent's browser taking focus, and chose "persistence and the focus guard first" over the approved order. Slice 4b keeps the agent config on the guarded endpoint, `desk tab current|mine`, and the focus guard with its measurement, and gains the guard's unit sentences, which §19 lacked; the policy, pause, `desk agents`, the skill, the tmux line, the `-desk-` state warning and the upstream issues move to a new slice 4c, and so do MANUAL-CHECKS M4 and M18. Slice 4a brings `desk watch` with only the guarded endpoint and its replacement by version (from 3b); relaunch, idle quit, the panel's reopen and the alerts stay in 3b, and `gateway.state` waits for 2a's protocol. Slice 3a's `chrome://restart` test keeps the port and the profile; the panel's return within 5 s moves to 3b, which owns watch's reopen. D100's 4b sentence now sits in 4c | Chrome keeps logins in the Desk profile from slice 1c; 3a proves it across quits, crashes and restarts and makes every exit graceful, which is SPEC §1's first promise. The focus guard needs only the gateway, a watch to serve it, and the agent config, not the daemon protocol or the terminal work, which improve what already runs |
 
 ## 23. Delivery: branches, versions, deploy paths, releases
 

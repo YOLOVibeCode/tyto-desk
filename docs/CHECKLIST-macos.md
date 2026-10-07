@@ -44,7 +44,7 @@ macOS prompt names Google Chrome, not Termius. Click Don't Allow.
 **M3 — `desk` brings Desk forward (3b).** Click another app, then run `desk` again in Termius. Pass: the Desk window
 comes to the front with the terminal focused.
 
-**M4 — Google sign-in with an agent attached, then paused (4b).**
+**M4 — Google sign-in with an agent attached, then paused (4c).**
 - M4a: open https://accounts.google.com in a Desk tab. In a pane run `agent-browser tab "$(desk tab current)"` and
   `agent-browser get title`, then sign in on that tab. Pass: Google lets you in. A fail ("this browser may not be
   secure") only confirms the advice to pause agents for sign-ins.
@@ -121,7 +121,7 @@ your screen lock before filling passwords. Run `desk doctor --autofill-probe` an
 when Chrome offers. Pass: when the probe asks Chrome to fill over CDP, macOS asks for Touch ID or your password first;
 when you cancel, the field stays empty. Delete the throwaway password afterwards.
 
-**M18 — Agents pause (4b).** Run `desk agents pause`, then in a pane `agent-browser get title`. Pass: it is refused by
+**M18 — Agents pause (4c).** Run `desk agents pause`, then in a pane `agent-browser get title`. Pass: it is refused by
 policy and the terminal shows "agents paused". `desk agents resume` asks you to confirm.
 
 **M19 — Update and roll back (D2).** With Claude running in a pane, run `desk update` in Termius (or pick another
