@@ -99,15 +99,18 @@ describe("the guarded endpoint (slice 4a) in the live container", () => {
     const { chromium } = tools("playwright-core") as PlaywrightCore;
 
     const viaPuppeteer = await puppeteer.connect({ browserURL: GUARDED });
-    const puppeteerUrls = [...viaPuppeteer.targets().map((t) => t.url()), ...(await viaPuppeteer.pages()).map((p) => p.url())];
+    // Every target Puppeteer sees (Chrome's own component extensions' background pages included), and its pages.
+    const puppeteerTargets = viaPuppeteer.targets().map((t) => t.url());
+    const puppeteerPages = (await viaPuppeteer.pages()).map((p) => p.url());
     await viaPuppeteer.disconnect();
     const viaPlaywright = await chromium.connectOverCDP(GUARDED);
     const playwrightUrls = viaPlaywright.contexts().flatMap((context) => context.pages().map((page) => page.url()));
     const closed = await viaPlaywright.close().then(() => "closed", (err: unknown) => String(err));
     const stillRunning = (await getJson(RAW, "/json/version")) !== null;
-    await saveResult("gateway-clients", { puppeteerUrls, playwrightUrls, playwrightClose: closed, stillRunning });
+    await saveResult("gateway-clients", { puppeteerTargets, puppeteerPages, playwrightUrls, playwrightClose: closed, stillRunning });
 
-    expect(puppeteerUrls.filter((url) => url.startsWith("chrome-extension://"))).toEqual([]);
+    expect(puppeteerPages.filter((url) => url.startsWith("chrome-extension://"))).toEqual([]);
+    expect(puppeteerTargets.filter((url) => url.startsWith(DESK_PREFIX))).toEqual([]);
     expect(playwrightUrls.filter((url) => url.startsWith("chrome-extension://"))).toEqual([]);
     expect(stillRunning).toBe(true);
   });
