@@ -8,4 +8,9 @@ export interface ProcessInfo {
    * the system has given to a newer process never keeps a dead holder's lock (D97).
    */
   startedAt(pid: number): Promise<number | null>;
+  /**
+   * The pids whose argument line holds `argument` as a whole argument (`--user-data-dir=<dir>`), so Desk can tell whether
+   * any process uses its profile (§6.1 step 4); `null` when the process list cannot be read. Only pids leave the adapter.
+   */
+  withArgument(argument: string): Promise<number[] | null>;
 }

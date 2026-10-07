@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir, userInfo } from "node:os";
@@ -64,6 +64,23 @@ describe("the installed Chrome", () => {
 });
 
 describe("the Desk profile", () => {
+  it("ChromeProfile clears a stale SingletonLock, SingletonCookie and SingletonSocket, and nothing they point at", async () => {
+    const profile = await mkdtemp(join(tmpdir(), "profile-"));
+    const socketDir = await mkdtemp(join(tmpdir(), "socket-"));
+    await writeFile(join(socketDir, "SingletonSocket"), "");
+    await symlink("old-name.local-4242", join(profile, "SingletonLock"));
+    await symlink("8213645566702145", join(profile, "SingletonCookie"));
+    await symlink(join(socketDir, "SingletonSocket"), join(profile, "SingletonSocket"));
+
+    await new NodeChromeProfile(profile).clearStaleSingleton();
+
+    for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+      await expect(lstat(join(profile, name))).rejects.toThrow();
+    }
+    expect((await stat(join(socketDir, "SingletonSocket"))).isFile()).toBe(true);
+    expect(await new NodeChromeProfile(profile).singleton()).toBeNull();
+  });
+
   it("ChromeProfile reads SingletonLock's host and pid", async () => {
     const profile = await mkdtemp(join(tmpdir(), "profile-"));
     await symlink("alex-mbp.local-4242", join(profile, "SingletonLock"));

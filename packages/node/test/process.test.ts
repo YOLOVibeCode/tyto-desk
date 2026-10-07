@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, NodeProcessSignals, SystemClock } from "../src/index.ts";
+import { CryptoRandom, NodeDetachedSpawner, NodeListenerInfo, NodeLoginShell, NodeProcessInfo, NodeProcessSignals, SystemClock } from "../src/index.ts";
 import { fakeExecutable } from "../../../test/fixtures/fake-exec.ts";
 
 /** The file's text once it exists, polled every 20 ms for at most `budgetMs`. */
@@ -155,5 +155,71 @@ describe("process adapters", () => {
     await clock.sleep(20);
 
     expect(clock.now() - start).toBeGreaterThanOrEqual(19);
+  });
+});
+
+describe("which processes use the Desk profile, and who listens on its port (§6.1 step 4)", () => {
+  const DIR = "/Users/alex/Library/Application Support/Desk/Chrome";
+
+  it("process info lists the pids whose argument line holds the argument as a whole argument", async () => {
+    const ps = await fakeExecutable("ps", [
+      {
+        match: ["-axww", "-o", "pid=,args="],
+        stdout: [
+          `  5100 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=${DIR} --no-first-run`,
+          `  5101 /Applications/Google Chrome.app/Contents/Frameworks/Helper --type=renderer --user-data-dir=${DIR}`,
+          `  6000 /bin/zsh -c echo --user-data-dir=${DIR}2`,
+          "  7000 /usr/sbin/cupsd -l",
+          "",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(await new NodeProcessInfo({ ps: ps.path }).withArgument(`--user-data-dir=${DIR}`)).toEqual([5100, 5101]);
+    expect((await ps.calls()).map((call) => call.env.PATH)).toEqual(["/usr/bin:/bin"]);
+  });
+
+  it("process info cannot tell who uses the profile when ps fails", async () => {
+    const ps = await fakeExecutable("ps", [{ match: ["-axww"], exit: 1 }]);
+
+    expect(await new NodeProcessInfo({ ps: ps.path }).withArgument(`--user-data-dir=${DIR}`)).toBeNull();
+  });
+
+  it.each([
+    ["one listener", "p5100\nf45\n", 5100],
+    ["two listeners", "p5100\nf45\np6100\nf9\n", null],
+    ["none", "", null],
+  ])("listener info reads lsof's pid for %s", async (_, stdout, pid) => {
+    const lsof = await fakeExecutable("lsof", [{ match: ["-nP", "-iTCP@127.0.0.1:9417", "-sTCP:LISTEN", "-Fp"], stdout }]);
+
+    expect(await new NodeListenerInfo({ lsof: lsof.path, procRoot: null }).listenerPid(9417)).toBe(pid);
+  });
+
+  it("listener info reads a macOS image from ps's command path and argument line", async () => {
+    const exe = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    const ps = await fakeExecutable("ps", [
+      { match: ["-o", "comm=", "-p", "5100"], stdout: `${exe}\n` },
+      { match: ["-ww", "-o", "args=", "-p", "5100"], stdout: `${exe} --user-data-dir=${DIR}\n` },
+    ]);
+
+    expect(await new NodeListenerInfo({ ps: ps.path, procRoot: null }).image(5100)).toEqual({ exe, args: `${exe} --user-data-dir=${DIR}` });
+  });
+
+  it("listener info reads a Linux image's executable from /proc, where ps shortens the name", async () => {
+    const proc = await mkdtemp(join(tmpdir(), "proc-"));
+    await mkdir(join(proc, "5100"));
+    await symlink("/opt/google/chrome/chrome", join(proc, "5100", "exe"));
+    const ps = await fakeExecutable("ps", [{ match: ["-ww", "-o", "args=", "-p", "5100"], stdout: "/opt/google/chrome/chrome --user-data-dir=/home/alex/.config/Desk/Chrome\n" }]);
+
+    expect(await new NodeListenerInfo({ ps: ps.path, procRoot: proc }).image(5100)).toEqual({
+      exe: "/opt/google/chrome/chrome",
+      args: "/opt/google/chrome/chrome --user-data-dir=/home/alex/.config/Desk/Chrome",
+    });
+  });
+
+  it("listener info has no image for a process it cannot read", async () => {
+    const proc = await mkdtemp(join(tmpdir(), "proc-"));
+
+    expect(await new NodeListenerInfo({ procRoot: proc }).image(5100)).toBeNull();
   });
 });

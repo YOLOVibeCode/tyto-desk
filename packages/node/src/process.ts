@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomInt, randomBytes } from "node:crypto";
+import { readlink } from "node:fs/promises";
 import { userInfo } from "node:os";
-import type { Clock, DetachedSpawner, LoginShell, ProcessInfo, ProcessSignals, Random } from "@desk/core";
+import type { Clock, DetachedSpawner, ListenerInfo, LoginShell, ProcessInfo, ProcessSignals, Random } from "@desk/core";
 import { runArgv } from "./run.ts";
 
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -78,6 +79,68 @@ export class NodeProcessInfo implements ProcessInfo {
     if (result.code !== 0) return null;
     const elapsed = elapsedSeconds(result.stdout.trim());
     return elapsed === null ? null : asked - elapsed * 1_000;
+  }
+
+  /** `ps -axww -o pid=,args=` (every process, full argument lines); only the matching pids leave this method. */
+  async withArgument(argument: string): Promise<number[] | null> {
+    const result = await runArgv(this.ps, ["-axww", "-o", "pid=,args="], {
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      timeoutMs: 3_000,
+      maxBytes: 16 * 1024 * 1024,
+    });
+    if (result.code !== 0) return null;
+    const pids: number[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const match = /^\s*(\d+)\s(.*)$/.exec(line);
+      if (match !== null && ` ${match[2] ?? ""} `.includes(` ${argument} `)) pids.push(Number(match[1]));
+    }
+    return pids;
+  }
+}
+
+/**
+ * Who listens on a 127.0.0.1 TCP port: `lsof -nP -iTCP@127.0.0.1:<port> -sTCP:LISTEN -Fp`; and a process's image: its
+ * executable (`/proc/<pid>/exe` on Linux, where `ps` shortens the name; `ps -o comm=` on macOS, which prints the path)
+ * and its argument line (`ps -ww -o args=`). Argv, the C locale, 3 s each.
+ */
+export class NodeListenerInfo implements ListenerInfo {
+  private readonly lsof: string;
+  private readonly ps: string;
+  private readonly procRoot: string | null;
+
+  constructor(options: { lsof?: string; ps?: string; procRoot?: string | null } = {}) {
+    this.lsof = options.lsof ?? (process.platform === "darwin" ? "/usr/sbin/lsof" : "/usr/bin/lsof");
+    this.ps = options.ps ?? "/bin/ps";
+    this.procRoot = options.procRoot === undefined ? (process.platform === "linux" ? "/proc" : null) : options.procRoot;
+  }
+
+  async listenerPid(port: number): Promise<number | null> {
+    if (!Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+    const result = await runArgv(this.lsof, ["-nP", `-iTCP@127.0.0.1:${port}`, "-sTCP:LISTEN", "-Fp"], {
+      env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LC_ALL: "C" },
+      timeoutMs: 3_000,
+      maxBytes: 65_536,
+    });
+    if (result.code !== 0) return null;
+    const pids = new Set(result.stdout.split("\n").filter((line) => /^p\d+$/.test(line)).map((line) => Number(line.slice(1))));
+    // One process listens, or Desk cannot tell which one Chrome is.
+    return pids.size === 1 ? ([...pids][0] ?? null) : null;
+  }
+
+  async image(pid: number): Promise<{ exe: string; args: string } | null> {
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    const options = { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, timeoutMs: 3_000, maxBytes: 1024 * 1024 };
+    let exe: string | null;
+    if (this.procRoot !== null) {
+      exe = await readlink(`${this.procRoot}/${pid}/exe`).catch(() => null);
+    } else {
+      const comm = await runArgv(this.ps, ["-o", "comm=", "-p", String(pid)], options);
+      exe = comm.code === 0 && comm.stdout.trim().startsWith("/") ? comm.stdout.trim() : null;
+    }
+    if (exe === null) return null;
+    const args = await runArgv(this.ps, ["-ww", "-o", "args=", "-p", String(pid)], options);
+    if (args.code !== 0 || args.stdout.trim() === "") return null;
+    return { exe, args: args.stdout.trim() };
   }
 }
 

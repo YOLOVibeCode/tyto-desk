@@ -18,7 +18,9 @@ export {
   type ChromeArgsRefusal,
   type ChromeArgsResult,
 } from "./chrome/args.ts";
-export { allocateDeskPorts } from "./config/allocate.ts";
+export { allocateDeskPort, allocateDeskPorts } from "./config/allocate.ts";
+export { newGuardedPort, type NewPortPorts } from "./config/new-port.ts";
+export { ensureWatch, type WatchStartPorts } from "./launch/watch-start.ts";
 export { newDeskConfig, platformSupported, type NewConfigInput } from "./config/defaults.ts";
 export { loadOrCreateConfig, type LoadOrCreateInput, type LoadOrCreateResult } from "./config/load.ts";
 export {
@@ -58,6 +60,8 @@ export {
   type InstalledVersion,
 } from "./install/installed.ts";
 export { deskLauncher, hostLauncher, terminalBinary } from "./install/launchers.ts";
+export { classifyLaunch, listenerIsDesk, singletonState, staleLockToClear } from "./launch/classify.ts";
+export type { LaunchDecision, LaunchFacts, SingletonState } from "./launch/classify.ts";
 export { prepareFiles, type PreparedFiles } from "./launch/files.ts";
 export {
   FIRST_RUN_PREFS,

@@ -16,6 +16,7 @@ export { FakeExtensionWindows } from "./fake-extension-windows.ts";
 export { FakeGuardedEndpoint } from "./fake-guarded-endpoint.ts";
 export { FakeHostChannel, FakeHostConnector } from "./fake-host-connector.ts";
 export { FakeInstanceLock } from "./fake-instance-lock.ts";
+export { FakeListenerInfo } from "./fake-listener-info.ts";
 export { FakeLoginShell } from "./fake-login-shell.ts";
 export { FakePanelOpener } from "./fake-panel-opener.ts";
 export { FakePortProbe } from "./fake-port-probe.ts";
