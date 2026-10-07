@@ -4,4 +4,6 @@
  */
 export interface InstanceLock {
   acquire(name: string): Promise<{ ok: true; release(): Promise<void> } | { ok: false; heldBy: number }>;
+  /** The live holder of `run/<name>.lock`, by the same rule `acquire` uses, and the build it recorded; `null` when free. */
+  holder(name: string): Promise<{ pid: number; build: string | null } | null>;
 }

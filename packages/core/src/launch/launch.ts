@@ -7,14 +7,17 @@ import type { ChromeProfile } from "../ports/chrome-profile.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { ConfigStore } from "../ports/config-store.ts";
 import type { DaemonClient } from "../ports/daemon-client.ts";
+import type { DetachedSpawner } from "../ports/detached-spawner.ts";
 import type { DevToolsHttp } from "../ports/dev-tools-http.ts";
 import type { ExtensionBridge } from "../ports/extension-bridge.ts";
 import type { InstanceLock } from "../ports/instance-lock.ts";
 import type { NativeHostDir } from "../ports/native-host-dir.ts";
 import type { PortProbe } from "../ports/port-probe.ts";
 import type { ProcessInfo } from "../ports/process-info.ts";
+import type { ProcessSignals } from "../ports/process-signals.ts";
 import type { Random } from "../ports/random.ts";
 import type { TextFiles } from "../ports/text-files.ts";
+import type { DaemonCommand } from "../nmhost/host.ts";
 import { prepareFiles } from "./files.ts";
 import { ensurePanel } from "./panel.ts";
 import { pollUntil } from "./poll.ts";
@@ -36,6 +39,8 @@ export type LaunchPorts = {
   daemon: DaemonClient;
   bridge: ExtensionBridge;
   files: TextFiles;
+  spawner: DetachedSpawner;
+  signals: ProcessSignals;
 };
 
 export type LaunchInput = {
@@ -46,6 +51,8 @@ export type LaunchInput = {
   /** The current version, resolved once by the launcher: its version.json `version` and its directory under app/. */
   version: string;
   appDir: string;
+  /** The current version's `desk watch`: its Desk Terminal, `desk.mjs watch`, and the environment it starts with. */
+  watchCommand: DaemonCommand;
 };
 
 /** §6.5: 65 bad config · 69 Chrome missing · 70 internal · 73 cannot write ~/.desk · 75 temporarily unavailable. */
@@ -60,6 +67,12 @@ const LAUNCH_LOCK_MS = 10_000;
 const JSON_VERSION_MS = 20_000;
 const POLL_MS = 100;
 const WORKER_MS = 5_000;
+/** §6.6: how long an older `desk watch` gets to release its lock after SIGTERM. */
+const WATCH_LOCK_MS = 10_000;
+
+/** What the launch says when `desk watch` did not start (§6.1 step 13). */
+export const WATCH_WARNING =
+  "desk watch did not start, so agents cannot reach the guarded endpoint until the next desk; desk cdp --raw still works";
 
 function fail(code: LaunchFailure["code"], message: string): LaunchFailure {
   return { ok: false, code, message };
@@ -72,13 +85,14 @@ function major(version: string): number | null {
 }
 
 /**
- * `desk` on a fresh launch (docs/IMPLEMENTATION.md §6.1 steps 1–3, 5–12 and 14; slices 1c and 3a). It holds
+ * `desk` on a fresh launch (docs/IMPLEMENTATION.md §6.1 steps 1–3 and 5–14; slices 1c, 3a and 4a). It holds
  * `run/launch.lock`, loads or creates the config, checks Chrome's version, and launches only when no Desk Chrome is
  * running (a live singleton, or anything answering on the Desk port, exits 75: reuse is slice 3b). Then it writes the
  * launch files, seeds the first run, starts Chrome with `chromeArgs`, waits for `/json/version`, loads the extension
  * unless Chrome already has the rendered version, waits for the service worker to reach the daemon (waking it with the
  * toolbar action after 5 s), applies Chrome's settings (background mode off on the first run; §5), and opens the panel
- * in the last-focused window, waiting for that panel's hello.
+ * in the last-focused window, waiting for that panel's hello. Then it makes sure the current version's `desk watch`
+ * serves the guarded endpoint, replacing one of another version without touching the daemon.
  */
 export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<LaunchResult> {
   const startedAt = ports.clock.now();
@@ -169,8 +183,9 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
 
     const seconds = ((ports.clock.now() - startedAt) / 1000).toFixed(1);
     const ready = `Desk ready (port ${config.chrome.port}, guarded ${config.gateway.port}, Chrome ${chromeVersion}) in ${seconds} s`;
-    const message = panel.createdWindow ? `${ready}. Cmd+Shift+T reopens the window you closed` : ready;
-    return { ok: true, message: settingsWarning === null ? message : `${message}. ${settingsWarning}` };
+    const watching = await ensureWatch(ports, input);
+    const notes = [panel.createdWindow ? "Cmd+Shift+T reopens the window you closed" : null, settingsWarning, watching ? null : WATCH_WARNING];
+    return { ok: true, message: [ready, ...notes.filter((note): note is string => note !== null)].join(". ") };
   } finally {
     session?.close();
     await lock.release();
@@ -214,4 +229,21 @@ async function workerReady(ports: LaunchPorts, session: BrowserSession, extensio
   const tab = await session.panels.anyTabTarget();
   if (tab !== null) await session.panels.open(extensionId, tab);
   return (await waitForWorker()) !== null;
+}
+
+/**
+ * §6.1 step 13: a live `desk watch` of this version is left running; one of another version gets SIGTERM, which closes
+ * its guarded endpoint and releases `run/watch.lock`, and up to 10 s to do so; then the current version's watch starts
+ * detached. The daemon and its shells are never touched. `false` when no watch of this version could be started.
+ */
+async function ensureWatch(ports: LaunchPorts, input: LaunchInput): Promise<boolean> {
+  const holder = await ports.lock.holder("watch");
+  if (holder !== null && holder.build === input.version) return true;
+  if (holder !== null) {
+    await ports.signals.terminate(holder.pid);
+    const freed = await pollUntil(ports.clock, WATCH_LOCK_MS, POLL_MS, async () => ((await ports.lock.holder("watch")) === null ? true : null));
+    if (freed === null) return false;
+  }
+  const command = input.watchCommand;
+  return (await ports.spawner.spawn(command.file, command.args, command.env)) !== null;
 }

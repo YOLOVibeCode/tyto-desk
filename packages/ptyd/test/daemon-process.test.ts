@@ -159,6 +159,7 @@ describe("desk-ptyd, the process", () => {
         order.push(`lock ${name}`);
         return locks.acquire(name);
       },
+      holder: (name) => locks.holder(name),
     };
 
     const daemon = serve(await freshDeskHome(), { order, lock });

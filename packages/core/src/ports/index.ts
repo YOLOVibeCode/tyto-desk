@@ -14,6 +14,7 @@ export type { DetachedSpawner } from "./detached-spawner.ts";
 export type { DevToolsHttp } from "./dev-tools-http.ts";
 export type { DeskWindow, ExtensionBridge } from "./extension-bridge.ts";
 export type { ExtensionWindow, ExtensionWindows } from "./extension-windows.ts";
+export type { GuardedEndpoint } from "./guarded-endpoint.ts";
 export type { HostChannel } from "./host-channel.ts";
 export type { HostConnector } from "./host-connector.ts";
 export type { InstanceLock } from "./instance-lock.ts";

@@ -3,5 +3,7 @@ export { DaemonExtensionBridge } from "./extension-bridge.ts";
 export { deskPaths, installCommand, type CommandResult, type InstallCommandInput } from "./install.ts";
 export { launchCommand } from "./launch.ts";
 export { main, type MainInput } from "./main.ts";
+export { cdpCommand } from "./cdp.ts";
 export { TtyPrompter } from "./prompter.ts";
 export { quitCommand } from "./quit.ts";
+export { watchCommand } from "./watch.ts";

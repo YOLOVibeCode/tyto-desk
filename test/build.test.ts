@@ -115,6 +115,30 @@ describe("build", () => {
     ]);
   });
 
+  it.each(["bufferutil", "utf-8-validate"])("the dependency check leaves out ws's optional %s, which ws tries and runs without", async (tried) => {
+    const metafile = {
+      inputs: {
+        "node_modules/ws/lib/buffer-util.js": { bytes: 1, imports: [{ path: tried, kind: "require-call" as const, external: true }] },
+      },
+      outputs: {},
+    };
+    const manifests = { "node_modules/ws/package.json": { name: "ws", devDependencies: { [tried]: "1.0.0" } } };
+
+    expect(await undeclaredBundledPackages(repo, [{ name: "runtime", metafile }], manifests)).toEqual([]);
+  });
+
+  it("the dependency check still flags any other external a dependency loads without declaring it", async () => {
+    const metafile = {
+      inputs: { "node_modules/ws/lib/buffer-util.js": { bytes: 1, imports: [{ path: "left-pad", kind: "require-call" as const, external: true }] } },
+      outputs: {},
+    };
+    const manifests = { "node_modules/ws/package.json": { name: "ws" } };
+
+    expect(await undeclaredBundledPackages(repo, [{ name: "runtime", metafile }], manifests)).toEqual([
+      { bundle: "runtime", importer: "ws", bundled: "left-pad", declaredIn: "nothing" },
+    ]);
+  });
+
   it("production builds drop deskTest, and the test build exposes it", async () => {
     const testBuild = await buildBundles(repo, { testHooks: true });
     const panel = (bundles: { path: string; text: string }[]) => bundles.find((bundle) => bundle.path === "extension/panel.js")?.text ?? "";

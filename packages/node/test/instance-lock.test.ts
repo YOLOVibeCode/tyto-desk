@@ -180,6 +180,28 @@ describe("NodeInstanceLock", () => {
     expect(JSON.parse(await readFile(join(run, "ptyd.lock"), "utf8"))).toEqual({ pid: process.pid, build: "0.3.0", startedAt: iso(T0) });
   });
 
+  it("the lock names a live holder's pid and the build it recorded", async () => {
+    const run = await runDir();
+    await writeFile(join(run, "watch.lock"), JSON.stringify({ pid: 4242, build: "0.3.0", startedAt: iso(T0) }), { mode: 0o600 });
+    const processes = new FakeProcessInfo([4242]);
+    processes.started.set(4242, T0 + 800);
+
+    expect(await new NodeInstanceLock(run, {}, { processes }).holder("watch")).toEqual({ pid: 4242, build: "0.3.0" });
+  });
+
+  it.each([
+    ["no lock", null],
+    ["a dead holder", { pid: 4343, build: "0.3.0", startedAt: iso(T0) }],
+    ["a pid the system has given to a newer process", { pid: 4242, build: "0.3.0", startedAt: iso(T0 - 3_600_000) }],
+  ])("the lock names no holder for %s", async (_, record) => {
+    const run = await runDir();
+    if (record !== null) await writeFile(join(run, "watch.lock"), JSON.stringify(record), { mode: 0o600 });
+    const processes = new FakeProcessInfo([4242]);
+    processes.started.set(4242, T0);
+
+    expect(await new NodeInstanceLock(run, {}, { processes }).holder("watch")).toBeNull();
+  });
+
   it("the lock refuses a lock name that is not a plain word", async () => {
     const lock = new NodeInstanceLock(join(await mkdtemp(join(tmpdir(), "lock-")), "run"));
 

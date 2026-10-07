@@ -1,0 +1,16 @@
+{
+  "name": "@desk/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The guarded endpoint desk watch serves: Chrome's DevTools HTTP and WebSocket endpoints on 127.0.0.1, with Desk's own targets hidden and a few commands refused.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@desk/core": "0.1.0",
+    "@desk/node": "0.1.0",
+    "ws": "8.22.0"
+  }
+}

@@ -19,6 +19,14 @@ import { extensionIdFromKey } from "../../packages/core/src/index.ts";
 /** Native code the runtime build copies beside desk.mjs instead of bundling (§2, D71). */
 export const RUNTIME_EXTERNALS = ["@lydell/node-pty"];
 
+/**
+ * Optional packages a bundled dependency requires inside a `try` and runs without: esbuild leaves those requires
+ * unresolved, and at run time they fail into the dependency's fallback. ws (the guarded endpoint) tries its native
+ * helpers `bufferutil` and `utf-8-validate`, which are only its devDependencies, and masks and validates in JavaScript
+ * without them. Mapping them to empty modules would break ws, which calls their functions once the require succeeds.
+ */
+export const OPTIONAL_TRIED_PACKAGES = /** @type {Readonly<Record<string, readonly string[]>>} */ ({ ws: ["bufferutil", "utf-8-validate"] });
+
 /** The strict policy §9 gives every extension page. */
 export const EXTENSION_CSP =
   "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'";
@@ -228,6 +236,7 @@ export async function undeclaredBundledPackages(root, metafiles, manifests) {
         }
         const importerName = String(importer.manifest.name);
         if (bundled === null || bundled === importerName) continue;
+        if (edge.external === true && OPTIONAL_TRIED_PACKAGES[importerName]?.includes(bundled) === true) continue;
         const dependencies = /** @type {Record<string, string> | undefined} */ (importer.manifest.dependencies) ?? {};
         if (Object.hasOwn(dependencies, bundled)) continue;
         const dev = /** @type {Record<string, string> | undefined} */ (importer.manifest.devDependencies) ?? {};

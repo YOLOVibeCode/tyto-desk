@@ -89,7 +89,7 @@ describe("the agent-variable gate", () => {
     expect(env).toMatchObject({
       AGENT_BROWSER_CONFIG: "/Users/alex/.desk/agent-browser.json",
       AGENT_BROWSER_SESSION: "desk-p_k2m9q3x7ab",
-      DESK_CDP_URL: "http://127.0.0.1:9417",
+      DESK_CDP_URL: "http://127.0.0.1:9583",
       DESK_PANE: "p_k2m9q3x7ab",
     });
     expect(env.TMUX).toBeUndefined();

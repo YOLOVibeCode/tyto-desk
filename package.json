@@ -11,6 +11,7 @@
     "packages/chrome",
     "packages/ptyd",
     "packages/nmhost",
+    "packages/gateway",
     "packages/extension",
     "packages/cli"
   ],
@@ -18,7 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "node scripts/live.mjs",
-    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/core/test && tsc --noEmit -p packages/node && tsc --noEmit -p packages/chrome && tsc --noEmit -p packages/ptyd && tsc --noEmit -p packages/nmhost && tsc --noEmit -p packages/extension && tsc --noEmit -p packages/cli && tsc --noEmit -p test && tsc --noEmit -p scripts",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/core/test && tsc --noEmit -p packages/node && tsc --noEmit -p packages/chrome && tsc --noEmit -p packages/ptyd && tsc --noEmit -p packages/nmhost && tsc --noEmit -p packages/gateway && tsc --noEmit -p packages/extension && tsc --noEmit -p packages/cli && tsc --noEmit -p test && tsc --noEmit -p scripts",
     "build": "node scripts/build.mjs",
     "pack": "node scripts/pack.mjs",
     "deploy": "node scripts/deploy.mjs",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@types/node": "26.6.4",
+    "@types/ws": "8.18.2",
     "esbuild": "0.28.2",
     "typescript": "5.9.3",
     "vitest": "5.0.3",

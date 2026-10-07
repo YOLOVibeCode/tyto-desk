@@ -1,12 +1,14 @@
 import { join } from "node:path";
-import { launch } from "@desk/core";
+import { daemonEnvironment, launch, terminalBinary } from "@desk/core";
 import { CdpBrowserConnector, HttpDevTools, NodeChromeProcess, NodeChromeProfile, NodeNativeHostDir } from "@desk/chrome";
 import {
   CryptoRandom,
   FileConfigStore,
+  NodeDetachedSpawner,
   NodeInstanceLock,
   NodePortProbe,
   NodeProcessInfo,
+  NodeProcessSignals,
   NodeTextFiles,
   SystemClock,
 } from "@desk/node";
@@ -42,8 +44,21 @@ export async function launchCommand(input: {
       daemon,
       bridge: new DaemonExtensionBridge(daemon),
       files: new NodeTextFiles(),
+      spawner: new NodeDetachedSpawner(),
+      signals: new NodeProcessSignals(),
     },
-    { home: input.home, deskHome: input.deskHome, platform: input.platform, version: input.version, appDir: input.appDir },
+    {
+      home: input.home,
+      deskHome: input.deskHome,
+      platform: input.platform,
+      version: input.version,
+      appDir: input.appDir,
+      watchCommand: {
+        file: join(input.appDir, terminalBinary(input.platform)),
+        args: [join(input.appDir, "desk.mjs"), "watch"],
+        env: { ...daemonEnvironment(input.env), DESK_HOME: input.deskHome },
+      },
+    },
   );
   return result.ok ? { code: 0, message: result.message } : { code: result.code, message: result.message };
 }
