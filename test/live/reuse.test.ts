@@ -132,11 +132,14 @@ describe("desk reuses the Desk Chrome (slice 3b) in the live container", () => {
     async () => {
       let cdp = await Cdp.connect((await browserVersion(PORT)).webSocketDebuggerUrl);
       const first = await panel(cdp);
-      await typeLine(cdp, first.session, "echo before-the-last-window-$$");
-      const marker = await waitFor(
-        async () => /before-the-last-window-(\d+)$/m.exec(await evaluate<string>(cdp, first.session, `deskTest.screen(${JSON.stringify(first.pane)})`))?.[0] ?? null,
-        { label: "the marker" },
-      );
+      const shellPid = async (session: string, pane: string, tag: string): Promise<string> => {
+        await typeLine(cdp, session, `echo ${tag}-$$`);
+        return waitFor(
+          async () => new RegExp(`^${tag}-(\\d+)$`, "m").exec(await evaluate<string>(cdp, session, `deskTest.screen(${JSON.stringify(pane)})`))?.[1] ?? null,
+          { label: `the shell's pid (${tag})` },
+        );
+      };
+      const pidBefore = await shellPid(first.session, first.pane, "before-the-last-window");
       const listed = await panes();
       for (const page of (await targets(cdp)).filter((t) => t.type === "page")) await cdp.send("Target.closeTarget", { targetId: page.targetId }).catch(() => undefined);
       cdp.close();
@@ -149,18 +152,13 @@ describe("desk reuses the Desk Chrome (slice 3b) in the live container", () => {
       const run = await launchDesk();
       cdp = await Cdp.connect((await browserVersion(PORT)).webSocketDebuggerUrl);
       const second = await panel(cdp);
-      const shown = await waitFor(
-        async () => {
-          const text = await evaluate<string>(cdp, second.session, `deskTest.screen(${JSON.stringify(second.pane)})`);
-          return text.includes(marker) ? text : null;
-        },
-        { label: "the pane's screen with the marker" },
-      );
+      const pidAfter = await shellPid(second.session, second.pane, "after-the-last-window");
       const after = await panes();
       cdp.close();
-      await saveResult("reuse-last-window", { run, marker, before: listed?.panes, after: after?.panes, pane: second.pane, shown: shown.split("\n").slice(-5) });
+      await saveResult("reuse-last-window", { run, before: listed?.panes, after: after?.panes, pane: second.pane, pidBefore, pidAfter });
 
       expect(second.pane).toBe(first.pane);
+      expect(pidAfter).toBe(pidBefore);
       expect(after?.panes.filter((pane) => pane.alive).map((pane) => pane.id).sort()).toEqual(listed?.panes.filter((pane) => pane.alive).map((pane) => pane.id).sort());
     },
     120_000,
