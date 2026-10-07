@@ -1,8 +1,8 @@
-# Owner-merge (docs/IMPLEMENTATION.md §23.1, D50). main's dependency-free owner-merge.mjs reads the pull request's file
-# list and head branch through the API; for the release PR, or a PR that touches an owner-merge path
-# (scripts/delivery/owner-paths.json), it adds the `owner-merge` label, turns auto-merge off and comments once, again
-# whenever someone turns auto-merge on or removes the label; otherwise it removes the label. Not a required check. It
-# never checks out or runs anything from the pull request.
+# Owner-merge (docs/IMPLEMENTATION.md §23.1, D50, D69). main's dependency-free owner-merge.mjs reads the pull
+# request's file list and head branch through the API; for the release PR, a PR that touches an owner-merge path
+# (scripts/delivery/owner-paths.json), or one whose files the API did not list in full, it turns auto-merge off, adds
+# the `owner-merge` label and comments once, again whenever someone turns auto-merge on or removes the label; otherwise
+# it removes the label. Not a required check. It never checks out or runs anything from the pull request.
 name: owner-merge
 
 on:

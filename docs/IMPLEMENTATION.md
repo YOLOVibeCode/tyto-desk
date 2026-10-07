@@ -1067,11 +1067,11 @@ test wrote into that `~/.desk`.
   linux-arm64 binary); xvfb, tmux, zsh, procps, lsof, fonts; puppeteer-core and playwright-core; user `lab`. Debian's
   Chromium is not used: it is 154, below the manifest's minimum [VMLAB]. Google prunes old builds from its pool, so the
   runner keeps the `.deb` by sha256: in a Colima volume (`desk-live-cache`) on the Mac, in an Actions cache keyed by
-  the same sha256 in CI (`DESK_LIVE_CACHE_DIR`, D64); a bump is a one-line change. GitHub evicts a cache entry unused
-  for 7 days, the weekly run's interval, so `live.yml` restores the entry every three days as well, and only runs on
-  `main` save it (tag and PR runs can read `main`'s entries). No copy of Chrome lives anywhere else, such as a
-  container registry (D60). When Google has pruned the pinned build and no cache holds it, the run fails naming the
-  bump.
+  the same sha256 in CI (path `~/.cache/desk-live/chrome`, D64); a bump is a one-line change. GitHub evicts a cache
+  entry unused for 7 days, the weekly run's interval, so `live.yml` restores the entry every three days as well, and
+  only runs on `main` save it (tag and PR runs can read `main`'s entries). No copy of Chrome lives anywhere else, such
+  as a container registry (D60). When Google has pruned the pinned build and no cache holds it, the run fails naming
+  the bump.
 - `scripts/live.mjs` runs in two places only. On the Mac it is the only thing that runs, and it drives
   `docker --context colima` and nothing else. In CI (`--ci`, accepted only when `GITHUB_ACTIONS=true` on a Linux
   arm64 runner) it drives the runner's own Docker engine on `ubuntu-24.04-arm`, with the same phases, flags, seccomp
@@ -1110,11 +1110,13 @@ enables it. Results are recorded as a structured pass or fail file with no free 
 
 Every workflow, its triggers, permissions, and the rules `lint:workflows` enforces: §23.7. Slice 1a's `ci.yml` (`check`
 on Node 22.22.2 and 26.10.0, `gitleaks`) is the start; slice D1 gives it this shape. `.github/workflows/ci.yml`,
-`permissions: contents: read`, every action pinned to a commit SHA:
+top-level `permissions: {}` and each job asking for what it needs (`contents: read`; `changes` also
+`pull-requests: read`), every action pinned to a commit SHA:
 
 - `changes`: on a PR, the PR's file list classified by the base commit's `scripts/delivery/ci-changes.mjs`; docs-only
-  means `docs/**`, root Markdown other than `CLAUDE.md` and `AGENTS.md`, and `LICENSE`, and anything else is code. On
-  `main`, everything is code.
+  means `docs/**`, root Markdown other than `CLAUDE.md` and `AGENTS.md`, and `LICENSE`, and anything else is code. The
+  list counts only while the PR's head is still the commit the run's event named; a moved head, a list the API cut
+  short, or a base commit without `ci-changes.mjs` (before slice D1) is code (D69). On `main`, everything is code.
 - `check` on `ubuntu-24.04`, Node 22.22.2 and 26.10.0: `npm ci --ignore-scripts`, `npm audit signatures`,
   `lint:imports`, `lint:extension`, `lint:listen`, `lint:install-scripts`, `lint:workflows` (from slice D1),
   `secrets:scan` (code, docs, and tests; specific fake values are allowlisted, never paths), `test`, `typecheck`,
@@ -1179,11 +1181,11 @@ Done when: check green on the Mac and in CI; esbuild and the node-pty candidates
 `owner-paths.json`, `automerge-decision.mjs`, the publish steps, `github-setup.mjs`); `pr-title.yml`,
 `owner-merge.yml`, and `dependabot-auto-merge.yml`; `ci.yml` with change detection, `scan`, `macos`, and `ci-ok`;
 `build-darwin.yml`; `edge.yml` and `release.yml`, which build, stamp, and report but attest and publish nothing until
-slice 1c's `npm run pack` produces a runtime; `release-please.yml`, its config and manifest; `live.yml` and
-`live-run.yml`, which run the suite from slice 1b on; `.github/dependabot.yml`; `lint:workflows`; the PR template; the
-root package.json's `version` at `0.0.0`; and links to RELEASING and CONTRIBUTING from the README, CLAUDE.md, and
-AGENTS.md, whose agent rules gain §23.1's. The D1 PR is all owner-merge paths, and `main` has no ruleset yet: the owner
-merges it by the interim rule (§23.1).
+slice 1c's `npm run pack` produces a runtime (a release also needs slice D2's `install.sh`, D67); `release-please.yml`,
+its config and manifest; `live.yml` and `live-run.yml`, which run the suite from slice 1b on; `.github/dependabot.yml`;
+`lint:workflows`; the PR template; the root package.json's `version` at `0.0.0`; and links to RELEASING and
+CONTRIBUTING from the README, CLAUDE.md, and AGENTS.md, whose agent rules gain §23.1's. The D1 PR is all owner-merge
+paths, and `main` has no ruleset yet: the owner merges it by the interim rule (§23.1).
 
 - `classifyBuild makes a v-tag on main whose version matches package.json a stable build`
 - `classifyBuild decides <channel or refusal> for <event> on <ref>` (it.each: push or workflow_dispatch on a v-tag → stable; push, workflow_dispatch or schedule on main → edge; pull_request from this repository or from a fork → pr; workflow_dispatch on another branch → unsupported-ref)
@@ -1201,31 +1203,38 @@ merges it by the interim rule (§23.1).
 - `classifyBuild gates stable builds on the live suite, runs it for same-repository pr builds on the live label, and never for forks, edge or dev`
 - `branchSlug turns <branch> into <slug>` (it.each: `slice-1c/walking-skeleton`, `Fix/ÜBER_wide`, an empty name, `007`)
 - `a prerelease classifyBuild returns sorts after its base version and before the next patch, and a stable version equals its base`
-- `the stamp writes version.json into the build output and never into the repo`
+- `the stamp writes version.json into the build output and never into the repo` (it.each over refused `--out` directories, `..cache` included)
 - `the stamp fetches main and decides tagOnMain with merge-base --is-ancestor, and any git error means not on main` (stub `git`)
 - `the stamp takes a pull request's head commit, branch and fork flag from the event`
 - `a tag build records branch main only when the tag is on main`
 - `dirty means tracked changes or untracked files that are not ignored, and CI fails naming them`
+- `the stamp counts a tree as dirty when git cannot list its changes` (it.each: `status`, `ls-files`) and `the stamp refuses a tree whose changes git cannot list, and says so`
 - `the PR check accepts <title>` and `the PR check refuses <title>` (it.each; the release PR's and Dependabot's titles accepted, including Dependabot's over 72 characters)
 - `the PR check requires a slice branch's id as the title's scope`
 - `the PR check refuses a branch outside the naming scheme, accepts the bots' branches, and checks only the title of a fork's branch`
 - `the PR check applies the base branch's workflow rules to the PR's workflow files, read through the API as data`
 - `the PR check fails a PR that adds a job named ci-ok or pr-title outside their workflows`
-- `the PR check fails when a pinned action's SHA is not the commit its tag comment names`
+- `the PR check fails when a pinned action's SHA is not the commit its tag comment names` (it.each: another commit, no such tag, a branch or an abbreviated commit in the comment) and `the PR check passes a pinned action whose SHA is the commit its tag names` (a lightweight and an annotated tag)
 - `change detection calls a PR docs-only only when it touches nothing but docs/, root Markdown other than CLAUDE.md and AGENTS.md, and LICENSE`
 - `change detection calls a PR that changes ci-changes.mjs, a workflow, a package file or an agent rule code`
+- `change detection calls a PR code when the files it read may not be the event's head commit's` (it.each: the head moved; no head in the event)
 - `owner-merge labels a PR that touches <path> and turns its auto-merge off` (it.each over `owner-paths.json`, and the release PR's branch)
 - `owner-merge removes its label when no owner-merge path remains`
-- `ci-ok fails when a needed job failed or was cancelled, when code changed and check or macos did not succeed, or on the release PR while runtime is false`
-- `lint:workflows fails on <violation>` (it.each: an action not pinned to a 40-character SHA with its tag in a comment; no top-level permissions; a job without timeout-minutes; a checkout without persist-credentials false; `${{ }}` other than matrix or runner inside run; pull_request_target outside its three workflows, or one that checks out the pull request; workflow_run, issue_comment, pull_request_review or repository_dispatch; id-token, contents or pull-requests write outside their jobs; npm ci or npm install without --ignore-scripts; a cache in a pull_request_target, pack, attest or publish job; env, printenv, set -x or ACTIONS_STEP_DEBUG in a job with a secret or a write scope; a secret outside its environment's job; a publish job outside the publish environment; concurrency in a workflow_call workflow; a second job named pr-title or ci-ok; a runner label ending in -latest)
+- `owner-merge treats a PR whose files the API did not list in full as owner-merge` (it.each: 3,000 of 3,001; none; no `changed_files`)
+- `owner-merge turns auto-merge off before it labels, so a failed label call leaves auto-merge off`
+- `ci-ok fails when a needed job failed or was cancelled, when code changed and check or macos did not succeed, or on the release PR while runtime or installer is false` (a `changes` that reported neither `code=true` nor `code=false` included)
+- `lint:workflows fails on <violation>` (it.each: an action not pinned to a 40-character SHA with its tag in a comment; a local action in a step, or a reusable workflow outside `.github/workflows/`; no top-level permissions; a job without timeout-minutes; a checkout without persist-credentials false; `${{ }}` other than matrix or runner inside run; pull_request_target outside its three workflows, or one that checks out or fetches the pull request (past git's own options) or calls a reusable workflow; `pr-title.yml` on any trigger but pull_request_target; workflow_run, issue_comment, pull_request_review or repository_dispatch; id-token, contents or pull-requests write outside their jobs; npm ci or npm install without --ignore-scripts, or with it turned back off; a cache in a pull_request_target, pack, attest or publish job; env, printenv, set -x or ACTIONS_STEP_DEBUG in a job with a secret or a write scope; a secret outside its environment's job; a publish job outside the publish environment; concurrency in a workflow_call workflow; a second job named pr-title or ci-ok, in any case, or a job name with an expression that could make it one; a runner label ending in -latest; a YAML alias, directive or explicit tag; no plain `on` key; action names in any case)
 - `the auto-merge decision allows only patch updates of @types, typescript, vitest and yaml as development dependencies` (it.each over ecosystem, dependency type, update type, and package, esbuild included)
 - `the auto-merge decision refuses a group with any member outside the allowed class`
+- `the auto-merge decision turns auto-merge on only once main's rules require pr-title and ci-ok from GitHub Actions, the interim rule (D54)` (it.each over main's rules, a failed read included)
 - `publish refuses a draft whose assets are not exactly the tarball, install.sh and SHA256SUMS with the digests SHA256SUMS names`
 - `publish goes straight to verify when an earlier attempt already published matching assets`
+- `publish refuses a tag with no release before it attests or uploads anything` (D63)
 - `publish marks a release latest only when its version is the highest published`
 - `the release-please config opens the release PR as a draft labeled live`
 - `the release-please config tags vX.Y.Z, drafts each release with its tag, starts at 0.1.0 with feat bumping the patch before 1.0, and hides docs, test, build, ci and chore`
 - `the release-please config bumps only the root package.json and package-lock.json`
+- `the release PR's branch, which ci-ok, the PR check and owner-merge name, is the one release-please names from this config` (D68)
 - `github-setup plans squash-only merges with the PR title and body as the commit, auto-merge and branch deletion`
 - `github-setup's main ruleset requires pr-title and ci-ok from GitHub Actions, signed linear history and a PR with 0 approvals, and has no bypass actor`
 - `github-setup's tags and release branch rulesets let only the release App create, move or delete, and have no bypass actor until the App exists`
@@ -1237,12 +1246,13 @@ merges it by the interim rule (§23.1).
 
 Done when: check green, and `ci.yml` green on the D1 PR, which the owner merged by the interim rule (`pr-title` runs
 from `main`'s copy, so it starts with the next PR); the operator ran `github-setup --apply` and `--check` is clean;
-PRs that were open before then were edited or pushed to, so `pr-title` ran on them; a docs-only PR merges itself with
-`pr-title` and `ci-ok` green and no build job run; an agent PR merges itself after `gh pr merge --auto --squash`; a PR
-that touches an owner-merge path got the label and lost its auto-merge; once the release App exists (RELEASING.md),
-a draft release PR is open with its checks run (`ci-ok` red until slice 1c, on purpose); `edge.yml` and a
-`release.yml` dry run ran. The first Dependabot PR that merges itself is a follow-up, since the 7-day cooldown can hold
-it for weeks; the decision's tests stand in for it.
+PRs that were open before D1 merged were rebased onto `main` (or merged it), so their heads carry D1's workflows and
+`pr-title` ran on them; a docs-only PR merges itself with `pr-title` and `ci-ok` green and no build job run; an agent
+PR merges itself after `gh pr merge --auto --squash`; a PR that touches an owner-merge path got the label and lost its
+auto-merge; once the release App exists (RELEASING.md), a draft release PR is open with its checks run (`ci-ok` red
+until slices 1c and D2, on purpose); `edge.yml` and a `release.yml` dry run ran. The first Dependabot PR that merges
+itself is a follow-up, since the 7-day cooldown can hold it for weeks, and Dependabot's PRs opened before `--apply`
+wait for the owner (D69); the decision's tests stand in for it.
 
 ### Slice 1b — Live harness: port the lab
 
@@ -1267,8 +1277,9 @@ A minimal `desk install` into `DESK_HOME` (runtime build with Desk Terminal, lau
 launch (§6.1 steps 1–3, 5, 7–10, 12, 14; classification launches only when no singleton is alive, else exit 75); the
 worker's native connection; a one-pane panel; the host relay; a daemon with one pane (no mirror yet); the agent config
 (raw `cdp` until slice 4b) and the agent-variable gate; `npm run pack`, `npm run deploy`, and `desk --version`
-(§23.4, §23.5), so the operator can try each build from slice 1c on, and the edge and release workflows leave dry
-run. Reuses PROTO's panel, host, and launch sequence.
+(§23.4, §23.5), so the operator can try each build from slice 1c on, and edge builds leave dry run (a release also
+needs slice D2's `install.sh`: until then `ci-ok` keeps the release PR red, D67). Reuses PROTO's panel, host, and launch
+sequence.
 
 - `launch waits for /json/version before connecting`
 - `launch refuses an extension id that differs from the key's id`
@@ -1473,7 +1484,9 @@ The full installed runtime (§15.1), consent steps, Desk.app and the login agent
 `desk update`, `desk versions`, `desk use`, `desk rollback`, retention, the provenance check, `install.sh`, and their
 doctor rows (§23.5); the ports `release-feed.ts`, `provenance.ts`, `file-digest.ts`, and `app-versions.ts`, and
 `ProcessInfo.executablesUnder`; core's update plan and retention. Adapters are tested with a fake release feed and stub
-`gh`, `codesign`, `tar`, `ps`, and `uname` executables that record argv, in Tyto's style.
+`gh`, `codesign`, `tar`, `ps`, and `uname` executables that record argv, in Tyto's style. `install.sh` lives at
+`scripts/delivery/install.sh` (an owner-merge path); its arrival lifts the last guard on the first release: `ci-ok` on
+the release PR and `release.yml`'s `plan` (D67).
 
 - `desk update installs the newest stable release after its sha256 matches SHA256SUMS, verify-asset passes, and its provenance names release.yml on its tag and commit`
 - `the provenance check passes --cert-identity, --source-ref, --source-digest and --deny-self-hosted-runners for <channel>` (it.each: stable, edge; stub `gh` records argv)
@@ -1663,7 +1676,7 @@ agent running `npm run deploy`, `desk update`, `desk use`, or `desk rollback`.
 
 Review of 2026-10-06 (security, persistence and UX, testability). Every blocker and major issue is resolved in the
 sections above; these entries record choices, deviations, and rejections. D28–D33 come from slice 1a; D34–D61 from
-the delivery design and its security and operability review, the same day; D62–D67 from slice D1.
+the delivery design and its security and operability review, the same day; D62–D70 from slice D1 and its review.
 
 | # | Decision | Why |
 |---|---|---|
@@ -1727,13 +1740,16 @@ the delivery design and its security and operability review, the same day; D62�
 | D58 | Release dry runs: `release.yml` dispatched on `main` runs `plan`, the build, and the live gate as a stable-shaped build, and stops before any tag, release, or attestation. No release before slice 1c: `ci-ok` fails on the release PR while the build reports no runtime | Before 1c a merged release PR would burn its version on an empty draft (D37), and the release path would get no rehearsal before the first real release |
 | D59 | `installed.json` is written only under `install.lock`; the manifest render serial moves to its own `render.json`, written only under `launch.lock` | A launch bumped the serial under `launch.lock` while an install wrote `current` under `install.lock`, so one could lose the other's write |
 | D60 | No copy of Google Chrome outside the Actions cache and the Mac's Colima volume (rejects keeping the pinned `.deb` or the live image in a container registry). The cache is restored every three days so GitHub never evicts it, and the release PR's live run finds a pruned pin before a tag exists | A registry image would redistribute Google Chrome. With the keep-alive, a pruned pin costs a bump PR, not a release (§23.9) |
-| D61 | Delivery scripts and the Node pin live under `scripts/delivery/`, an owner-merge path | One glob keeps every script a privileged job runs, the stamp, and the scripts added later under the owner's review |
+| D61 | Delivery scripts and the Node pin live under `scripts/delivery/`, an owner-merge path; so does core's release code that they import, `packages/core/src/release/**` (slice D1 review, D65) | One glob keeps every script a privileged job runs, the stamp, and the scripts added later under the owner's review; the second keeps what `publish` executes and decides there too |
 | D62 | Vitest 5.0.3 replaces 3.2.7 (slice D1). Vite 8.3.3 comes in as its peer; the lockfile gains no install script (`lint:install-scripts` still lists esbuild and fsevents only) | 3.2.7 pulled `tinypool` 1.x (GHSA-5gmw-xhrv-c9v3, GHSA-85c8-ppgw-ccpr: critical) and `@vitest/mocker` 3.2.7 (GHSA-82fw-gwwq-j7x9); 4.1.11 and 5.0.3 both fix them, and 5.0.3, the newest, passed every test and type check on Node 22.22.2 and 26.10.0 with no change. Dev only: nothing Vitest provides ships |
 | D63 | `release.yml`'s `plan` checks the tag (`classifyBuild`) and that a runtime exists; `publish`'s first step (`publish.mjs prepare`) is what refuses a tag with no release (amends §23.7's `plan`: "the tag's release exists") | A `contents: read` token does not list draft releases, and only `publish` may hold `contents: write`. `prepare` runs before anything is attested or uploaded, so a missing draft still stops the release before it changes anything |
-| D64 | The live suite in CI, until and after slice 1b: `live-run.yml` runs `npm run test:live -- --ci` only when that script exists (otherwise it passes with a notice, so `release.yml`'s gate and `live.yml` work from D1 on). It restores the pinned Chrome `.deb` into `DESK_LIVE_CACHE_DIR` (`$RUNNER_TEMP/desk-live-cache`) under the key `desk-live-chrome-<CHROME_SHA256>`, read from `test/live/image/Dockerfile`; saves it only on `main` after a miss; lifts AppArmor's user-namespace limit before the suite; uploads `test-results/`. Slice 1b's `--ci` mode keeps the `.deb` in that directory, and adds Dependabot's `docker` entry for `test/live` | The workflow must own the cache (only actions can reach the Actions cache), so the runner and the workflow share one directory; until 1b there is no suite, Dockerfile, or `test/live` for Dependabot to watch |
-| D65 | Delivery scripts import core's release code (`classifyBuild`, the semver rules, the latest-flag rule, `DESK_COMPAT`) as TypeScript, through Node's type stripping (Node 22.18 and later; core is `erasableSyntaxOnly`). Each script is a thin CLI over `scripts/delivery/lib/`; `ci-ok`'s decision is `scripts/delivery/ci-ok.mjs` so its spec sentence has a unit. Until slice 1c pins Desk Terminal in `scripts/delivery/node-runtime.json`, the stamp's `node` is `.nvmrc`'s | One implementation decides what a build is, wherever it runs, and the CI jobs need no build step and no `npm ci` to run it. `.nvmrc` and the pin name the same Node 26.10.0 (D49) |
+| D64 | The live suite in CI, until and after slice 1b: `live-run.yml` runs `npm run test:live -- --ci` only when that script exists (otherwise it passes with a notice, so `release.yml`'s gate and `live.yml` work from D1 on); once it exists, a runner without the CI mode fails the job instead of passing the gate unrun. It restores the pinned Chrome `.deb` into `~/.cache/desk-live/chrome` under the key `desk-live-chrome-<CHROME_SHA256>`, read from `test/live/image/Dockerfile`; saves it only on `main` after a miss; lifts AppArmor's user-namespace limit before the suite; uploads `test-results/`. Slice 1b's `--ci` mode keeps the `.deb` under `~/.cache/desk-live/chrome/<sha256>/`, and 1b adds Dependabot's `docker` entry for `/test/live/image`, where the Dockerfile is | The workflow must own the cache (only actions can reach the Actions cache), so the runner and the workflow share one directory: the one slice 1b's runner reads (slice D1 review; the first cut restored into `$RUNNER_TEMP`, which the runner never reads, so nothing would ever have been cached). Until 1b there is no suite, Dockerfile, or `test/live/image` for Dependabot to watch |
+| D65 | Delivery scripts import core's release code (`classifyBuild`, the semver rules, the latest-flag rule, `DESK_COMPAT`) as TypeScript, through Node's type stripping (Node 22.18 and later; core is `erasableSyntaxOnly`). Each script is a thin CLI over `scripts/delivery/lib/`; `ci-ok`'s decision is `scripts/delivery/ci-ok.mjs` so its spec sentence has a unit. `classifyBuild` returns a result union, `{ ok: true, … }` or `{ ok: false, refusals }` (§23.3's example), as the TypeScript rules ask of expected failures. Until slice 1c pins Desk Terminal in `scripts/delivery/node-runtime.json`, the stamp's `node` is `.nvmrc`'s. Because `publish` (with `contents`, `id-token` and `attestations: write`) and the stamp run that code, `packages/core/src/release/**` is an owner-merge path (slice D1 review; D61) | One implementation decides what a build is, wherever it runs, and the CI jobs need no build step and no `npm ci` to run it. `.nvmrc` and the pin name the same Node 26.10.0 (D49). Without the owner-merge path an agent PR could change what `publish` executes, or its latest-flag rule (D55), and merge itself |
 | D66 | `lint:workflows` also refuses YAML anchors and aliases, Docker actions, `write-all`, string job permissions, runners outside the three fixed labels, and an expression that reaches every secret (`toJSON(secrets)`); it counts a secret only inside `${{ }}`. The PR check adds `pinned-sha` (online). `ci.yml`'s `changes` job asks for `pull-requests: read` to list a PR's files, and `release.yml`'s `verify` for `attestations: read`. Owner-merge paths and docs-only paths compare without case, and a renamed file counts under both names | Each closes a way around a §23.7 rule (an alias can hide a value from the lint; `claude.md` is `CLAUDE.md` on the operator's Mac; a rename moves a file out of an owner-merge path). Both scopes are read-only |
-| D67 | The first release needs slice D2 as well as 1c: `publish` refuses a draft whose assets are not exactly the tarball, `install.sh` and `SHA256SUMS`, and `install.sh` arrives with D2 (`build-darwin.yml` adds `scripts/delivery/install.sh` to stable builds once it exists) | A release without its installer could never be installed on a fresh Mac, and releases are immutable (D37) |
+| D67 | The first release needs slice D2 as well as 1c: `publish` refuses a draft whose assets are not exactly the tarball, `install.sh` and `SHA256SUMS`, and `install.sh` arrives with D2 (`build-darwin.yml` adds `scripts/delivery/install.sh` to stable builds once it exists). So D58's guard covers it too (slice D1 review): `build-darwin.yml` reports `installer` (whether the commit has `install.sh`), `ci-ok` fails on the release PR until both `runtime` and `installer` are true, and `release.yml`'s `plan` refuses a release without either | A release without its installer could never be installed on a fresh Mac, and releases are immutable (D37). Without the guard, a release PR merged between 1c and D2 would create a tag only the App can delete and burn the version on a draft `publish` then refuses |
+| D68 | The release PR's branch is `release-please--branches--main--components--tyto-desk`, not `release-please--branches--main` (slice D1 review; amends §23.1): release-please 17.6.0, which the pinned release-please-action v5.0.0 bundles, gives a single package a pull request of its own and names its branch after the package's component, its package name, whatever `include-component-in-tag` says. ci-ok, the PR check and owner-merge share one constant (`scripts/delivery/lib/release-branch.mjs`, and `owner-paths.json`'s `branches`), which a test derives from `release-please-config.json` and the pinned action | Under the old name the required `pr-title` called the release PR's branch outside the naming scheme, so no release could merge, and `ci-ok`'s D58 guard never fired. `separate-pull-requests: false` would keep the old name, but release-please's merge plugin then titles the PR `chore: release main` and nests its notes per component |
+| D69 | The pipeline's guards fail closed (slice D1 review). Dependabot auto-merge also waits until `main`'s active rules require `pr-title` and `ci-ok` from GitHub Actions (`GET …/rules/branches/main`, read-only; a failed read counts as no), so the interim rule (D54) binds the workflow too: until `github-setup --apply` the owner merges even the allowed class. Owner-merge treats a file list that is empty, or shorter than the pull request's `changed_files` (the API stops at 3,000), as owner-merge, and turns auto-merge off before it labels. Change detection counts a PR's file list only while its head is still the commit the event named (`PR_HEAD_SHA`). `ci-ok` fails when `changes` reported neither `code=true` nor `code=false`, and `ci.yml` treats a base commit without `ci-changes.mjs` (before D1) as code. The stamp's `--out` is outside the checkout only when its first segment is `..` (`..cache` is inside) | Each was a way to pass what nobody checked: Dependabot runs as soon as `dependabot.yml` reaches `main`, and with no ruleset `gh pr merge --auto` merges a PR whose checks are still running; an owner-merge path can sort past the 3,000th file; a push between the event and the API call changes the list; a failed label call left auto-merge on |
+| D70 | The workflow rules also refuse (slice D1 review): YAML directives and explicit tags (under `%YAML 1.1`, `on:` reads as `true`, which hid every trigger rule), and a workflow with no plain `on` key; a local action in a step, and a reusable workflow outside `.github/workflows/` (their steps would escape the rules); a job-level `uses:` in a `pull_request_target` workflow; git past its own options (`git -C . fetch`, `env … git fetch`); `--ignore-scripts` turned back off (`--ignore-scripts false`, `--no-ignore-scripts`, any other option that names ignore, or one after `--`); a job name that is `ci-ok` or `pr-title` trimmed and in any case, or that has an expression after literal text that could still begin either; `pr-title.yml` on any trigger but `pull_request_target`. Action names compare without case. The PR check reads a pin's comment as a tag only (`git/ref/tags/<tag>`, peeling an annotated tag), never as a branch or a commit. The rules do not pin the shape of `ci.yml`'s `ci-ok` | The base's `pr-title` runs these rules (D45), so each closes a way for a PR to weaken a check that judges it; GitHub resolves an owner and a repository without case, and `commits/<ref>` resolves branches and abbreviated SHAs. `ci-ok` runs the PR's own `ci.yml` and `ci-ok.mjs`, owner-merge paths both, so a shape rule could be edited around; D50 covers them |
 
 ## 23. Delivery: branches, versions, deploy paths, releases
 
@@ -1753,16 +1769,16 @@ PR titles, squash merges, release-please) and cloud-agents' `npm run deploy` (a 
 | `slice-<id>/<topic>` | one slice of §19 (`slice-1c/walking-skeleton`, `slice-d1/delivery`) | `<type>(slice-<id>): <summary>`; product slices use `feat` |
 | `feat/<topic>` · `fix/<topic>` | a change outside a slice | `feat: …` · `fix: …`, any scope |
 | `docs/<topic>` · `ci/<topic>` · `chore/<topic>` | documents, workflows, tooling | `docs: …` · `ci: …` · `chore: …` |
-| `dependabot/…` · `release-please--branches--main` | the bots | written by the bot |
+| `dependabot/…` · `release-please--branches--main--components--tyto-desk` (D68) | the bots | written by the bot |
 
 - Topics are lowercase `[a-z0-9-]`, at most 50 characters. Nobody commits to `main` or pushes a tag. A fork's branch
   (`patch-1`, even `main`) is outside the scheme; only its title is checked.
 - A PR title is a Conventional Commit: a lowercase type (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`,
   `ci`, `chore`, `revert`), an optional scope `[a-z0-9-]+` that a `slice-` branch must set to its slice id, `!` for a
   breaking change, and a subject with no trailing period, at most 72 characters on people's branches (the bots' titles
-  run longer: Dependabot writes full scoped names and `in /test/live`). The squash commit takes the PR title as its
-  title and the PR body as its body, so `BREAKING CHANGE:` and `Release-As:` footers reach `main`, where release-please
-  reads them.
+  run longer: Dependabot writes full scoped names and `in /test/live/image`). The squash commit takes the PR title as
+  its title and the PR body as its body, so `BREAKING CHANGE:` and `Release-As:` footers reach `main`, where
+  release-please reads them.
 - Merges are squash only, with linear history; the branch is deleted on merge.
 - Two required checks, both from GitHub Actions (app id 15368): `pr-title` and `ci-ok`. A PR needs 0 approvals:
   GitHub never lets an author approve their own PR, and agents open PRs as the owner. A PR need not be up to date with
@@ -1773,25 +1789,28 @@ PR titles, squash merges, release-please) and cloud-agents' `npm run deploy` (a 
   rules follow:
   - **Interim rule.** Until `github-setup --check` is clean (today no ruleset requires any check), nobody passes
     `--auto`. Merge with `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>`
-    (D54).
+    (D54). `dependabot-auto-merge.yml` keeps it too: it turns auto-merge on only once `main`'s rules require `pr-title`
+    and `ci-ok`, and comments instead until then (D69).
   - A guard that turns auto-merge off cannot stop a merge of a PR that is already green. The release PR is therefore a
     draft (§23.8), and the owner-merge rule below holds only as long as agents keep it.
 
 **Owner-merge paths** (`scripts/delivery/owner-paths.json`, always read from the base branch): `.github/**`,
 `scripts/delivery/**` (every script a workflow runs with a write token, the stamp, `github-setup`, and the Node pin),
+`packages/core/src/release/**` (the release code `publish` and the stamp run, D61, D65),
 `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`,
 `release-please-config.json`, `.release-please-manifest.json`, `CLAUDE.md`, `AGENTS.md`, `.claude/**`, and
 `.cursor/**`. A PR that touches one changes the pipeline or what every later agent obeys, so the owner reads its diff
-and merges it by hand. `owner-merge.yml` labels such a PR `owner-merge`, turns its auto-merge off, and says so in one
-comment, and does it again whenever someone turns auto-merge back on. Agents never merge it, never turn its auto-merge
-on, and never remove the label. Against an agent that holds the owner's classic token this is a rule, not a control
-(D50); with the fine-grained agent token (D51) no agent push can change `.github/workflows/` at all.
+and merges it by hand. `owner-merge.yml` turns such a PR's auto-merge off, labels it `owner-merge`, and says so in one
+comment, and does it again whenever someone turns auto-merge back on; a PR whose files the API did not list in full
+counts as one (D69). Agents never merge it, never turn its auto-merge on, and never remove the label. Against an agent
+that holds the owner's classic token this is a rule, not a control (D50); with the fine-grained agent token (D51) no
+agent push can change `.github/workflows/` at all.
 
 | Pull request | Who turns on auto-merge | It merges when |
 |---|---|---|
 | An agent's, opened with the operator's `gh` | the agent: `gh pr merge --auto --squash`, right after `gh pr create` (after the interim rule ends) | `pr-title` and `ci-ok` pass |
 | Any PR that touches an owner-merge path | nobody: `owner-merge.yml` turns it off | the owner merges it by hand after reading the diff |
-| Dependabot: a patch update of an allowlisted dev tool (§23.7) | `dependabot-auto-merge.yml` | the checks pass |
+| Dependabot: a patch update of an allowlisted dev tool (§23.7) | `dependabot-auto-merge.yml`, once `main`'s rules require `pr-title` and `ci-ok` (D69); until then nobody, and the owner merges it | the checks pass |
 | Dependabot: the weekly GitHub Actions group (an owner-merge path) | nobody | the owner merges it after reading the new SHAs and the tags they claim (D44) |
 | Dependabot: anything else (runtime or bundled packages, esbuild, majors, the live image's base) | nobody | the owner decides |
 | The release PR, `chore(main): release X.Y.Z` | nobody: it opens as a draft, and `owner-merge.yml` turns auto-merge off | the owner marks it ready and merges it by hand to release (§23.8) |
@@ -1871,7 +1890,8 @@ classifyBuild({ event: "push", ref: "refs/tags/v0.3.0", refType: "tag", branch: 
                 sha: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678", dirty: false, allowDirty: false, dryRun: false,
                 headRepoIsFork: false, baseVersion: "0.3.0", prNumber: null, runNumber: 57,
                 builtAt: "2026-10-06T18:00:00Z" })
-// → { channel: "stable", version: "0.3.0", label: "v0.3.0", publish: "release", live: "gate", refusals: [] }
+// → { ok: true, channel: "stable", version: "0.3.0", label: "v0.3.0", publish: "release", live: "gate", refusals: [] }
+// a refused build: { ok: false, refusals: ["tag-not-on-main"] } (D65)
 ```
 
 | Build | Channel | Version | Publish | Live suite |
@@ -1902,10 +1922,11 @@ digits. A dirty build carries its build time, so two never share a version.
 Any refusal stops the build before anything is published or installed: a failed job in CI, exit 65 locally, each
 refusal named.
 
-Where the inputs come from (`scripts/delivery/git-facts.mjs`, tested with a stub `git` in Tyto's style):
+Where the inputs come from (`scripts/delivery/lib/git-facts.mjs`, tested with a stub `git` in Tyto's style):
 - `sha`: `git rev-parse HEAD`, else `no-commit`.
 - `dirty`: tracked changes (`git status --porcelain --untracked-files=no`) or untracked files that are not ignored
-  (`git ls-files --others --exclude-standard`); in CI the job fails and names them.
+  (`git ls-files --others --exclude-standard`); in CI the job fails and names them. When git cannot list them, the tree
+  is dirty, and the refusal says git could not list the changes.
 - `tagOnMain`: the stamp fetches `main` (`git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main`; build
   checkouts use `fetch-depth: 0`) and asks `git merge-base --is-ancestor <tag commit> origin/main`; any error counts as
   not on `main`.
@@ -2095,28 +2116,30 @@ verified with (`--version`), checks that release's tarball and `SHA256SUMS` as `
   hold the tarball only, unattested, and nothing installs them; neither do dry-run artifacts.
 - Until slice 1c, `npm run pack` has no runtime to pack: `build-darwin.yml` builds, stamps, and reports
   `runtime: false`; `edge.yml` and `release.yml` attest and publish nothing; and `ci-ok` fails on the release PR, so
-  no release can be cut (D58).
+  no release can be cut (D58). Until slice D2 adds `scripts/delivery/install.sh`, it reports `installer: false`, and
+  `ci-ok` still fails on the release PR (D67).
 
 ### 23.7 Workflows
 
 | File | Runs on | Jobs | Token |
 |---|---|---|---|
 | `pr-title.yml` | `pull_request_target`: opened, edited, synchronize, reopened | `pr-title` (`ubuntu-24.04`): checks out the base branch, `npm ci --ignore-scripts` from the base's lockfile (no cache), and runs the base's `scripts/delivery/check-pr.mjs`: the title and head branch (through `env`), then the PR's workflow files, read through the REST API at the head commit as data and checked against the base's workflow rules, including that each pinned SHA is the commit its tag names. It never checks out or runs anything from the PR | `contents: read`, `pull-requests: read` |
-| `owner-merge.yml` | `pull_request_target`: opened, reopened, synchronize, ready_for_review, auto_merge_enabled, unlabeled | `owner-merge` (`ubuntu-24.04`): the base's dependency-free `scripts/delivery/owner-merge.mjs` reads the PR's file list and head branch through the API; for the release PR or an owner-merge path it adds the `owner-merge` label, runs `gh pr merge --disable-auto`, and comments once; otherwise it removes the label. Not a required check | `contents: read`, `pull-requests: write` |
-| `ci.yml` | `pull_request`; `push` to `main`; `workflow_dispatch` | `changes` (on a PR, its file list classified by the base commit's `scripts/delivery/ci-changes.mjs`; on `main`, code); `scan` (`secrets:scan` and gitleaks, always); `check` (Node 22.22.2 and 26.10.0, when code changed); `macos` (PRs that change code: `build-darwin.yml`, channel `pr`, at the PR's head); `ci-ok` | `contents: read` |
-| `build-darwin.yml` | `workflow_call` (channel, ref) | `test` (`macos-26`): `npm ci --ignore-scripts`, `npm audit signatures`, `npm run check`, with `DESK_NO_GUI=1`. `pack` (`macos-26`, no cache): `npm ci --ignore-scripts`, the stamp, `npm run pack` (esbuild and the repo's own scripts; no dev tool runs), the packed `desk --version --json` in a temporary HOME with `DESK_NO_GUI=1`, `codesign --verify`, `SHA256SUMS`, the artifact; output `runtime`. Neither starts the Chrome the runner image ships | `contents: read` |
+| `owner-merge.yml` | `pull_request_target`: opened, reopened, synchronize, ready_for_review, auto_merge_enabled, unlabeled | `owner-merge` (`ubuntu-24.04`): the base's dependency-free `scripts/delivery/owner-merge.mjs` reads the PR's file list and head branch through the API; for the release PR, an owner-merge path, or a file list the API did not give in full, it runs `gh pr merge --disable-auto`, adds the `owner-merge` label, and comments once; otherwise it removes the label. Not a required check | `contents: read`, `pull-requests: write` |
+| `ci.yml` | `pull_request`; `push` to `main`; `workflow_dispatch` | `changes` (on a PR, its file list classified by the base commit's `scripts/delivery/ci-changes.mjs` while its head is the event's; on `main`, code); `scan` (`secrets:scan` and gitleaks, always); `check` (Node 22.22.2 and 26.10.0, when code changed); `macos` (PRs that change code: `build-darwin.yml`, channel `pr`, at the PR's head); `ci-ok` | `contents: read`; `changes` also `pull-requests: read` |
+| `build-darwin.yml` | `workflow_call` (channel, ref) | `test` (`macos-26`): `npm ci --ignore-scripts`, `npm audit signatures`, `npm run check`, with `DESK_NO_GUI=1`. `pack` (`macos-26`, no cache): `npm ci --ignore-scripts`, the stamp, `npm run pack` (esbuild and the repo's own scripts; no dev tool runs), the packed `desk --version --json` in a temporary HOME with `DESK_NO_GUI=1`, `codesign --verify`, `SHA256SUMS`, the artifact; outputs `runtime` and `installer` (whether the commit has `scripts/delivery/install.sh`). Neither starts the Chrome the runner image ships | `contents: read` |
 | `live.yml` | weekly; every three days (the cache keep-alive only); `workflow_dispatch`; `pull_request` (opened, reopened, synchronize, labeled) carrying the `live` label, same-repository PRs only | `live`: calls `live-run.yml`. `keep-alive` (`ubuntu-24.04-arm`): restores the Chrome `.deb` cache entry and nothing else | `contents: read` |
-| `live-run.yml` | `workflow_call` (ref) | `live` (`ubuntu-24.04-arm`): `npm run test:live -- --ci` (§17.3); results as an artifact | `contents: read` |
+| `live-run.yml` | `workflow_call` (ref) | `live` (`ubuntu-24.04-arm`): restores the Chrome `.deb` into `~/.cache/desk-live/chrome`, `npm run test:live -- --ci` (§17.3, D64); results as an artifact | `contents: read` |
 | `edge.yml` | `push` to `main` that is not docs-only; `workflow_dispatch` | `build-darwin.yml` (`edge`), then `attest` (`ubuntu-24.04`), only when `test` and `pack` succeeded and `runtime` is true | `attest`: `id-token: write`, `attestations: write`, `contents: read` |
 | `release-please.yml` | `push` to `main`; `workflow_dispatch` | `release-please` (`ubuntu-24.04`, environment `release-please` with `deployment: false`; checks out nothing; pinned actions only): mints the App's token with `actions/create-github-app-token` (this repository only; contents, pull requests, and issues write), then runs release-please; without the App it stops with a notice | `GITHUB_TOKEN`: none; the App's token as minted |
-| `release.yml` | `push` of a `v*` tag, which only the App creates; `workflow_dispatch` (on a tag: that release; on `main`: a dry run) | `plan` (`classifyBuild`: stable, or a dry run on `main`; a runtime exists; `publish` checks that the tag's release exists, D63), `build` (`build-darwin.yml`, `stable`), `live` (`live-run.yml`); a dry run stops here. `publish` (environment `publish`: waits for the owner's approval; resumable, §23.8), then `verify` | `publish`: `contents: write`, `id-token: write`, `attestations: write`; the rest `contents: read` |
-| `dependabot-auto-merge.yml` | `pull_request_target` (opened, reopened, synchronize), only when the author is `dependabot[bot]` and the head repository is this one | `automerge` (`ubuntu-24.04`): `dependabot/fetch-metadata` (never `skip-verification`), then the base's dependency-free `scripts/delivery/automerge-decision.mjs` on `updated-dependencies-json` (through `env`), then `gh pr merge --auto --squash` for the allowed class, or a comment naming why the owner must merge. No `npm ci`, no PR checkout | `contents: write`, `pull-requests: write` |
+| `release.yml` | `push` of a `v*` tag, which only the App creates; `workflow_dispatch` (on a tag: that release; on `main`: a dry run) | `plan` (`classifyBuild`: stable, or a dry run on `main`; a runtime and the installer exist, D58, D67; `publish` checks that the tag's release exists, D63), `build` (`build-darwin.yml`, `stable`), `live` (`live-run.yml`); a dry run stops here. `publish` (environment `publish`: waits for the owner's approval; resumable, §23.8), then `verify` | `publish`: `contents: write`, `id-token: write`, `attestations: write`; the rest `contents: read` |
+| `dependabot-auto-merge.yml` | `pull_request_target` (opened, reopened, synchronize), only when the author is `dependabot[bot]` and the head repository is this one | `automerge` (`ubuntu-24.04`): `dependabot/fetch-metadata` (never `skip-verification`), then the base's dependency-free `scripts/delivery/automerge-decision.mjs` on `updated-dependencies-json` (through `env`) and, for the allowed class, `main`'s active rules (read-only), then `gh pr merge --auto --squash` once those rules require `pr-title` and `ci-ok` (D54, D69), or a comment naming why the owner must merge. No `npm ci`, no PR checkout | `contents: write`, `pull-requests: write` |
 
 The Dependabot class that merges itself (`automerge-decision.mjs`): an npm `direct:development` update of `@types/*`,
 `typescript`, `vitest`, or `yaml`, of type `version-update:semver-patch`; a group passes only when every member does.
 These tools run in tests and type checks, never while the runtime is packed, and nothing they provide ships (§15.1).
 Everything else waits for the owner, esbuild above all, which writes every byte Desk ships. Security updates follow
-the same rule; Dependabot applies no cooldown to them.
+the same rule; Dependabot applies no cooldown to them. Even the allowed class waits for the owner while `main`'s rules
+do not yet require `pr-title` and `ci-ok` (the interim rule, D69).
 
 Concurrency is declared only in top-level workflows (a `workflow_call` file declares none, so a caller and its callee
 never share a group): `pr-title-<PR>`, `owner-merge-<PR>`, and `automerge-<PR>`, cancelling; `ci-<PR>`, cancelling,
@@ -2124,39 +2147,45 @@ and `ci-<commit>` on `main`; `live-<PR or run id>`, cancelling for PRs; `edge`, 
 `release-<tag or ref>`, queued.
 
 `ci-ok` runs with `if: always()` after `changes`, `scan`, `check`, and `macos`, and fails when any of them failed or
-was cancelled, when `changes` found code and `check` (or, on a PR, `macos`) did not succeed, or when the PR is the
-release PR and `macos` reports `runtime: false`. A docs-only PR (`docs/**`, root `*.md` other than `CLAUDE.md` and
-`AGENTS.md`, `LICENSE`) runs `pr-title`, `scan`, and `ci-ok` only; everything else, agent rules and package files
-included, is code. GitHub keeps a workflow that path filters skipped pending forever, but reports a skipped job as
-passed: the filter is therefore a job, and the required check is one aggregate job. `pr-title` lives in its own
-workflow because it also runs when a title is edited, and a re-run that skipped `ci.yml`'s jobs would report them as
-passed over an earlier failure. `ci.yml` is the PR's own copy, so a PR could rewrite `ci-ok`; such a PR touches
-`.github/**`, an owner-merge path, and the base's `pr-title` refuses a second job named `ci-ok` or `pr-title` anywhere.
+was cancelled, when `changes` found code (or reported neither `code=true` nor `code=false`) and `check` (or, on a PR,
+`macos`) did not succeed, or when the PR is the release PR and `macos` reports `runtime: false` or `installer: false`
+(D58, D67). A docs-only PR (`docs/**`, root `*.md` other than `CLAUDE.md` and `AGENTS.md`, `LICENSE`) runs `pr-title`,
+`scan`, and `ci-ok` only; everything else, agent rules and package files included, is code. GitHub keeps a workflow
+that path filters skipped pending forever, but reports a skipped job as passed: the filter is therefore a job, and the
+required check is one aggregate job. `pr-title` lives in its own workflow because it also runs when a title is
+edited, and a re-run that skipped `ci.yml`'s jobs would report them as passed over an earlier failure. `ci.yml` is the
+PR's own copy, so a PR could rewrite `ci-ok`; such a PR touches `.github/**`, an owner-merge path, and the base's
+`pr-title` refuses a second job named `ci-ok` or `pr-title` anywhere.
 
-Rules for every workflow (`scripts/delivery/workflow-rules.mjs`, run by `lint:workflows` in `check` and by the base's
-`pr-title` on every PR; YAML parsed with `yaml`, a dev dependency pinned exactly, with no install script):
+Rules for every workflow (`scripts/delivery/lib/workflow-rules.mjs`, run by `lint:workflows` in `check` and by the
+base's `pr-title` on every PR; YAML parsed with `yaml`, a dev dependency pinned exactly, with no install script):
+- Plain YAML 1.2, read as GitHub reads it: no anchors, aliases, `%YAML` or `%TAG` directives, or explicit tags, and a
+  plain `on` key that names the triggers (D70).
 - Top-level `permissions: {}`; each job asks for what it needs. `id-token: write` only in `release.yml`'s `publish` and
   `edge.yml`'s `attest`; `contents: write` only in `publish` and `dependabot-auto-merge.yml`; `pull-requests: write`
   only in `owner-merge.yml` and `dependabot-auto-merge.yml`.
 - Triggers per file: `pull_request_target` only in `pr-title.yml`, `owner-merge.yml`, and
-  `dependabot-auto-merge.yml`; never `workflow_run`, `issue_comment`, `pull_request_review`,
-  `pull_request_review_comment`, or `repository_dispatch`.
+  `dependabot-auto-merge.yml`, and `pr-title.yml` on `pull_request_target` alone; never `workflow_run`,
+  `issue_comment`, `pull_request_review`, `pull_request_review_comment`, or `repository_dispatch`.
 - Every `uses:` names a 40-character commit SHA with its tag in a comment, and `pr-title` checks online that the SHA is
-  the commit that tag names (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`); local reusable workflows go by
-  path.
-- Every checkout sets `persist-credentials: false`. A `pull_request_target` workflow checks out only the base and reads
-  the PR through the API, as data.
+  the commit that tag names (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, peeling an annotated tag; a branch or
+  a commit in the comment is no tag). Owners and repositories compare without case. Local reusable workflows go by
+  path and live in `.github/workflows/`; a step never uses a local action, whose own steps these rules would not read.
+- Every checkout sets `persist-credentials: false`. A `pull_request_target` workflow checks out only the base, reads
+  the PR through the API, as data, fetches nothing with git (past git's own options too), and calls no reusable
+  workflow.
 - No `${{ … }}` inside a `run:` script except `matrix.*` and `runner.*`; event text, inputs, and step or job outputs
   reach scripts through `env`.
-- Every `npm ci` or `npm install` passes `--ignore-scripts` itself; `.npmrc` alone does not count, since a PR can edit
-  it.
+- Every `npm ci` or `npm install` passes `--ignore-scripts` itself, and nothing on the command turns it back off;
+  `.npmrc` alone does not count, since a PR can edit it.
 - No cache (`actions/cache`, or setup-node's) in a `pull_request_target` job or in a job whose output is attested or
   published (`pack`, `attest`, `publish`).
 - No `env`, `printenv`, `set -x`, or `ACTIONS_STEP_DEBUG` in a job that holds a secret, the App's token, or a write
   scope: a public repository's workflow logs are public.
 - `timeout-minutes` on every job; runners by fixed label (`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-26`), never
   `-latest`.
-- No job outside `ci.yml` and `pr-title.yml` is named `ci-ok` or `pr-title`.
+- No job outside `ci.yml` and `pr-title.yml` is named `ci-ok` or `pr-title`, compared trimmed and without case; a job
+  name with an expression counts unless the literal text before the expression could not begin either name.
 - Secrets appear only in jobs that run in the environment that holds them (`release-please`; later `signing`), and
   `release.yml`'s `publish` runs in the `publish` environment.
 - `concurrency` only in workflows without `workflow_call`.
@@ -2204,7 +2233,7 @@ updates:
     groups:
       actions: { patterns: ["*"], update-types: [minor, patch] }
   - package-ecosystem: docker                                                     # from slice 1b
-    directory: "/test/live"
+    directory: "/test/live/image"
     schedule: { interval: weekly, day: monday }
     cooldown: { default-days: 7 }
     commit-message: { prefix: test, include: scope }                              # test(deps): …
@@ -2283,9 +2312,10 @@ updates:
   release PR, the owner reads the commits since the last release and the diff of every owner-merge path
   (RELEASING.md, pre-flight), never the changelog alone, which release-please writes from PR titles and from
   `BEGIN_COMMIT_OVERRIDE` blocks that any PR body can carry.
-- Before slice 1c there is nothing to release (D58): `ci-ok` fails on the release PR while `macos` reports
-  `runtime: false`. `release.yml` dispatched on `main` rehearses `plan`, the build, and the live gate as a dry run,
-  and stops before any tag, release, or attestation.
+- Before slices 1c and D2 there is nothing to release (D58, D67): `ci-ok` fails on the release PR while `macos`
+  reports `runtime: false` or `installer: false`, and `release.yml`'s `plan` refuses a tag without both.
+  `release.yml` dispatched on `main` rehearses `plan`, the build, and the live gate as a dry run, and stops before any
+  tag, release, or attestation.
 
 ### 23.9 Recovery
 
@@ -2293,9 +2323,9 @@ updates:
 |---|---|
 | No release PR | Only a `feat`, `fix`, `perf`, `refactor`, or `revert` commit, or a breaking change, starts one (D57); or the release App is missing (`release-please.yml` says so) |
 | The changelog files an entry under the wrong section | Add a `BEGIN_COMMIT_OVERRIDE` … `END_COMMIT_OVERRIDE` block with the right Conventional Commit to the merged PR's body, then run `release-please.yml`; never edit the release PR |
-| The release PR's checks are red | Fix on `main`; release-please updates its PR. Before slice 1c `ci-ok` is red on purpose |
+| The release PR's checks are red | Fix on `main`; release-please updates its PR. Before slices 1c and D2 `ci-ok` is red on purpose (D58, D67) |
 | The release PR merged, but there is no `vX.Y.Z` tag or draft | `release-please.yml` failed (the App's token, an outage): `gh workflow run release-please.yml` |
-| `release.yml` failed in `plan` | A refusal (§23.3) names the cause: a tag off `main`, a version mismatch, or no runtime yet (slice 1c). No release for the tag stops `publish` before it changes anything (D63) |
+| `release.yml` failed in `plan` | A refusal (§23.3) names the cause: a tag off `main`, a version mismatch, or no runtime (slice 1c) or installer (slice D2) yet. No release for the tag stops `publish` before it changes anything (D63) |
 | `release.yml` failed in `build`, `live`, `publish`, or `verify` for a passing reason (runner, network, Sigstore) | `gh run rerun <run-id> --failed`. The draft and its tag wait; `publish` resumes, and a release an earlier attempt already published with matching digests goes straight to `verify` |
 | The live gate failed because Google pruned the pinned Chrome and no cache holds it | Bump the pin in a PR (§17.3); leave that tag a draft and release the next patch. The release PR's own live run should have caught it first |
 | `release.yml` failed because of the code | Fix forward: a `fix:` PR, then the next release PR (X.Y.Z+1). The failed version stays an unpublished draft that nothing installs; delete the draft if you like. Its tag stays, and nobody moves it |

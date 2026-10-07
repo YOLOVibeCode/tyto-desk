@@ -4,7 +4,9 @@
 //   FAKE_GIT_HEAD           what `rev-parse HEAD` prints (exit 128 when unset)
 //   FAKE_GIT_BRANCH         what `symbolic-ref` prints (exit 1, detached, when unset)
 //   FAKE_GIT_STATUS         `status --porcelain -z` output, with "|" standing for NUL
+//   FAKE_GIT_STATUS_EXIT    the exit code of `status` (default 0; any other prints nothing)
 //   FAKE_GIT_UNTRACKED      `ls-files --others -z` output, with "|" standing for NUL
+//   FAKE_GIT_LS_FILES_EXIT  the exit code of `ls-files` (default 0; any other prints nothing)
 //   FAKE_GIT_FETCH_EXIT     the exit code of `fetch` (default 0)
 //   FAKE_GIT_ANCESTOR_EXIT  the exit code of `merge-base --is-ancestor` (default 0: an ancestor)
 import { appendFileSync } from "node:fs";
@@ -14,6 +16,16 @@ if (process.env.FAKE_GIT_LOG) appendFileSync(process.env.FAKE_GIT_LOG, `${JSON.s
 
 const nul = (text) => (text ?? "").replaceAll("|", "\0");
 const exitCode = (name, fallback) => Number(process.env[name] ?? fallback);
+
+/** Prints `text` and exits 0, or fails with the exit code `name` gives, printing nothing. */
+function answer(name, text) {
+  const code = exitCode(name, 0);
+  if (code !== 0) {
+    process.stderr.write(`fatal: ${argv[0]} failed\n`);
+    process.exit(code);
+  }
+  process.stdout.write(text);
+}
 
 switch (argv[0]) {
   case "rev-parse":
@@ -28,10 +40,10 @@ switch (argv[0]) {
     process.stdout.write(`${process.env.FAKE_GIT_BRANCH}\n`);
     break;
   case "status":
-    process.stdout.write(nul(process.env.FAKE_GIT_STATUS));
+    answer("FAKE_GIT_STATUS_EXIT", nul(process.env.FAKE_GIT_STATUS));
     break;
   case "ls-files":
-    process.stdout.write(nul(process.env.FAKE_GIT_UNTRACKED));
+    answer("FAKE_GIT_LS_FILES_EXIT", nul(process.env.FAKE_GIT_UNTRACKED));
     break;
   case "fetch":
     process.exit(exitCode("FAKE_GIT_FETCH_EXIT", 0));

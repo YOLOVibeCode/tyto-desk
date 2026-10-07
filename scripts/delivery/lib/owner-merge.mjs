@@ -1,9 +1,9 @@
 /**
  * Owner-merge (docs/IMPLEMENTATION.md §23.1, D50): a pull request that touches an owner-merge path
- * (`scripts/delivery/owner-paths.json`), and the release PR, get the `owner-merge` label, lose their auto-merge, and get
- * one comment saying so; the owner merges them by hand after reading the diff. When no such path remains, the label
- * goes. `owner-merge.yml` runs the base branch's copy on `pull_request_target`, reading the pull request through the
- * API as data. Dependency-free: Node and gh only.
+ * (`scripts/delivery/owner-paths.json`), the release PR, and a pull request whose files the API did not list in full,
+ * lose their auto-merge, get the `owner-merge` label, and get one comment saying so; the owner merges them by hand after
+ * reading the diff. When no such reason remains, the label goes. `owner-merge.yml` runs the base branch's copy on
+ * `pull_request_target`, reading the pull request through the API as data. Dependency-free: Node and gh only.
  */
 import { ghJson, ghOk, pullRequestFiles } from "./gh.mjs";
 
@@ -31,13 +31,22 @@ export function ownerPathOf(path, patterns) {
 }
 
 /**
- * @param {{ files: readonly string[]; headRef: string; config: OwnerPaths }} pr
- * @returns {{ ownerMerge: boolean; reasons: string[] }} `reasons` are owner-path patterns, or "the release PR"
+ * Whether a pull request is owner-merge. The files API lists at most 3,000 files, and an owner-merge path can sort past
+ * them, so a list that is empty or shorter than the pull request's `changed_files`, or a pull request that does not say
+ * how many files it changes, is owner-merge too.
+ * @param {{ files: readonly string[]; headRef: string; config: OwnerPaths; listed?: number; changedFiles?: number | null }} pr
+ *   `listed` is how many entries the API listed (default: every file); `changedFiles` is the pull request's
+ *   `changed_files` (default: `listed`), `null` when the API did not say
+ * @returns {{ ownerMerge: boolean; reasons: string[] }} `reasons` are owner-path patterns, "the release PR", or why the
+ *   file list cannot be trusted
  */
-export function ownerMergeDecision({ files, headRef, config }) {
+export function ownerMergeDecision({ files, headRef, config, listed = files.length, changedFiles = listed }) {
   /** @type {Set<string>} */
   const reasons = new Set();
   if (config.branches.includes(headRef)) reasons.add("the release PR");
+  if (files.length === 0) reasons.add("the API listed no files");
+  else if (changedFiles === null) reasons.add("the API did not say how many files the pull request changes");
+  else if (listed < changedFiles) reasons.add(`the API listed only ${listed} of ${changedFiles} files`);
   for (const file of files) {
     const pattern = ownerPathOf(file, config.paths);
     if (pattern !== null) reasons.add(pattern);
@@ -45,31 +54,34 @@ export function ownerMergeDecision({ files, headRef, config }) {
   return { ownerMerge: reasons.size > 0, reasons: [...reasons] };
 }
 
-/** @param {string[]} reasons */
-function commentBody(reasons) {
-  const what = reasons.map((reason) => (reason === "the release PR" ? reason : `\`${reason}\``)).join(", ");
+/** @param {string[]} reasons @param {readonly string[]} paths */
+function commentBody(reasons, paths) {
+  const what = reasons.map((reason) => (paths.includes(reason) ? `\`${reason}\`` : reason)).join(", ");
   return [
-    `This pull request is owner-merge (${what}): it changes the delivery pipeline or the agent rules, or it releases Desk,`,
-    "so the owner reads its diff and merges it by hand (CONTRIBUTING; IMPLEMENTATION §23.1). Auto-merge is off and is",
-    "turned off again whenever someone turns it on. Agents never merge it, turn its auto-merge on, or remove the label.",
+    `This pull request is owner-merge (${what}). It changes the delivery pipeline, release code or the agent rules, it`,
+    "releases Desk, or the API did not list all of its files, so the owner reads its diff and merges it by hand",
+    "(CONTRIBUTING; IMPLEMENTATION §23.1). Auto-merge is off and is turned off again whenever someone turns it on. Agents",
+    "never merge it, turn its auto-merge on, or remove the label.",
     "",
     MARKER,
   ].join("\n");
 }
 
 /**
- * Reads the pull request through the API, decides, and labels, turns auto-merge off and comments once, or removes the
- * label.
+ * Reads the pull request through the API, decides, and turns auto-merge off, labels and comments once, or removes the
+ * label. Auto-merge goes off first, so a failure later leaves the pull request unable to merge itself.
  * @param {Runner} gh
  * @param {{ repository: string; number: number; headRef: string; config: OwnerPaths }} pr
  * @returns {Promise<{ ownerMerge: boolean; reasons: string[]; actions: string[] }>}
  */
 export async function ownerMerge(gh, { repository, number, headRef, config }) {
-  const { files } = await pullRequestFiles(gh, repository, number);
-  const decision = ownerMergeDecision({ files, headRef, config });
-  const pull = /** @type {{ auto_merge?: unknown; labels?: { name?: unknown }[] }} */ (
+  // The files first, then the pull request: a push in between shows as more changed files than listed, never fewer.
+  const { files, listed } = await pullRequestFiles(gh, repository, number);
+  const pull = /** @type {{ auto_merge?: unknown; labels?: { name?: unknown }[]; changed_files?: unknown }} */ (
     (await ghJson(gh, ["api", "--method", "GET", `repos/${repository}/pulls/${number}`])) ?? {}
   );
+  const changedFiles = typeof pull.changed_files === "number" ? pull.changed_files : null;
+  const decision = ownerMergeDecision({ files, headRef, config, listed, changedFiles });
   const labeled = (pull.labels ?? []).some((label) => label.name === LABEL);
   /** @type {string[]} */
   const actions = [];
@@ -80,14 +92,14 @@ export async function ownerMerge(gh, { repository, number, headRef, config }) {
     }
     return { ...decision, actions };
   }
-  await ghJson(gh, ["api", "--method", "POST", `repos/${repository}/issues/${number}/labels`, "--input", "-"], {
-    input: JSON.stringify({ labels: [LABEL] }),
-  });
-  actions.push("labeled it owner-merge");
   if (pull.auto_merge !== null && pull.auto_merge !== undefined) {
     await ghOk(gh, ["pr", "merge", String(number), "--repo", repository, "--disable-auto"]);
     actions.push("turned auto-merge off");
   }
+  await ghJson(gh, ["api", "--method", "POST", `repos/${repository}/issues/${number}/labels`, "--input", "-"], {
+    input: JSON.stringify({ labels: [LABEL] }),
+  });
+  actions.push("labeled it owner-merge");
   const pages = await ghJson(gh, [
     "api",
     "--method",
@@ -103,7 +115,7 @@ export async function ownerMerge(gh, { repository, number, headRef, config }) {
   });
   if (!commented) {
     await ghJson(gh, ["api", "--method", "POST", `repos/${repository}/issues/${number}/comments`, "--input", "-"], {
-      input: JSON.stringify({ body: commentBody(decision.reasons) }),
+      input: JSON.stringify({ body: commentBody(decision.reasons, config.paths) }),
     });
     actions.push("commented");
   }

@@ -1,18 +1,20 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkTitleAndBranch, checkWorkflowFiles, ghPullRequestSource } from "../../scripts/delivery/lib/pr-check.mjs";
+import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
 import { fakeGh, notFound, ok } from "./fake-gh.ts";
 import { repo, runScript } from "./helpers.ts";
 
 const checkPr = join(repo, "scripts/delivery/check-pr.mjs");
 const HEAD = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
 const CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+const TAG_OBJECT = "7a6b5c4d3e2f10293847566574839201a2b3c4d5";
 const REPOSITORY = "YOLOVibeCode/tyto-desk";
 
 const sameRepo = (title: string, branch: string) => checkTitleAndBranch({ title, branch, fork: false });
 
-/** A workflow that keeps every rule of §23.7. */
-function workflow(jobId = "build", runsOn = "ubuntu-24.04"): string {
+/** A workflow that keeps every rule of §23.7; `pin` is the checkout's tag comment. */
+function workflow(jobId = "build", runsOn = "ubuntu-24.04", pin = "v7.0.1"): string {
   return [
     "name: x",
     "on:",
@@ -25,15 +27,21 @@ function workflow(jobId = "build", runsOn = "ubuntu-24.04"): string {
     "    permissions:",
     "      contents: read",
     "    steps:",
-    `      - uses: actions/checkout@${CHECKOUT_SHA} # v7.0.1`,
+    `      - uses: actions/checkout@${CHECKOUT_SHA} # ${pin}`,
     "        with:",
     "          persist-credentials: false",
     "",
   ].join("\n");
 }
 
-/** The REST API as gh sees it: the PR head's workflow files, and the commit each action tag names. */
-function github(files: Record<string, string>, tags: Record<string, string | null> = { "actions/checkout@v7.0.1": CHECKOUT_SHA }) {
+/** A tag: the commit a lightweight tag names, or an annotated tag's object and the commit it names. */
+type Tag = string | { annotated: string; commit: string };
+
+/**
+ * The REST API as gh sees it: the PR head's workflow files, and each action's tags as git refs. Branches and commits
+ * are not tags, so `git/ref/tags/<name>` does not find them.
+ */
+function github(files: Record<string, string>, tags: Record<string, Tag> = { "actions/checkout@v7.0.1": CHECKOUT_SHA }) {
   return fakeGh([
     {
       match: new RegExp(`^api --method GET repos/${REPOSITORY}/contents/\\.github/workflows\\?ref=${HEAD}$`),
@@ -49,17 +57,28 @@ function github(files: Record<string, string>, tags: Record<string, string | nul
       },
     },
     {
-      match: /^api --method GET repos\/([^/]+\/[^/]+)\/commits\/(\S+) --jq \.sha$/,
+      match: /^api --method GET repos\/[^/]+\/[^/]+\/git\/ref\/tags\/\S+$/,
       reply: (args) => {
-        const [, owner, name, , tag] = (args[3] ?? "").split("/");
-        const sha = tags[`${owner}/${name}@${decodeURIComponent(tag ?? "")}`];
-        return sha === undefined || sha === null ? notFound() : ok(`${sha}\n`);
+        const [, owner, name, , , , ...rest] = (args[3] ?? "").split("/");
+        const tagName = rest.map(decodeURIComponent).join("/");
+        const tag = tags[`${owner}/${name}@${tagName}`];
+        if (tag === undefined) return notFound();
+        const object = typeof tag === "string" ? { type: "commit", sha: tag } : { type: "tag", sha: tag.annotated };
+        return ok({ ref: `refs/tags/${tagName}`, object });
+      },
+    },
+    {
+      match: /^api --method GET repos\/[^/]+\/[^/]+\/git\/tags\/[0-9a-f]{40}$/,
+      reply: (args) => {
+        const sha = (args[3] ?? "").split("/").at(-1);
+        const tag = Object.values(tags).find((t) => typeof t !== "string" && t.annotated === sha);
+        return tag === undefined || typeof tag === "string" ? notFound() : ok({ sha, object: { type: "commit", sha: tag.commit } });
       },
     },
   ]);
 }
 
-async function workflowProblems(files: Record<string, string>, tags?: Record<string, string | null>) {
+async function workflowProblems(files: Record<string, string>, tags?: Record<string, Tag>) {
   const fake = github(files, tags);
   const problems = await checkWorkflowFiles(ghPullRequestSource(fake.gh, { repository: REPOSITORY, headSha: HEAD }));
   return { problems, calls: fake.calls };
@@ -73,15 +92,15 @@ describe("the PR check", () => {
     ["fix(ptyd): keep the pane when its owner is stuck", "fix/stuck-owner"],
     ["docs: delivery plan", "docs/delivery-plan"],
     ["revert: undo the toggle rename", "fix/undo-toggle"],
-    ["chore(main): release 0.1.0", "release-please--branches--main"],
+    ["chore(main): release 0.1.0", RELEASE_BRANCH],
     ["fix(deps): bump esbuild from 0.28.2 to 0.28.3", "dependabot/npm_and_yarn/esbuild-0.28.3"],
     [
       "chore(deps-dev): bump the dev-tools group across 1 directory with 4 updates, including @types/node and vitest",
       "dependabot/npm_and_yarn/dev-tools-6f0c2b4a1e",
     ],
     [
-      "test(deps): bump debian from trixie-20261001-slim to trixie-20261015-slim in /test/live",
-      "dependabot/docker/test/live/debian-trixie-20261015-slim",
+      "test(deps): bump debian from trixie-20261001-slim to trixie-20261015-slim in /test/live/image",
+      "dependabot/docker/test/live/image/debian-trixie-20261015-slim",
     ],
   ])("the PR check accepts %s", (title, branch) => {
     expect(sameRepo(title, branch)).toEqual([]);
@@ -103,31 +122,48 @@ describe("the PR check", () => {
     expect(sameRepo(title, branch)).not.toEqual([]);
   });
 
-  it("the PR check requires a slice branch's id as the title's scope", () => {
-    expect(sameRepo("feat(slice-1c): one shell", "slice-1c/walking-skeleton")).toEqual([]);
-    expect(sameRepo("feat(slice-2a): one shell", "slice-1c/walking-skeleton")).toEqual([
-      "a slice-1c/… branch's title has the scope (slice-1c)",
-    ]);
-    expect(sameRepo("feat: one shell", "slice-1c/walking-skeleton")).toEqual([
-      "a slice-1c/… branch's title has the scope (slice-1c)",
-    ]);
+  it.each([
+    { title: "feat(slice-1c): one shell", problems: [] },
+    { title: "feat(slice-2a): one shell", problems: ["a slice-1c/… branch's title has the scope (slice-1c)"] },
+    { title: "feat: one shell", problems: ["a slice-1c/… branch's title has the scope (slice-1c)"] },
+  ])("the PR check requires a slice branch's id as the title's scope ($title)", ({ title, problems }) => {
+    expect(sameRepo(title, "slice-1c/walking-skeleton")).toEqual(problems);
   });
 
-  it("the PR check refuses a branch outside the naming scheme, accepts the bots' branches, and checks only the title of a fork's branch", () => {
-    for (const branch of ["main", "patch-1", "feat/Upper", `feat/${"x".repeat(51)}`, "perf/faster", "slice-1c/", "feat/a/b"]) {
-      expect(sameRepo("feat: a change", branch)).toEqual([`the branch ${branch} is outside the naming scheme (CONTRIBUTING)`]);
-    }
-    for (const branch of ["dependabot/npm_and_yarn/vitest-5.0.4", "release-please--branches--main"]) {
-      expect(sameRepo("chore(deps-dev): bump vitest from 5.0.3 to 5.0.4", branch)).toEqual([]);
-    }
-    for (const branch of ["patch-1", "main", "dependabot/npm_and_yarn/x"]) {
-      expect(checkTitleAndBranch({ title: "fix: a typo", branch, fork: true })).toEqual([]);
-    }
-    expect(checkTitleAndBranch({ title: "Fix a typo", branch: "patch-1", fork: true })).not.toEqual([]);
-    expect(
-      checkTitleAndBranch({ title: `chore(deps): ${"b".repeat(70)}`, branch: "dependabot/npm_and_yarn/x", fork: true }),
-    ).toEqual(["the title is longer than 72 characters"]);
-  });
+  const outside = (branch: string) => [`the branch ${branch} is outside the naming scheme (CONTRIBUTING)`];
+  it.each([
+    { label: "refuses main", title: "feat: a change", branch: "main", fork: false, problems: outside("main") },
+    { label: "refuses patch-1", title: "feat: a change", branch: "patch-1", fork: false, problems: outside("patch-1") },
+    { label: "refuses an uppercase topic", title: "feat: a change", branch: "feat/Upper", fork: false, problems: outside("feat/Upper") },
+    { label: "refuses a topic over 50 characters", title: "feat: a change", branch: `feat/${"x".repeat(51)}`, fork: false, problems: outside(`feat/${"x".repeat(51)}`) },
+    { label: "refuses a type with no branch prefix", title: "feat: a change", branch: "perf/faster", fork: false, problems: outside("perf/faster") },
+    { label: "refuses an empty slice topic", title: "feat: a change", branch: "slice-1c/", fork: false, problems: outside("slice-1c/") },
+    { label: "refuses a nested topic", title: "feat: a change", branch: "feat/a/b", fork: false, problems: outside("feat/a/b") },
+    { label: "accepts Dependabot's branch", title: "chore(deps-dev): bump vitest from 5.0.3 to 5.0.4", branch: "dependabot/npm_and_yarn/vitest-5.0.4", fork: false, problems: [] },
+    { label: "accepts the release PR's branch", title: "chore(deps-dev): bump vitest from 5.0.3 to 5.0.4", branch: RELEASE_BRANCH, fork: false, problems: [] },
+    { label: "checks only the title of a fork's patch-1", title: "fix: a typo", branch: "patch-1", fork: true, problems: [] },
+    { label: "checks only the title of a fork's main", title: "fix: a typo", branch: "main", fork: true, problems: [] },
+    { label: "checks only the title of a fork's dependabot/ branch", title: "fix: a typo", branch: "dependabot/npm_and_yarn/x", fork: true, problems: [] },
+    {
+      label: "checks a fork's title by the rules for people",
+      title: "Fix a typo",
+      branch: "patch-1",
+      fork: true,
+      problems: ["the title is not a Conventional Commit: type(scope)!: subject, with a lowercase type from feat, fix, perf, refactor, docs, test, build, ci, chore, revert"],
+    },
+    {
+      label: "holds a fork's dependabot/ branch to 72 characters",
+      title: `chore(deps): ${"b".repeat(70)}`,
+      branch: "dependabot/npm_and_yarn/x",
+      fork: true,
+      problems: ["the title is longer than 72 characters"],
+    },
+  ])(
+    "the PR check refuses a branch outside the naming scheme, accepts the bots' branches, and checks only the title of a fork's branch ($label)",
+    ({ title, branch, fork, problems }) => {
+      expect(checkTitleAndBranch({ title, branch, fork })).toEqual(problems);
+    },
+  );
 
   it("the PR check applies the base branch's workflow rules to the PR's workflow files, read through the API as data", async () => {
     const { problems, calls } = await workflowProblems({
@@ -150,19 +186,25 @@ describe("the PR check", () => {
     expect(problems).toEqual([".github/workflows/sneaky.yml:6  [required-check-name] only ci.yml has a job named ci-ok"]);
   });
 
-  it("the PR check fails when a pinned action's SHA is not the commit its tag comment names", async () => {
-    const moved = await workflowProblems({ "ci.yml": workflow() }, { "actions/checkout@v7.0.1": "1".repeat(40) });
-    expect(moved.problems).toEqual([
-      `.github/workflows/ci.yml:12  [pinned-sha] actions/checkout@${CHECKOUT_SHA} is not v7.0.1, which names ${"1".repeat(40)}`,
-    ]);
+  it.each([
+    {
+      label: "a tag that names another commit",
+      pin: "v7.0.1",
+      tags: { "actions/checkout@v7.0.1": "1".repeat(40) },
+      problems: [`.github/workflows/ci.yml:12  [pinned-sha] actions/checkout@${CHECKOUT_SHA} is not v7.0.1, which names ${"1".repeat(40)}`],
+    },
+    { label: "a tag the action does not have", pin: "v7.0.1", tags: {}, problems: [".github/workflows/ci.yml:12  [pinned-sha] actions/checkout has no tag v7.0.1"] },
+    { label: "a branch named in the comment", pin: "main", tags: { "actions/checkout@v7.0.1": CHECKOUT_SHA }, problems: [".github/workflows/ci.yml:12  [pinned-sha] actions/checkout has no tag main"] },
+    { label: "a short commit named in the comment", pin: "3d3c42e", tags: { "actions/checkout@v7.0.1": CHECKOUT_SHA }, problems: [".github/workflows/ci.yml:12  [pinned-sha] actions/checkout has no tag 3d3c42e"] },
+  ])("the PR check fails when a pinned action's SHA is not the commit its tag comment names ($label)", async ({ pin, tags, problems }) => {
+    expect((await workflowProblems({ "ci.yml": workflow("build", "ubuntu-24.04", pin) }, tags)).problems).toEqual(problems);
+  });
 
-    const missing = await workflowProblems({ "ci.yml": workflow() }, {});
-    expect(missing.problems).toEqual([
-      ".github/workflows/ci.yml:12  [pinned-sha] actions/checkout has no tag v7.0.1",
-    ]);
-
-    const kept = await workflowProblems({ "ci.yml": workflow() });
-    expect(kept.problems).toEqual([]);
+  it.each([
+    { label: "a lightweight tag", tags: { "actions/checkout@v7.0.1": CHECKOUT_SHA } },
+    { label: "an annotated tag", tags: { "actions/checkout@v7.0.1": { annotated: TAG_OBJECT, commit: CHECKOUT_SHA } } },
+  ])("the PR check passes a pinned action whose SHA is the commit its tag names ($label)", async ({ tags }) => {
+    expect((await workflowProblems({ "ci.yml": workflow() }, tags)).problems).toEqual([]);
   });
 
   it("the PR check passes a PR whose head has no workflow directory", async () => {

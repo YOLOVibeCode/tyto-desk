@@ -4,7 +4,7 @@
  * agent rules and package files included, is code. `ci.yml` runs the base commit's copy, and when in doubt it says
  * code.
  */
-import { pullRequestFiles } from "./gh.mjs";
+import { ghJson, pullRequestFiles } from "./gh.mjs";
 
 /** @typedef {import("./run.mjs").Runner} Runner */
 
@@ -30,11 +30,18 @@ export function classifyChanges(files, { listed, expected }) {
 }
 
 /**
+ * The pull request's files through the API, then the pull request itself. The file list is the pull request's as it
+ * is when the API answers, so it counts only while the head is still the commit the run's event named (`headSha`): a
+ * push in between, or an event that named no head, is code.
  * @param {Runner} gh
- * @param {{ repository: string; number: number; changedFiles: number | null }} pr
+ * @param {{ repository: string; number: number; headSha: string | null }} pr
  * @returns {Promise<{ code: boolean }>}
  */
-export async function pullRequestChanges(gh, { repository, number, changedFiles }) {
+export async function pullRequestChanges(gh, { repository, number, headSha }) {
   const { files, listed } = await pullRequestFiles(gh, repository, number);
-  return classifyChanges(files, { listed, expected: changedFiles });
+  const pull = /** @type {{ head?: { sha?: unknown }; changed_files?: unknown } | null} */ (
+    await ghJson(gh, ["api", "--method", "GET", `repos/${repository}/pulls/${number}`])
+  );
+  if (headSha === null || pull?.head?.sha !== headSha || typeof pull.changed_files !== "number") return { code: true };
+  return classifyChanges(files, { listed, expected: pull.changed_files });
 }

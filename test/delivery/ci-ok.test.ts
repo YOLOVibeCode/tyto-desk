@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ciOk } from "../../scripts/delivery/lib/ci-ok.mjs";
+import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
 import { repo, runScript } from "./helpers.ts";
 
 const ciOkScript = join(repo, "scripts/delivery/ci-ok.mjs");
@@ -12,13 +13,13 @@ function needs(over: Record<string, Need> = {}): Record<string, Need> {
     changes: { result: "success", outputs: { code: "true" } },
     scan: { result: "success" },
     check: { result: "success" },
-    macos: { result: "success", outputs: { runtime: "true" } },
+    macos: { result: "success", outputs: { runtime: "true", installer: "true" } },
     ...over,
   };
 }
 
 const docsOnly = { changes: { result: "success", outputs: { code: "false" } }, check: { result: "skipped" }, macos: { result: "skipped" } };
-const release = "release-please--branches--main";
+const release = RELEASE_BRANCH;
 
 describe("ci-ok", () => {
   it.each([
@@ -33,9 +34,16 @@ describe("ci-ok", () => {
     { label: "check failed on main", event: "push", headRef: "", needs: needs({ check: { result: "failure" }, macos: { result: "skipped" } }) },
     { label: "a job did not report", event: "pull_request", headRef: "feat/x", needs: { changes: { result: "success", outputs: { code: "false" } }, scan: { result: "success" } } },
     { label: "a result ci-ok does not know", event: "pull_request", headRef: "feat/x", needs: needs({ check: { result: "neutral" } }) },
-    { label: "the release PR while runtime is false", event: "pull_request", headRef: release, needs: needs({ macos: { result: "success", outputs: { runtime: "false" } } }) },
+    {
+      label: "change detection succeeded without saying code or docs only",
+      event: "pull_request",
+      headRef: "feat/x",
+      needs: needs({ changes: { result: "success", outputs: {} }, check: { result: "skipped" }, macos: { result: "skipped" } }),
+    },
+    { label: "the release PR while runtime is false", event: "pull_request", headRef: release, needs: needs({ macos: { result: "success", outputs: { runtime: "false", installer: "true" } } }) },
+    { label: "the release PR while installer is false", event: "pull_request", headRef: release, needs: needs({ macos: { result: "success", outputs: { runtime: "true", installer: "false" } } }) },
   ])(
-    "ci-ok fails when a needed job failed or was cancelled, when code changed and check or macos did not succeed, or on the release PR while runtime is false ($label)",
+    "ci-ok fails when a needed job failed or was cancelled, when code changed and check or macos did not succeed, or on the release PR while runtime or installer is false ($label)",
     ({ event, headRef, needs: given }) => {
       const verdict = ciOk({ needs: given, event, headRef });
 
@@ -48,7 +56,7 @@ describe("ci-ok", () => {
     { label: "a docs-only PR without the build jobs", event: "pull_request", headRef: "docs/x", needs: needs(docsOnly) },
     { label: "a code change whose jobs all succeeded", event: "pull_request", headRef: "feat/x", needs: needs() },
     { label: "a push to main, which builds no macOS runtime", event: "push", headRef: "", needs: needs({ macos: { result: "skipped" } }) },
-    { label: "the release PR once there is a runtime", event: "pull_request", headRef: release, needs: needs() },
+    { label: "the release PR once there is a runtime and its installer", event: "pull_request", headRef: release, needs: needs() },
   ])("ci-ok passes $label", ({ event, headRef, needs: given }) => {
     expect(ciOk({ needs: given, event, headRef })).toEqual({ ok: true, reasons: [] });
   });
@@ -57,7 +65,7 @@ describe("ci-ok", () => {
     const result = await runScript(ciOkScript, [], {
       env: {
         PATH: process.env.PATH ?? "",
-        NEEDS: JSON.stringify(needs({ macos: { result: "success", outputs: { runtime: "false" } } })),
+        NEEDS: JSON.stringify(needs({ macos: { result: "success", outputs: { runtime: "false", installer: "false" } } })),
         EVENT_NAME: "pull_request",
         HEAD_REF: release,
       },
@@ -65,5 +73,6 @@ describe("ci-ok", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("the release PR has no runtime to release (slice 1c; D58)");
+    expect(result.stderr).toContain("the release PR has no installer to release (slice D2; D67)");
   });
 });

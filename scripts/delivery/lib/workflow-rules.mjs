@@ -9,10 +9,11 @@ import { LineCounter, isAlias, isMap, isPair, isScalar, isSeq, parseDocument, vi
 /** @typedef {import("yaml").Document.Parsed} ParsedDocument */
 
 /**
- * @typedef {"parse" | "yaml-alias" | "pinned-uses" | "top-permissions" | "job-permissions" | "timeout"
- *   | "persist-credentials" | "expression-in-run" | "pull-request-target" | "forbidden-trigger" | "write-scope"
- *   | "ignore-scripts" | "cache" | "debug-output" | "secret-environment" | "publish-environment"
- *   | "call-concurrency" | "required-check-name" | "runner"} WorkflowRule
+ * @typedef {"parse" | "yaml-alias" | "yaml-directive" | "yaml-tag" | "on-key" | "pinned-uses" | "local-action"
+ *   | "top-permissions" | "job-permissions" | "timeout" | "persist-credentials" | "expression-in-run"
+ *   | "pull-request-target" | "pr-title-trigger" | "forbidden-trigger" | "write-scope" | "ignore-scripts" | "cache"
+ *   | "debug-output" | "secret-environment" | "publish-environment" | "call-concurrency" | "required-check-name"
+ *   | "runner"} WorkflowRule
  */
 /** @typedef {{ file: string; line: number | null; rule: WorkflowRule; detail: string }} WorkflowViolation */
 /** @typedef {{ path: string; text: string }} WorkflowFile */
@@ -57,6 +58,21 @@ export const REQUIRED_CHECKS = new Map([
   ["ci-ok", "ci.yml"],
   ["pr-title", "pr-title.yml"],
 ]);
+
+/** The workflow whose job is the `pr-title` check: it runs on `pull_request_target` alone, so `main`'s copy judges. */
+const PR_TITLE_FILE = "pr-title.yml";
+
+/** A local reusable workflow, which these rules read with every other file in `.github/workflows/`. */
+const LOCAL_WORKFLOW = /^\.\/\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/;
+
+/** The `!!` handle's prefix in YAML 1.2; any other handle or prefix comes from a `%TAG` directive. */
+const DEFAULT_TAG_PREFIX = "tag:yaml.org,2002:";
+
+/** git's own options that take the next word as their value, before the subcommand. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--attr-source"]);
+
+/** git subcommands that bring commits or files onto the runner. */
+const GIT_FETCHES = new Set(["fetch", "checkout", "switch", "worktree", "clone", "pull", "restore"]);
 
 /** Jobs whose output is attested or published: no cache may feed them. */
 const NO_CACHE_JOBS = new Set(["pack", "attest", "publish"]);
@@ -184,6 +200,32 @@ function commandWords(words) {
   return words.slice(i);
 }
 
+/**
+ * Whether npm's arguments turn install scripts off and nothing turns them back on. npm reads `--ignore-scripts false`,
+ * `--ignore-scripts=false`, `--no-ignore-scripts`, other spellings and abbreviations (`--no-ignore`), and the last one
+ * wins; after `--` nothing is an option. So only a plain `--ignore-scripts` (or `--ignore-scripts=true`, or
+ * `--ignore-scripts true`) counts, and any other option that mentions ignore counts against.
+ * @param {string[]} args the words after `npm`
+ */
+function ignoresScripts(args) {
+  let ignored = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const w = args[i] ?? "";
+    if (w === "--") break;
+    if (w === "--ignore-scripts=true") {
+      ignored = true;
+    } else if (w === "--ignore-scripts") {
+      const next = args[i + 1];
+      if (next === "false") return false;
+      if (next === "true") i += 1;
+      ignored = true;
+    } else if (w.startsWith("-") && /ignore/i.test(w)) {
+      return false;
+    }
+  }
+  return ignored;
+}
+
 /** Whether a simple command installs with npm without `--ignore-scripts`. @param {string[]} words */
 function npmInstallWithScripts(words) {
   const at = words.findIndex((w) => w === "npm" || w.endsWith("/npm"));
@@ -200,7 +242,7 @@ function npmInstallWithScripts(words) {
     }
   }
   if (subcommand === null || !NPM_INSTALLS.has(subcommand)) return false;
-  return !rest.some((w) => w === "--ignore-scripts" || w === "--ignore-scripts=true");
+  return !ignoresScripts(rest);
 }
 
 /** Whether a simple command prints the environment or traces commands. @param {string[]} words */
@@ -281,9 +323,21 @@ function triggers(on) {
   return record === null ? [] : Object.keys(record);
 }
 
+/**
+ * The action a `uses:` names, without its ref and lowercased (`Actions/Checkout@…` → `actions/checkout`): GitHub
+ * resolves an owner and a repository without case, so the rules compare that way.
+ * @param {unknown} uses
+ * @returns {string | null}
+ */
+function actionOf(uses) {
+  if (typeof uses !== "string") return null;
+  const at = uses.indexOf("@");
+  return (at === -1 ? uses : uses.slice(0, at)).toLowerCase().replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+}
+
 /** @param {unknown} uses */
 function isCheckout(uses) {
-  return typeof uses === "string" && uses.startsWith("actions/checkout@");
+  return actionOf(uses) === "actions/checkout";
 }
 
 /** @param {unknown} value */
@@ -382,32 +436,52 @@ function checkOne(file) {
     }
   }
 
-  let aliased = false;
+  // A directive changes how plain values read: under `%YAML 1.1`, `on:` is the boolean true, and these rules would see
+  // no trigger where GitHub sees one. The rules read YAML 1.2 only.
+  const tags = Object.entries(doc.directives?.tags ?? {});
+  if (doc.directives?.yaml.explicit === true || tags.some(([handle, prefix]) => handle !== "!!" || prefix !== DEFAULT_TAG_PREFIX)) {
+    const index = file.text.split("\n").findIndex((line) => line.startsWith("%"));
+    violations.push({
+      file: file.path,
+      line: index === -1 ? null : index + 1,
+      rule: "yaml-directive",
+      detail: "a %YAML or %TAG directive changes how values read; workflows are plain YAML 1.2",
+    });
+    return { violations, checkNames };
+  }
+
+  /** @type {WorkflowRule | null} */
+  let hidden = null;
   visit(doc, (_, node) => {
-    const anchored = /** @type {{ anchor?: string }} */ (node).anchor;
-    if (!aliased && (isAlias(node) || (typeof anchored === "string" && anchored !== ""))) {
-      aliased = true;
-      const range = /** @type {{ range?: [number, number, number] | null }} */ (node).range;
-      violations.push({
-        file: file.path,
-        line: range ? counter.linePos(range[0]).line : null,
-        rule: "yaml-alias",
-        detail: "anchors and aliases hide what a job runs; spell every value out",
-      });
+    if (hidden !== null) return;
+    const { anchor, tag, range } = /** @type {{ anchor?: unknown; tag?: unknown; range?: [number, number, number] | null }} */ (node);
+    const line = range ? counter.linePos(range[0]).line : null;
+    if (isAlias(node) || (typeof anchor === "string" && anchor !== "")) {
+      hidden = "yaml-alias";
+      violations.push({ file: file.path, line, rule: hidden, detail: "anchors and aliases hide what a job runs; spell every value out" });
+    } else if (typeof tag === "string" && tag !== "") {
+      hidden = "yaml-tag";
+      violations.push({ file: file.path, line, rule: hidden, detail: "an explicit tag can make a value read differently; spell every value plainly" });
     }
   });
-  if (aliased) return { violations, checkNames };
+  if (hidden !== null) return { violations, checkNames };
 
   const workflow = asRecord(doc.toJS()) ?? {};
   const events = triggers(workflow.on);
   const pullRequestTarget = events.includes("pull_request_target");
   const reusable = events.includes("workflow_call");
 
+  if (!Object.hasOwn(workflow, "on") || events.length === 0) {
+    report(["on"], "on-key", "the workflow names its triggers under a plain on key");
+  }
   for (const event of events) {
     if (FORBIDDEN_TRIGGERS.has(event)) report(["on", event], "forbidden-trigger", `the ${event} trigger is never used`);
   }
   if (pullRequestTarget && !PULL_REQUEST_TARGET_FILES.has(name)) {
     report(["on", "pull_request_target"], "pull-request-target", "pull_request_target runs only in pr-title.yml, owner-merge.yml and dependabot-auto-merge.yml");
+  }
+  if (name === PR_TITLE_FILE && (events.length !== 1 || events[0] !== "pull_request_target")) {
+    report(["on"], "pr-title-trigger", "pr-title.yml runs on pull_request_target alone, so the pr-title check always comes from main's copy");
   }
   const top = asRecord(workflow.permissions);
   if (top === null || Object.keys(top).length > 0) {
@@ -426,8 +500,23 @@ function checkOne(file) {
   for (const [id, value] of Object.entries(jobs)) {
     const job = asRecord(value) ?? {};
     const where = ["jobs", id];
-    const jobName = typeof job.name === "string" ? job.name : null;
-    for (const checkName of new Set([id, ...(jobName === null ? [] : [jobName])])) {
+    // A job's check run is named after its id or its name, compared trimmed and without case. GitHub evaluates
+    // expressions in a name, so a name with one counts when the literal text before it could still begin a required
+    // check's name (`${{ matrix.n }}`, `ci-${{ 'ok' }}`); `check (Node ${{ matrix.node }})` cannot.
+    /** @type {Set<string>} */
+    const names = new Set();
+    for (const raw of [id, ...(typeof job.name === "string" ? [job.name] : [])]) {
+      const expression = raw.indexOf("${{");
+      if (expression === -1) {
+        names.add(raw.trim().toLowerCase());
+        continue;
+      }
+      const prefix = raw.slice(0, expression).trim().toLowerCase();
+      if ([...REQUIRED_CHECKS.keys()].some((check) => check.startsWith(prefix))) {
+        report([...where, "name"], "required-check-name", `${id}'s name is an expression that could make it ci-ok or pr-title; begin it with other text`);
+      }
+    }
+    for (const checkName of names) {
       if (REQUIRED_CHECKS.has(checkName)) checkNames.push({ name: checkName, line: at(where) });
     }
 
@@ -469,6 +558,12 @@ function checkOne(file) {
 
     if (typeof job.uses === "string") {
       if (!job.uses.startsWith("./")) checkPinned(job.uses, [...where, "uses"]);
+      else if (!LOCAL_WORKFLOW.test(job.uses)) {
+        report([...where, "uses"], "local-action", "a job calls a reusable workflow in .github/workflows/, where these rules read it");
+      }
+      if (pullRequestTarget) {
+        report([...where, "uses"], "pull-request-target", "a pull_request_target workflow calls no reusable workflow, which would run with its trust");
+      }
       continue;
     }
 
@@ -480,8 +575,7 @@ function checkOne(file) {
     const privileged =
       writes.length > 0 ||
       secrets.length > 0 ||
-      (Array.isArray(job.steps) &&
-        job.steps.some((step) => String(asRecord(step)?.uses ?? "").startsWith("actions/create-github-app-token@")));
+      (Array.isArray(job.steps) && job.steps.some((step) => actionOf(asRecord(step)?.uses) === "actions/create-github-app-token"));
     const noCache = pullRequestTarget || NO_CACHE_JOBS.has(id);
     if (privileged && [...jobStrings, ...workflowStrings].some((text) => /ACTIONS_(?:STEP|RUNNER)_DEBUG/.test(text))) {
       report(where, "debug-output", `${id} holds a secret or a write scope and must not turn on debug logging`);
@@ -492,8 +586,11 @@ function checkOne(file) {
       const step = asRecord(value) ?? {};
       const stepPath = [...where, "steps", index];
       const uses = typeof step.uses === "string" ? step.uses : null;
+      const action = actionOf(uses);
       const withs = asRecord(step.with) ?? {};
-      if (uses !== null && !uses.startsWith("./")) checkPinned(uses, [...stepPath, "uses"]);
+      if (uses !== null && uses.startsWith("./")) {
+        report([...stepPath, "uses"], "local-action", "steps use pinned actions only: a local action's own steps would escape these rules");
+      } else if (uses !== null) checkPinned(uses, [...stepPath, "uses"]);
       if (isCheckout(uses)) {
         if (!isFalse(withs["persist-credentials"])) {
           report(stepPath, "persist-credentials", "every checkout sets persist-credentials: false");
@@ -506,10 +603,10 @@ function checkOne(file) {
           }
         }
       }
-      if (noCache && uses !== null) {
-        if (/^actions\/cache(?:\/(?:restore|save))?@/.test(uses)) {
+      if (noCache && action !== null) {
+        if (/^actions\/cache(?:\/(?:restore|save))?$/.test(action)) {
           report(stepPath, "cache", `${id} may not restore or save a cache`);
-        } else if (uses.startsWith("actions/setup-node@") && (withs.cache !== undefined || !isFalse(withs["package-manager-cache"]))) {
+        } else if (action === "actions/setup-node" && (withs.cache !== undefined || !isFalse(withs["package-manager-cache"]))) {
           report(stepPath, "cache", `${id} runs setup-node with package-manager-cache: false and no cache`);
         }
       }
@@ -519,7 +616,7 @@ function checkOne(file) {
       }
       const scripts = [
         ...(typeof step.run === "string" ? [{ text: step.run, key: "run" }] : []),
-        ...(uses?.startsWith("actions/github-script@") && typeof withs.script === "string" ? [{ text: withs.script, key: "with" }] : []),
+        ...(action === "actions/github-script" && typeof withs.script === "string" ? [{ text: withs.script, key: "with" }] : []),
       ];
       for (const { text, key } of scripts) {
         for (const match of text.matchAll(/\$\{\{([\s\S]*?)\}\}/g)) {
@@ -543,14 +640,32 @@ function checkOne(file) {
     });
   }
   return { violations, checkNames };
-
 }
 
-/** git or gh commands that would bring the pull request's code onto the runner. @param {string[]} words */
+/**
+ * git or gh commands that would bring the pull request's code onto the runner, wherever they sit in the command
+ * (`env … git`, `sudo git`) and past git's own options (`git -C . fetch`, `git --no-pager fetch`).
+ * @param {string[]} words
+ */
 function checksOutPullRequest(words) {
-  const [name, sub] = commandWords(words);
-  if (name === "git") return ["fetch", "checkout", "switch", "worktree", "clone", "pull", "restore"].includes(sub ?? "");
-  if (name === "gh") return sub === "pr" && commandWords(words)[2] === "checkout";
+  const git = words.findIndex((w) => w === "git" || w.endsWith("/git"));
+  if (git !== -1) {
+    const rest = words.slice(git + 1);
+    for (let i = 0; i < rest.length; i += 1) {
+      const w = rest[i] ?? "";
+      if (GIT_VALUE_OPTIONS.has(w)) i += 1;
+      else if (!w.startsWith("-")) {
+        if (GIT_FETCHES.has(w)) return true;
+        break;
+      }
+    }
+  }
+  const gh = words.findIndex((w) => w === "gh" || w.endsWith("/gh"));
+  if (gh !== -1) {
+    const rest = words.slice(gh + 1).filter((w) => !w.startsWith("-"));
+    const pr = rest.indexOf("pr");
+    if (pr !== -1 && rest.slice(pr + 1).includes("checkout")) return true;
+  }
   return false;
 }
 

@@ -110,16 +110,15 @@ describe("classifyBuild", () => {
     },
   );
 
-  it("classifyBuild refuses a base version that is not MAJOR.MINOR.PATCH", () => {
-    for (const baseVersion of ["0.3", "0.3.0-rc.1", "0.3.0+build.1", "v0.3.0", "00.3.0", ""]) {
+  it.each(["0.3", "0.3.0-rc.1", "0.3.0+build.1", "v0.3.0", "00.3.0", ""])(
+    "classifyBuild refuses a base version that is not MAJOR.MINOR.PATCH (%j)",
+    (baseVersion) => {
       expect(classifyBuild({ ...main, baseVersion })).toEqual({ ok: false, refusals: ["bad-base-version"] });
-    }
-  });
+    },
+  );
 
-  it("classifyBuild refuses a tree with no 40-hex commit", () => {
-    for (const commit of [null, "a1b2c3d", `${sha}0`, sha.toUpperCase()]) {
-      expect(classifyBuild({ ...main, sha: commit })).toEqual({ ok: false, refusals: ["no-commit"] });
-    }
+  it.each([null, "a1b2c3d", `${sha}0`, sha.toUpperCase()])("classifyBuild refuses a tree with no 40-hex commit (%j)", (commit) => {
+    expect(classifyBuild({ ...main, sha: commit })).toEqual({ ok: false, refusals: ["no-commit"] });
   });
 
   it("classifyBuild makes a push to main an edge build of the next patch with its run number and short commit", () => {
@@ -171,26 +170,21 @@ describe("classifyBuild", () => {
     expect(versionOf({ ...local, allowDirty: true })).toBe("0.3.1-dev.slice-1c-walking-skeleton+a1b2c3d");
   });
 
-  it("classifyBuild refuses allowDirty, and any ref but main, a v-tag or a pull request, in CI", () => {
-    expect(classifyBuild({ ...main, allowDirty: true })).toEqual({ ok: false, refusals: ["allow-dirty-in-ci"] });
-    expect(classifyBuild({ ...main, allowDirty: true, dirty: true })).toEqual({
-      ok: false,
-      refusals: ["dirty-tree", "allow-dirty-in-ci"],
-    });
-    for (const input of [
-      { ...main, ref: "refs/heads/feat/x" },
-      { ...main, event: "schedule", ref: "refs/heads/release" },
-      { ...main, event: "pull_request_target", ref: "refs/heads/main" },
-      { ...main, event: "workflow_call" },
-      { ...main, refType: "tag" as const },
-      { ...tag, refType: "branch" as const },
-      { ...tag, event: "schedule" },
-      { ...tag, dryRun: true },
-      { ...dryRun, event: "push" },
-      { ...pr, dryRun: true },
-    ]) {
-      expect(classifyBuild(input)).toEqual({ ok: false, refusals: ["unsupported-ref"] });
-    }
+  it.each<{ label: string; input: ClassifyBuildInput; refusals: string[] }>([
+    { label: "allowDirty on main", input: { ...main, allowDirty: true }, refusals: ["allow-dirty-in-ci"] },
+    { label: "allowDirty on a dirty main", input: { ...main, allowDirty: true, dirty: true }, refusals: ["dirty-tree", "allow-dirty-in-ci"] },
+    { label: "a push to another branch", input: { ...main, ref: "refs/heads/feat/x" }, refusals: ["unsupported-ref"] },
+    { label: "a schedule on another branch", input: { ...main, event: "schedule", ref: "refs/heads/release" }, refusals: ["unsupported-ref"] },
+    { label: "pull_request_target", input: { ...main, event: "pull_request_target", ref: "refs/heads/main" }, refusals: ["unsupported-ref"] },
+    { label: "workflow_call", input: { ...main, event: "workflow_call" }, refusals: ["unsupported-ref"] },
+    { label: "main called a tag", input: { ...main, refType: "tag" }, refusals: ["unsupported-ref"] },
+    { label: "a tag called a branch", input: { ...tag, refType: "branch" }, refusals: ["unsupported-ref"] },
+    { label: "a schedule on a tag", input: { ...tag, event: "schedule" }, refusals: ["unsupported-ref"] },
+    { label: "a dry run of a tag", input: { ...tag, dryRun: true }, refusals: ["unsupported-ref"] },
+    { label: "a dry run on a push", input: { ...dryRun, event: "push" }, refusals: ["unsupported-ref"] },
+    { label: "a dry run of a pull request", input: { ...pr, dryRun: true }, refusals: ["unsupported-ref"] },
+  ])("classifyBuild refuses allowDirty, and any ref but main, a v-tag or a pull request, in CI ($label)", ({ input, refusals }) => {
+    expect(classifyBuild(input)).toEqual({ ok: false, refusals });
   });
 
   it("classifyBuild gates stable builds on the live suite, runs it for same-repository pr builds on the live label, and never for forks, edge or dev", () => {
@@ -262,10 +256,14 @@ describe("versions", () => {
     expect(compareVersions(higher, lower)).toBe(1);
   });
 
-  it("compareVersions ignores build metadata and refuses what is not SemVer", () => {
+  it("compareVersions ignores build metadata", () => {
     expect(compareVersions("0.3.0+dryrun.12", "0.3.0")).toBe(0);
-    for (const bad of ["v0.3.0", "0.3", "01.2.3", "1.2.3-01", "1.2.3-", "1.2.3+", "1.2.3-a..b"]) {
-      expect(() => compareVersions(bad, "0.3.0")).toThrow(/not a SemVer version/);
-    }
   });
+
+  it.each(["v0.3.0", "0.3", "01.2.3", "1.2.3-01", "1.2.3-", "1.2.3+", "1.2.3-a..b"])(
+    "compareVersions refuses %s as not SemVer",
+    (bad) => {
+      expect(() => compareVersions(bad, "0.3.0")).toThrow(/not a SemVer version/);
+    },
+  );
 });

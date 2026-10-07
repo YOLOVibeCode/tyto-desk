@@ -130,17 +130,36 @@ describe("publish", () => {
     const assets = Object.entries(build.digests).map(([name, digest]) => ({ name, digest }));
 
     const matching = await prepare(github([published("v0.3.0", assets)]).gh, { repository: REPOSITORY, tag: "v0.3.0", dir: build.dir });
-    expect(matching).toEqual({ ok: true, next: "verify" });
 
+    expect(matching).toEqual({ ok: true, next: "verify" });
+  });
+
+  it("publish fails when an earlier attempt published assets whose digests differ from SHA256SUMS", async () => {
+    const build = await artifact("0.3.0");
+    const assets = Object.entries(build.digests).map(([name, digest]) => ({ name, digest }));
     const changed = assets.map((a) => (a.name === "install.sh" ? { ...a, digest: `sha256:${"3".repeat(64)}` } : a));
+
     const mismatch = await prepare(github([published("v0.3.0", changed)]).gh, { repository: REPOSITORY, tag: "v0.3.0", dir: build.dir });
-    expect(mismatch.ok).toBe(false);
+
+    expect(mismatch).toEqual({ ok: false, problems: ["v0.3.0 is already published, and differs:", "install.sh's digest is not the one SHA256SUMS names"] });
+  });
+
+  it("publish attests a tag whose release is still a draft", async () => {
+    const build = await artifact("0.3.0");
 
     const pending = await prepare(github([draft("v0.3.0")]).gh, { repository: REPOSITORY, tag: "v0.3.0", dir: build.dir });
-    expect(pending).toEqual({ ok: true, next: "attest" });
 
-    const missing = await prepare(github([]).gh, { repository: REPOSITORY, tag: "v0.3.0", dir: build.dir });
+    expect(pending).toEqual({ ok: true, next: "attest" });
+  });
+
+  it("publish refuses a tag with no release before it attests or uploads anything", async () => {
+    const build = await artifact("0.3.0");
+    const fake = github([published("v0.2.9")]);
+
+    const missing = await prepare(fake.gh, { repository: REPOSITORY, tag: "v0.3.0", dir: build.dir });
+
     expect(missing).toEqual({ ok: false, problems: ["there is no release for v0.3.0; release-please drafts it with its tag"] });
+    expect(fake.calls.map((call) => call.args.slice(0, 2).join(" "))).toEqual(["api --method"]);
   });
 
   it("publish marks a release latest only when its version is the highest published", async () => {

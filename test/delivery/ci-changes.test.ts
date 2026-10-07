@@ -37,24 +37,57 @@ describe("change detection", () => {
     expect(classifyChanges(["docs/SPEC.md", file], { listed: 2, expected: 2 }).code).toBe(true);
   });
 
-  it("change detection calls a PR code when the API listed fewer files than it changes, or none", () => {
-    expect(classifyChanges(["docs/SPEC.md"], { listed: 3000, expected: 3001 }).code).toBe(true);
-    expect(classifyChanges([], { listed: 0, expected: 0 }).code).toBe(true);
+  it.each([
+    { label: "3,000 of 3,001 files", files: ["docs/SPEC.md"], listed: 3000, expected: 3001 },
+    { label: "no files", files: [], listed: 0, expected: 0 },
+  ])("change detection calls a PR code when the API listed fewer files than it changes, or none ($label)", ({ files, listed, expected }) => {
+    expect(classifyChanges(files, { listed, expected }).code).toBe(true);
   });
 
-  it("change detection reads a pull request's files, renames under both names, through the API", async () => {
-    const { gh, calls } = fakeGh([
+  const HEAD = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
+
+  /** The pull request (#42) through the API: its files as pages, then its head commit and how many files it changes. */
+  function pullRequest(pages: object[][], head: { sha: string; changedFiles: number }) {
+    return fakeGh([
       {
         match: /^api --method GET --paginate --slurp repos\/YOLOVibeCode\/tyto-desk\/pulls\/42\/files\?per_page=100$/,
-        reply: () =>
-          ok([[{ filename: "docs/moved.md", previous_filename: "scripts/delivery/ci-changes.mjs" }], [{ filename: "README.md" }]]),
+        reply: () => ok(pages),
+      },
+      {
+        match: /^api --method GET repos\/YOLOVibeCode\/tyto-desk\/pulls\/42$/,
+        reply: () => ok({ number: 42, head: { sha: head.sha }, changed_files: head.changedFiles }),
       },
     ]);
+  }
 
-    const changes = await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, changedFiles: 2 });
+  it("change detection reads a pull request's files, renames under both names, through the API", async () => {
+    const { gh, calls } = pullRequest(
+      [[{ filename: "docs/moved.md", previous_filename: "scripts/delivery/ci-changes.mjs" }], [{ filename: "README.md" }]],
+      { sha: HEAD, changedFiles: 2 },
+    );
+
+    const changes = await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD });
 
     expect(changes).toEqual({ code: true });
-    expect(calls).toHaveLength(1);
+    expect(calls.map((call) => call.args.at(-1))).toEqual([
+      "repos/YOLOVibeCode/tyto-desk/pulls/42/files?per_page=100",
+      "repos/YOLOVibeCode/tyto-desk/pulls/42",
+    ]);
+  });
+
+  it("change detection calls a docs-only PR docs-only when its head is still the event's", async () => {
+    const { gh } = pullRequest([[{ filename: "docs/SPEC.md" }]], { sha: HEAD, changedFiles: 1 });
+
+    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha: HEAD })).toEqual({ code: false });
+  });
+
+  it.each([
+    { label: "a push moved its head after the event", headSha: HEAD, apiHead: "1".repeat(40) },
+    { label: "the event named no head commit", headSha: null, apiHead: HEAD },
+  ])("change detection calls a PR code when the files it read may not be the event's head commit's ($label)", async ({ headSha, apiHead }) => {
+    const { gh } = pullRequest([[{ filename: "docs/SPEC.md" }]], { sha: apiHead, changedFiles: 1 });
+
+    expect(await pullRequestChanges(gh, { repository: "YOLOVibeCode/tyto-desk", number: 42, headSha })).toEqual({ code: true });
   });
 
   it("change detection calls every push to main code, without reading anything", async () => {

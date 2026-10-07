@@ -1,12 +1,14 @@
-# The live suite in CI (docs/IMPLEMENTATION.md §17.3, §23.7, D47): `npm run test:live -- --ci` drives the runner's own
-# Docker on ubuntu-24.04-arm, with the same phases, flags, seccomp profile and sandboxed Chrome as on the Mac. Called
-# by live.yml (weekly, on dispatch, on PRs labeled live) and by release.yml (the release gate). No secrets.
+# The live suite in CI (docs/IMPLEMENTATION.md §17.3, §23.7, D47, D64): `npm run test:live -- --ci` drives the
+# runner's own Docker on ubuntu-24.04-arm, with the same phases, flags, seccomp profile and sandboxed Chrome as on the
+# Mac. Called by live.yml (weekly, on dispatch, on PRs labeled live) and by release.yml (the release gate). No secrets.
 #
-# Until slice 1b adds `npm run test:live`, this passes with a notice that there is nothing to run.
+# Until slice 1b adds `npm run test:live`, this passes with a notice that there is nothing to run. Once it exists, the
+# suite runs, and a runner without the CI mode fails here rather than passing the gate unrun.
 #
 # The pinned Chrome .deb lives in an Actions cache keyed by its sha256 (test/live/image/Dockerfile's CHROME_SHA256),
-# never in a registry (D60): restored into DESK_LIVE_CACHE_DIR before the suite, saved only by runs on main (PR and
-# tag runs read main's entries), and kept alive every three days by live.yml.
+# never in a registry (D60): the runner's --ci mode keeps it under ~/.cache/desk-live/chrome/<sha256>/, which this job
+# restores before the suite and saves only on main after a miss (PR and tag runs read main's entries); live.yml keeps
+# the entry alive every three days.
 name: live-run
 
 on:
@@ -59,21 +61,19 @@ jobs:
         if: steps.suite.outputs.present == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/desk-live-cache
+          path: ~/.cache/desk-live/chrome
           key: ${{ steps.chrome.outputs.key }}
       - name: Let Chrome's sandbox use unprivileged user namespaces (Ubuntu 24.04's AppArmor limit; never --no-sandbox)
         if: steps.suite.outputs.present == 'true'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: The live suite, in its container on the runner's Docker
         if: steps.suite.outputs.present == 'true'
-        env:
-          DESK_LIVE_CACHE_DIR: ${{ runner.temp }}/desk-live-cache
         run: npm run test:live -- --ci
       - name: Keep the pinned Chrome .deb (runs on main only)
         if: steps.suite.outputs.present == 'true' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/desk-live-cache
+          path: ~/.cache/desk-live/chrome
           key: ${{ steps.chrome.outputs.key }}
       - name: Upload the results (screenshots, logs)
         if: always() && steps.suite.outputs.present == 'true'

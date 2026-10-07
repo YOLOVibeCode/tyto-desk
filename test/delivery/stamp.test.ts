@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { DESK_COMPAT } from "../../packages/core/src/index.ts";
 import { dirtyFiles, gitRunner, tagOnMain } from "../../scripts/delivery/lib/git-facts.mjs";
 import { gatherBuildFacts } from "../../scripts/delivery/lib/stamp.mjs";
-import { fixture, git, gitCheckout, gitEnv, repo, runScript } from "./helpers.ts";
+import { fixture, git, gitCheckout, gitEnv, repo, runScript, tempTree } from "./helpers.ts";
 
 const stamp = join(repo, "scripts/delivery/stamp.mjs");
 const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -65,15 +66,23 @@ describe("the stamp", () => {
     });
     expect(await git(root, ["status", "--porcelain"])).toBe("");
 
-    const intoRepo = await runScript(stamp, ["--out", "."], { cwd: root });
-    expect(intoRepo.code).toBe(64);
-    expect(intoRepo.stderr).toContain("never into the repository");
-    expect(existsSync(join(root, "version.json"))).toBe(false);
-
     const outside = await mkdtemp(join(tmpdir(), "out-"));
     expect((await runScript(stamp, ["--out", outside], { cwd: root })).code).toBe(0);
     expect(existsSync(join(outside, "version.json"))).toBe(true);
   });
+
+  it.each([".", "..cache", "packages/x"])(
+    "the stamp writes version.json into the build output and never into the repo (refuses --out %s)",
+    async (out) => {
+      const { root } = await gitCheckout(project);
+
+      const intoRepo = await runScript(stamp, ["--out", out], { cwd: root });
+
+      expect(intoRepo.code).toBe(64);
+      expect(intoRepo.stderr).toContain("never into the repository");
+      expect(existsSync(join(root, out, "version.json"))).toBe(false);
+    },
+  );
 
   it("the stamp fetches main and decides tagOnMain with merge-base --is-ancestor, and any git error means not on main", async () => {
     const fetch = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
@@ -188,6 +197,41 @@ describe("the stamp", () => {
       expect(result.stderr).toContain(`  ${file}`);
     }
     expect(result.stderr).not.toContain("dist/ignored.txt");
+    expect(existsSync(join(root, "dist", "version.json"))).toBe(false);
+  });
+
+  it.each([
+    { label: "git status fails", vars: { FAKE_GIT_STATUS_EXIT: "128" } },
+    { label: "git ls-files fails", vars: { FAKE_GIT_LS_FILES_EXIT: "128" } },
+  ])("the stamp counts a tree as dirty when git cannot list its changes ($label)", async ({ vars }) => {
+    const { runner } = await stubGit({ FAKE_GIT_HEAD: sha, FAKE_GIT_BRANCH: "slice-1c/walking-skeleton", ...vars });
+    const root = await tempTree("project-", project);
+
+    const facts = await gatherBuildFacts({ root, env: gitEnv, git: runner, now, allowDirty: false, dryRun: false });
+
+    expect(facts.dirtyFiles).toBeNull();
+    expect(facts.input.dirty).toBe(true);
+  });
+
+  it("the stamp refuses a tree whose changes git cannot list, and says so", async () => {
+    const root = await tempTree("project-", project);
+    const bin = await mkdtemp(join(tmpdir(), "bin-"));
+    // `git` on PATH is the stub, with its answers built in: the stamp gives git only an allowlisted environment.
+    const shim = [
+      "#!/usr/bin/env node",
+      `process.env.FAKE_GIT_HEAD = ${JSON.stringify(sha)};`,
+      'process.env.FAKE_GIT_BRANCH = "slice-1c/walking-skeleton";',
+      'process.env.FAKE_GIT_STATUS_EXIT = "128";',
+      `await import(${JSON.stringify(pathToFileURL(fixture("fake-git.mjs")).href)});`,
+      "",
+    ].join("\n");
+    await writeFile(join(bin, "git"), shim, { mode: 0o755 });
+
+    const result = await runScript(stamp, [], { cwd: root, env: { ...gitEnv, PATH: `${bin}${delimiter}${dirname(process.execPath)}` } });
+
+    expect(result.code).toBe(65);
+    expect(result.stderr).toContain("dirty-tree");
+    expect(result.stderr).toContain("git could not list the changes");
     expect(existsSync(join(root, "dist", "version.json"))).toBe(false);
   });
 

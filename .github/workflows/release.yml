@@ -2,7 +2,8 @@
 # (classifyBuild), `build` (macos-26), and the `live` gate; then `publish`, which waits for the owner's approval of the
 # publish environment, attests, uploads to the draft release, checks the assets and publishes it; then `verify`.
 # Dispatched on main it is a dry run: plan, build and live as a stable-shaped build, and nothing is tagged, released or
-# attested. Until slice 1c adds `npm run pack` a real release refuses in `plan` (D58).
+# attested. Until slice 1c adds `npm run pack` (D58) and slice D2 adds scripts/delivery/install.sh (D67), a real
+# release refuses in `plan`.
 name: release
 
 on:
@@ -53,13 +54,19 @@ jobs:
           args=(--plan --expect-channel stable)
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           node scripts/delivery/stamp.mjs "${args[@]}"
-      - name: A release needs a runtime (slice 1c; D58)
+      - name: A release needs a runtime (slice 1c; D58) and its installer (slice D2; D67)
         if: steps.mode.outputs.dry-run != 'true'
         run: |
+          missing=0
           if [ "$(npm pkg get scripts.pack)" = "{}" ]; then
             echo "::error title=release::There is no runtime to release until slice 1c adds npm run pack (D58)."
-            exit 1
+            missing=1
           fi
+          if [ ! -f scripts/delivery/install.sh ]; then
+            echo "::error title=release::There is no installer to release until slice D2 adds scripts/delivery/install.sh (D67)."
+            missing=1
+          fi
+          exit "$missing"
 
   build:
     needs: plan

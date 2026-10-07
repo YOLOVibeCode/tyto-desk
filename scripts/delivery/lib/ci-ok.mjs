@@ -2,10 +2,11 @@
  * `ci-ok`, the one required build check (docs/IMPLEMENTATION.md §23.7). It runs with `if: always()` after `changes`,
  * `scan`, `check` and `macos`, and fails when any of them failed or was cancelled, when `changes` found code and
  * `check` (or, on a pull request, `macos`) did not succeed, or on the release PR while `macos` reports no runtime
- * (D58). A docs-only pull request passes with `check` and `macos` skipped.
+ * (D58) or no installer (D67). A docs-only pull request passes with `check` and `macos` skipped. When in doubt it says
+ * code: `changes` that reported neither `code=true` nor `code=false` fails it.
  */
+import { RELEASE_BRANCH } from "./release-branch.mjs";
 
-export const RELEASE_BRANCH = "release-please--branches--main";
 const JOBS = ["changes", "scan", "check", "macos"];
 const RESULTS = new Set(["success", "failure", "cancelled", "skipped"]);
 
@@ -32,12 +33,18 @@ export function ciOk({ needs, event, headRef }) {
   }
   if (result("changes") === "skipped") reasons.push("changes was skipped");
   if (result("scan") === "skipped") reasons.push("scan was skipped");
-  const code = needs.changes?.outputs?.code === "true";
+  const codeOutput = needs.changes?.outputs?.code;
+  if (result("changes") === "success" && codeOutput !== "true" && codeOutput !== "false") {
+    reasons.push("changes reported neither code=true nor code=false");
+  }
+  const code = codeOutput !== "false";
   const pullRequest = event === "pull_request";
   if (code && result("check") === "skipped") reasons.push("code changed and check did not run");
   if (code && pullRequest && result("macos") === "skipped") reasons.push("code changed and macos did not run");
-  if (pullRequest && headRef === RELEASE_BRANCH && needs.macos?.outputs?.runtime !== "true") {
-    reasons.push("the release PR has no runtime to release (slice 1c; D58)");
+  if (pullRequest && headRef === RELEASE_BRANCH) {
+    const outputs = needs.macos?.outputs;
+    if (outputs?.runtime !== "true") reasons.push("the release PR has no runtime to release (slice 1c; D58)");
+    if (outputs?.installer !== "true") reasons.push("the release PR has no installer to release (slice D2; D67)");
   }
   return { ok: reasons.length === 0, reasons: [...new Set(reasons)] };
 }

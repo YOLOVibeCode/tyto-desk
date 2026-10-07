@@ -1,8 +1,9 @@
-# Dependabot auto-merge (docs/IMPLEMENTATION.md §23.7, D44). Only for Dependabot's own pull requests from this
+# Dependabot auto-merge (docs/IMPLEMENTATION.md §23.7, D44, D54). Only for Dependabot's own pull requests from this
 # repository: fetch-metadata (never skip-verification) reads what changed, main's dependency-free
 # automerge-decision.mjs decides, and only patch updates of allowlisted dev tools (@types/*, typescript, vitest, yaml),
-# every member of a group included, get auto-merge; any other gets a comment naming why the owner merges it. No npm ci,
-# no checkout of the pull request.
+# every member of a group included, get auto-merge, and only once main's rules require pr-title and ci-ok (the interim
+# rule: until then gh pr merge --auto would merge at once, before the checks). Any other gets a comment naming why the
+# owner merges it. No npm ci, no checkout of the pull request.
 name: dependabot-auto-merge
 
 on:
@@ -35,10 +36,12 @@ jobs:
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
-      - name: Does it merge itself?
+      - name: Does it merge itself? (the update class, then main's rules, read-only)
         id: decision
         env:
           UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: node scripts/delivery/automerge-decision.mjs
       - name: Turn on auto-merge (squash)
         if: steps.decision.outputs.merge == 'true'

@@ -5,6 +5,7 @@
  * through the API as data; agents run it on a title and branch before `gh pr create`.
  */
 import { GhError, encodePath, httpStatus, isNotFound } from "./gh.mjs";
+import { RELEASE_BRANCH } from "./release-branch.mjs";
 import { actionPins, checkWorkflows } from "./workflow-rules.mjs";
 
 /** @typedef {import("./run.mjs").Runner} Runner */
@@ -12,7 +13,8 @@ import { actionPins, checkWorkflows } from "./workflow-rules.mjs";
 
 export const TYPES = ["feat", "fix", "perf", "refactor", "docs", "test", "build", "ci", "chore", "revert"];
 export const TITLE_MAX = 72;
-export const RELEASE_BRANCH = "release-please--branches--main";
+/** A tag of a tag of … a commit: more levels than this is no pin anyone writes. */
+const MAX_TAG_DEPTH = 5;
 
 const TITLE = new RegExp(`^(?:${TYPES.join("|")})(?:\\(([a-z0-9-]+)\\))?!?: \\S`);
 const SLICE_BRANCH = /^slice-([a-z0-9]+)\/[a-z0-9-]{1,50}$/;
@@ -60,8 +62,19 @@ export function checkTitleAndBranch({ title, branch, fork }) {
  */
 
 /**
+ * A git object as the REST API names one: `{ type, sha }`, or null for anything else.
+ * @param {unknown} value
+ * @returns {{ type: string; sha: string } | null}
+ */
+function gitObject(value) {
+  const object = /** @type {{ object?: { type?: unknown; sha?: unknown } } | null} */ (value)?.object;
+  return typeof object?.type === "string" && typeof object.sha === "string" ? { type: object.type, sha: object.sha } : null;
+}
+
+/**
  * The pull request's head through the REST API, as data: the workflow directory and each file at the head commit, and
- * `commits/<tag>` for each pinned action. Nothing is checked out.
+ * each pinned action's tag as a git ref (`git/ref/tags/<tag>`, peeling an annotated tag through `git/tags/<sha>`), so a
+ * branch or an abbreviated commit in the comment never counts as a tag. Nothing is checked out.
  * @param {Runner} gh
  * @param {{ repository: string; headSha: string }} pr
  * @returns {PullRequestSource}
@@ -93,14 +106,21 @@ export function ghPullRequestSource(gh, { repository, headSha }) {
       return files.sort((a, b) => a.path.localeCompare(b.path));
     },
     async tagCommit(repo, tag) {
-      const args = ["api", "--method", "GET", `repos/${encodePath(repo)}/commits/${encodeURIComponent(tag)}`, "--jq", ".sha"];
-      const result = await gh(args);
+      const ref = ["api", "--method", "GET", `repos/${encodePath(repo)}/git/ref/tags/${encodePath(tag)}`];
+      const result = await gh(ref);
       if (result.code !== 0) {
         if (isNotFound(result) || httpStatus(result) === 422) return null;
-        throw new GhError(args, result);
+        throw new GhError(ref, result);
       }
-      const sha = result.stdout.trim();
-      return /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+      let object = gitObject(JSON.parse(result.stdout));
+      for (let depth = 0; object?.type === "tag" && depth < MAX_TAG_DEPTH; depth += 1) {
+        if (!/^[0-9a-f]{40}$/.test(object.sha)) return null;
+        const peel = ["api", "--method", "GET", `repos/${encodePath(repo)}/git/tags/${object.sha}`];
+        const annotated = await gh(peel);
+        if (annotated.code !== 0) throw new GhError(peel, annotated);
+        object = gitObject(JSON.parse(annotated.stdout));
+      }
+      return object?.type === "commit" && /^[0-9a-f]{40}$/.test(object.sha) ? object.sha : null;
     },
   };
 }

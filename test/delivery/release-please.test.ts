@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RELEASE_BRANCH } from "../../scripts/delivery/lib/release-branch.mjs";
 import { repo } from "./helpers.ts";
 
 async function json(path: string): Promise<Record<string, unknown>> {
@@ -10,6 +11,24 @@ async function json(path: string): Promise<Record<string, unknown>> {
 const config = await json("release-please-config.json");
 const sections = config["changelog-sections"] as { type: string; section: string; hidden?: boolean }[];
 const packages = config.packages as Record<string, Record<string, unknown>>;
+
+/** The release-please-action that release-please.yml pins; it bundles release-please 17.6.0, whose branch rule is below. */
+const RELEASE_PLEASE_ACTION = "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0";
+
+/**
+ * The release PR's head branch as release-please 17.6.0 names it (src/manifest.ts, src/strategies/base.ts): one package
+ * means separate pull requests unless the config says otherwise, and a separate pull request's branch carries the
+ * package's component, its package name without an npm scope. `include-component-in-tag: false` changes only the tag.
+ * A merged pull request (`separate-pull-requests: false`) is named after the target branch alone.
+ */
+function releasePleaseBranch(target: string): string {
+  const only = packages["."] ?? {};
+  const component = String(only.component ?? only["package-name"] ?? "").replace(/^@[\w-]+\//, "");
+  const separate = config["separate-pull-requests"] ?? Object.keys(packages).length === 1;
+  return separate === false || component === ""
+    ? `release-please--branches--${target}`
+    : `release-please--branches--${target}--components--${component}`;
+}
 
 describe("the release-please config", () => {
   it("the release-please config opens the release PR as a draft labeled live", () => {
@@ -45,5 +64,16 @@ describe("the release-please config", () => {
     for (const workspace of ["packages/core", "packages/node"]) {
       expect(await json(`${workspace}/package.json`)).toMatchObject({ version: "0.1.0", private: true });
     }
+  });
+
+  it("the release PR's branch, which ci-ok, the PR check and owner-merge name, is the one release-please names from this config", async () => {
+    const workflow = await readFile(join(repo, ".github/workflows/release-please.yml"), "utf8");
+    const ownerPaths = await json("scripts/delivery/owner-paths.json");
+
+    // Another release-please-action may name the branch another way: read its source and update releasePleaseBranch.
+    expect(workflow).toContain(`uses: ${RELEASE_PLEASE_ACTION}`);
+    expect(RELEASE_BRANCH).toBe(releasePleaseBranch("main"));
+    expect(RELEASE_BRANCH).toBe("release-please--branches--main--components--tyto-desk");
+    expect(ownerPaths.branches).toEqual([RELEASE_BRANCH]);
   });
 });

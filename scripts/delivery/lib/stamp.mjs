@@ -4,7 +4,7 @@
  * output, never into the repository. `npm run pack`, `npm run deploy` and every CI build job run it.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DESK_COMPAT } from "../../../packages/core/src/release/compat.ts";
 import { currentBranch, dirtyFiles, headCommit, tagOnMain } from "./git-facts.mjs";
 
@@ -182,7 +182,8 @@ export async function pinnedNode(root) {
  */
 export async function outsideTheRepository(git, root, outDir) {
   const path = relative(resolve(root), join(resolve(root, outDir), "version.json"));
-  if (path.startsWith("..") || isAbsolute(path)) return true;
+  // Outside means a first segment of `..`; `..cache/version.json` is inside.
+  if (path.split(sep)[0] === ".." || isAbsolute(path)) return true;
   const ignored = await git(["check-ignore", "--quiet", "--no-index", "--", path]);
   return ignored.code === 0;
 }

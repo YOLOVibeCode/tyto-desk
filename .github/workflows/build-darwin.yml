@@ -1,7 +1,9 @@
 # The darwin-arm64 build (docs/IMPLEMENTATION.md §23.6, §23.7), called by ci.yml (pr), edge.yml (edge) and release.yml
 # (stable). `test` runs the checks on macos-26; `pack` stamps the build and packs the runtime from a checkout of exactly
 # `ref`, with no cache. Until slice 1c adds `npm run pack` there is no runtime: `pack` stamps, reports
-# runtime=false, and uploads nothing. DESK_NO_GUI=1: neither job starts the Chrome the runner image ships.
+# runtime=false, and uploads nothing. Until slice D2 adds scripts/delivery/install.sh it reports installer=false, and
+# ci-ok keeps the release PR red on either (D58, D67). DESK_NO_GUI=1: neither job starts the Chrome the runner image
+# ships.
 name: build-darwin
 
 on:
@@ -23,6 +25,9 @@ on:
       runtime:
         description: true when npm run pack produced a runtime
         value: ${{ jobs.pack.outputs.runtime }}
+      installer:
+        description: true when the commit has scripts/delivery/install.sh, which a release ships (slice D2)
+        value: ${{ jobs.pack.outputs.installer }}
       version:
         description: The stamped version
         value: ${{ jobs.pack.outputs.version }}
@@ -59,6 +64,7 @@ jobs:
       DESK_NO_GUI: "1"
     outputs:
       runtime: ${{ steps.runtime.outputs.runtime }}
+      installer: ${{ steps.runtime.outputs.installer }}
       version: ${{ steps.stamp.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,7 +86,7 @@ jobs:
           args=(--expect-channel "$CHANNEL")
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           node scripts/delivery/stamp.mjs "${args[@]}"
-      - name: Is there a runtime to pack? (npm run pack arrives with slice 1c)
+      - name: Is there a runtime to pack (slice 1c), and an installer to ship (slice D2)?
         id: runtime
         env:
           VERSION: ${{ steps.stamp.outputs.version }}
@@ -92,6 +98,11 @@ jobs:
             echo "Desk $VERSION ($CHANNEL): stamped; no runtime until slice 1c adds npm run pack." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "runtime=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f scripts/delivery/install.sh ]; then
+            echo "installer=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "installer=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Pack the runtime (esbuild and the repo's own scripts; no dev tool runs)
         if: steps.runtime.outputs.runtime == 'true'

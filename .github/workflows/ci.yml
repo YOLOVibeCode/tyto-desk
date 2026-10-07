@@ -41,7 +41,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ -f scripts/delivery/ci-changes.mjs ]; then
             node scripts/delivery/ci-changes.mjs

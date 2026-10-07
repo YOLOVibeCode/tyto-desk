@@ -98,12 +98,73 @@ describe("lint:workflows", () => {
     ["a job named ci-ok outside ci.yml", "edge.yml", workflow({ jobs: job("ci-ok") }), "required-check-name"],
     ["a job named pr-title outside pr-title.yml", "ci.yml", workflow({ jobs: job("build", { extra: "name: pr-title" }) }), "required-check-name"],
     ["a second job named ci-ok", "ci.yml", workflow({ jobs: `${job("ci-ok")}\n${job("other", { extra: "name: ci-ok" })}` }), "required-check-name"],
+    ["a job named CI-OK outside ci.yml", "edge.yml", workflow({ jobs: job("attest", { extra: "name: CI-OK" }) }), "required-check-name"],
+    ["a job name that is an expression evaluating to pr-title", "edge.yml", workflow({ jobs: job("attest", { extra: "name: ${{ 'pr-title' }}" }) }), "required-check-name"],
+    ["a job name that is ci- and an expression", "edge.yml", workflow({ jobs: job("attest", { extra: "name: ci-${{ 'ok' }}" }) }), "required-check-name"],
+    ["a job named by a matrix value", "live.yml", workflow({ jobs: job("live", { extra: "name: ${{ matrix.n }}\nstrategy:\n  matrix:\n    n: [pr-title]" }) }), "required-check-name"],
+    ["pr-title.yml on a trigger besides pull_request_target", "pr-title.yml", workflow({ on: "pull_request_target:\n  pull_request:", jobs: job("pr-title") }), "pr-title-trigger"],
     ["a runner label ending in -latest", "ci.yml", workflow({ jobs: job("build", { runsOn: "ubuntu-latest" }) }), "runner"],
     ["a self-hosted runner", "ci.yml", workflow({ jobs: job("build", { runsOn: "[self-hosted, linux]" }) }), "runner"],
     ["a YAML alias", "ci.yml", workflow({ jobs: job("build", { extra: "env: &shared\n  A: b" }) + "\n" + job("other", { extra: "env: *shared" }) }), "yaml-alias"],
+    ["a %YAML directive, which turns on: into true:", "ci.yml", `%YAML 1.1\n---\n${workflow({ on: "pull_request_target:" })}`, "yaml-directive"],
+    ["a %TAG directive", "ci.yml", `%TAG !x! tag:example.com,2026:\n---\n${workflow()}`, "yaml-directive"],
+    ["an explicit YAML tag", "ci.yml", workflow({ jobs: job("build").replace("runs-on: ubuntu-24.04", "runs-on: !!str ubuntu-24.04") }), "yaml-tag"],
+    ["no on key", "ci.yml", ["name: x", "permissions: {}", "jobs:", job("build"), ""].join("\n"), "on-key"],
+    ["an on key that names no trigger", "ci.yml", workflow({ on: "{}" }), "on-key"],
+    ["a local action in a step", "ci.yml", workflow({ jobs: job("build", { steps: "- uses: ./.github/actions/x" }) }), "local-action"],
+    ["a reusable workflow outside .github/workflows", "ci.yml", workflow({ jobs: "  build:\n    uses: ./scripts/build.yml\n    permissions:\n      contents: read" }), "local-action"],
+    [
+      "a pull_request_target workflow that calls a reusable workflow",
+      "pr-title.yml",
+      workflow({
+        on: "pull_request_target:",
+        jobs: `${job("pr-title")}\n  build:\n    uses: ./.github/workflows/build-darwin.yml\n    permissions:\n      contents: read\n    with:\n      ref: \${{ github.event.pull_request.head.sha }}`,
+      }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that fetches the pull request with git -C",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: git -C . fetch origin "pull/$PR/head"' }) }),
+      "pull-request-target",
+    ],
+    [
+      "a pull_request_target workflow that fetches the pull request through env",
+      "owner-merge.yml",
+      workflow({ on: "pull_request_target:", jobs: job("check", { steps: '- run: env GIT_TERMINAL_PROMPT=0 git --no-pager fetch origin "pull/$PR/head"' }) }),
+      "pull-request-target",
+    ],
+    ["npm ci with --ignore-scripts false", "ci.yml", workflow({ jobs: job("build", { steps: "- run: npm ci --ignore-scripts false" }) }), "ignore-scripts"],
+    ["npm ci with --no-ignore-scripts after --ignore-scripts", "ci.yml", workflow({ jobs: job("build", { steps: "- run: npm ci --ignore-scripts --no-ignore-scripts" }) }), "ignore-scripts"],
+    [
+      "a mixed-case checkout without persist-credentials false",
+      "ci.yml",
+      workflow({ jobs: job("build", { steps: `- uses: ${CHECKOUT.replace("actions/checkout", "Actions/Checkout")}\n  with:\n    fetch-depth: 0` }) }),
+      "persist-credentials",
+    ],
+    [
+      "a mixed-case cache in a pack job",
+      "build-darwin.yml",
+      workflow({ jobs: job("pack", { steps: `- uses: ${CACHE.replace("actions/cache@", "Actions/Cache/restore@")}\n  with:\n    path: x\n    key: y` }) }),
+      "cache",
+    ],
+    [
+      "a mixed-case setup-node cache in a publish job",
+      "release.yml",
+      workflow({ jobs: job("publish", { extra: "environment: publish", steps: `- uses: ${SETUP_NODE.replace("actions/setup-node", "ACTIONS/setup-node")}\n  with:\n    cache: npm` }) }),
+      "cache",
+    ],
     ["a file that does not parse", "ci.yml", "on: [push\njobs: {", "parse"],
   ])("lint:workflows fails on %s", (_label, file, text, rule) => {
     expect(rulesBroken(file, text)).toEqual([rule]);
+  });
+
+  it("lint:workflows allows a job name whose expression follows literal text that no required check starts with", () => {
+    const text = workflow({
+      jobs: job("check", { extra: 'name: check (Node ${{ matrix.node }})\nstrategy:\n  matrix:\n    node: ["22.22.2", "26.10.0"]' }),
+    });
+
+    expect(checkWorkflows([{ path: ".github/workflows/ci.yml", text }])).toEqual([]);
   });
 
   it("lint:workflows allows ${{ matrix.* }} and ${{ runner.* }} inside run, and expressions in env", () => {
@@ -114,6 +175,7 @@ describe("lint:workflows", () => {
           "  env:",
           "    TITLE: ${{ github.event.pull_request.title }}",
           "- run: npm --prefix packages/core ci --ignore-scripts && npm run check",
+          "- run: npm ci --ignore-scripts true && npm install --ignore-scripts=true --save-dev x",
           "- run: echo 'npm ci is in a string' # npm install in a comment",
           "- run: node scripts/check-secrets.mjs --secrets.KEY",
         ].join("\n"),
