@@ -41,3 +41,20 @@ export function daemonEnvironment(parent: Env): Record<string, string> {
   }
   return env;
 }
+
+/** Whether a Desk process may start Chrome (`guiAllowed`): passed on to `desk watch`, never to the daemon or its shells. */
+const GUI_FLAGS = ["DESK_ALLOW_GUI", "DESK_IN_CONTAINER", "DESK_NO_GUI"];
+
+/**
+ * `desk watch`'s environment (§6.1 step 13): the daemon's allowlist, the Desk home, and the GUI permission the launcher
+ * had, so a crash relaunch (§6.4) may start Chrome where `desk` could.
+ */
+export function watchEnvironment(parent: Env, deskHome: string): Record<string, string> {
+  const env = daemonEnvironment(parent);
+  for (const name of GUI_FLAGS) {
+    const value = parent[name];
+    if (value !== undefined) env[name] = value;
+  }
+  env.DESK_HOME = deskHome;
+  return env;
+}

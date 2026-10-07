@@ -14,9 +14,22 @@ declare namespace chrome {
     function getManifest(): { version: string; version_name?: string };
     function connectNative(application: string): Port;
     function getContexts(filter: { contextTypes: string[] }): Promise<{ windowId: number }[]>;
+    const id: string;
+    function getURL(path: string): string;
+    function sendMessage(message: unknown): Promise<unknown>;
+    interface MessageSender {
+      id?: string;
+      url?: string;
+    }
+    const onMessage: {
+      addListener(listener: (message: unknown, sender: MessageSender, sendResponse: (response: unknown) => void) => boolean | undefined): void;
+    };
   }
   export namespace sidePanel {
     function setPanelBehavior(behavior: { openPanelOnActionClick: boolean }): Promise<void>;
+    function setOptions(options: { path?: string; enabled?: boolean }): Promise<void>;
+    /** Chrome 141 and later. */
+    function close(options: { windowId: number }): Promise<void>;
     /** Chrome 141 and later. */
     const onOpened: { addListener(listener: (info: { windowId: number }) => void): void } | undefined;
     const onClosed: { addListener(listener: (info: { windowId: number }) => void): void } | undefined;

@@ -116,7 +116,7 @@ export async function main(input: MainInput): Promise<number> {
         process.once("SIGTERM", () => resolve());
         process.once("SIGHUP", () => resolve());
       });
-      return await watchCommand({ deskHome, version: version.info.version, until });
+      return await watchCommand({ env: input.env, platform: input.platform, deskHome, version: version.info.version, until, log: watchLog });
     }
     if (command === "config") {
       if (rest.length !== 1 || rest[0] !== "new-port") return usage();

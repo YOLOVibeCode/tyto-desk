@@ -86,6 +86,7 @@ export class FakeTerminalView implements TerminalView {
   /** The questions the panel asked, and the answers the test gives, in order (no answer means no). */
   readonly questions: string[] = [];
   readonly answers: boolean[] = [];
+  alertText: string | null = null;
   private readonly size: TerminalSize;
 
   constructor(size: TerminalSize = { cols: 100, rows: 30 }) {
@@ -96,6 +97,10 @@ export class FakeTerminalView implements TerminalView {
     const pane = new FakeTerminalPane(paneId, this.size);
     this.panes.push(pane);
     return pane;
+  }
+
+  alert(text: string): void {
+    this.alertText = text;
   }
 
   banner(text: string | null, action?: BannerAction): void {

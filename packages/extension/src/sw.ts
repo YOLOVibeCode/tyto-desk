@@ -1,5 +1,5 @@
 import { WorkerController } from "@desk/core";
-import { BrowserClock, ChromeAgentTabs, ChromeHostConnector, ChromeSidePanel, ChromeTabTargets, ChromeWindows } from "./chrome-adapters.ts";
+import { BrowserClock, ChromeAgentTabs, ChromeHostConnector, ChromePanelQuestions, ChromeSidePanel, ChromeTabTargets, ChromeWindows } from "./chrome-adapters.ts";
 import { deskBuild } from "./desk-build.ts";
 
 /**
@@ -13,5 +13,6 @@ void new WorkerController({
   tabs: new ChromeTabTargets(),
   agentTabs: new ChromeAgentTabs(),
   clock: new BrowserClock(),
+  questions: new ChromePanelQuestions(),
   build: deskBuild(),
 }).start();

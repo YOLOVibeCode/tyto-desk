@@ -15,4 +15,5 @@ export const LIVE_PORTS = {
   survive: 9497,
   terminal: 9507,
   reuse: 9517,
+  watch: 9527,
 } as const;

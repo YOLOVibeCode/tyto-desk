@@ -16,7 +16,7 @@ export const IN_DATA_MAX = 64 * 1024;
 export type ClientKind = "panel" | "sw" | "cli" | "watch";
 
 /** Extension calls the daemon relays to the service worker (§9); slice 4b adds the tab calls. */
-export type ExtOp = "windows" | "focusWindow" | "tabCurrent" | "tabMine";
+export type ExtOp = "windows" | "focusWindow" | "tabCurrent" | "tabMine" | "autoOpen";
 
 export type Hello = {
   type: "hello";
@@ -139,7 +139,7 @@ export function errorMessage(code: ErrorCode, about: { id?: string; pane?: strin
 const PANE_ID = /^p_[0-9abcdefghjkmnpqrstvwxyz]{10}$/;
 const REQUEST_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 const KINDS: readonly string[] = ["panel", "sw", "cli", "watch"];
-const OPS: readonly string[] = ["windows", "focusWindow", "tabCurrent", "tabMine"];
+const OPS: readonly string[] = ["windows", "focusWindow", "tabCurrent", "tabMine", "autoOpen"];
 const CODES: readonly string[] = Object.keys(ERROR_TEXT);
 const COLS_MAX = 1000;
 const ROWS_MAX = 500;

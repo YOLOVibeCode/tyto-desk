@@ -7,6 +7,7 @@ export class FakeChromeProfile implements ChromeProfile {
   localState: Record<string, unknown> = {};
   readonly seeded: Readonly<Record<string, unknown>>[] = [];
   cleared = 0;
+  exit: string | null = "Normal";
 
   constructor(options: { lock?: { host: string; pid: number } | null; preferencesExist?: boolean } = {}) {
     this.lock = options.lock ?? null;
@@ -15,6 +16,10 @@ export class FakeChromeProfile implements ChromeProfile {
 
   async singleton(): Promise<{ host: string; pid: number } | null> {
     return this.lock;
+  }
+
+  async exitType(): Promise<string | null> {
+    return this.exit;
   }
 
   async clearStaleSingleton(): Promise<void> {

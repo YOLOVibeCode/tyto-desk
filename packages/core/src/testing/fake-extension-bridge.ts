@@ -9,6 +9,8 @@ export class FakeExtensionBridge implements ExtensionBridge {
   readonly focused: number[] = [];
   current: string | null = null;
   readonly mine = new Map<string, string>();
+  readonly autoOpens: { windowId: number; close: boolean }[] = [];
+  autoOpenAnswers = true;
 
   constructor(windowList: DeskWindow[] | null = []) {
     this.windowList = windowList;
@@ -25,6 +27,12 @@ export class FakeExtensionBridge implements ExtensionBridge {
 
   async tabCurrent(): Promise<string | null> {
     return this.current;
+  }
+
+  async autoOpen(windowId: number, close: boolean): Promise<boolean> {
+    if (!this.autoOpenAnswers) return false;
+    this.autoOpens.push({ windowId, close });
+    return true;
   }
 
   async tabMine(pane: string): Promise<string | null> {

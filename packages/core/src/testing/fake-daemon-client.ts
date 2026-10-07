@@ -51,7 +51,7 @@ export class FakeDaemonClient implements DaemonClient {
         },
         notify: async (message) => {
           this.notices.push(message);
-          this.log.push(`daemon.${message.type} ${message.mode}`);
+          this.log.push(`daemon.${message.type} ${message.type === "shutdown" ? message.mode : message.kind}`);
         },
         close: () => undefined,
       },

@@ -6,6 +6,8 @@ export class FakeDevToolsHttp implements DevToolsHttp {
   /** Probes to stay silent for after `answering` is set, as a starting Chrome is. */
   silentProbes = 0;
   readonly probed: number[] = [];
+  /** The browser id in the WebSocket URL; a Chrome that restarted has a new one. */
+  browserId = "0b5ad5d6-0000-4000-8000-000000000001";
   private readonly browser: string;
   private readonly log: string[];
 
@@ -23,6 +25,6 @@ export class FakeDevToolsHttp implements DevToolsHttp {
       return null;
     }
     this.log.push("json/version answered");
-    return { browser: this.browser, wsUrl: `ws://127.0.0.1:${port}/devtools/browser/0b5ad5d6-0000-4000-8000-000000000001` };
+    return { browser: this.browser, wsUrl: `ws://127.0.0.1:${port}/devtools/browser/${this.browserId}` };
   }
 }

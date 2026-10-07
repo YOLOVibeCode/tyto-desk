@@ -5,7 +5,7 @@ import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "@de
 export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
 
 /** What the live suite reads in a test build (docs/IMPLEMENTATION.md §17.3); production builds drop it. */
-type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string; calls(paneId: string): string[] };
+type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string; alert(): string; calls(paneId: string): string[] };
 
 /**
  * The panel's terminals (§10's xterm options, slice 1c's subset): `convertEol` false, the scrollback the mirror keeps,
@@ -15,14 +15,16 @@ type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): 
 export class XtermView implements TerminalView {
   private readonly container: HTMLElement;
   private readonly bannerElement: HTMLElement;
+  private readonly alertElement: HTMLElement;
   private readonly options: XtermOptions;
   private readonly terminals = new Map<string, Terminal>();
   /** In a test build, each pane's last 200 resets, writes (their length) and resizes, for the live suite's reports. */
   private readonly calls = new Map<string, string[]>();
 
-  constructor(container: HTMLElement, bannerElement: HTMLElement, options: XtermOptions) {
+  constructor(container: HTMLElement, bannerElement: HTMLElement, alertElement: HTMLElement, options: XtermOptions) {
     this.container = container;
     this.bannerElement = bannerElement;
+    this.alertElement = alertElement;
     this.options = options;
     if (DESK_TEST) {
       const hooks: TestHooks = {
@@ -36,6 +38,7 @@ export class XtermView implements TerminalView {
         panes: () => [...this.terminals.keys()],
         banner: () => (this.bannerElement.hidden ? "" : (this.bannerElement.textContent ?? "")),
         calls: (paneId) => [...(this.calls.get(paneId) ?? [])],
+        alert: () => (this.alertElement.hidden ? "" : (this.alertElement.textContent ?? "")),
       };
       (globalThis as { deskTest?: TestHooks }).deskTest = hooks;
     }
@@ -135,6 +138,11 @@ export class XtermView implements TerminalView {
       this.bannerElement.hidden = false;
       yes.focus();
     });
+  }
+
+  alert(text: string): void {
+    this.alertElement.textContent = text;
+    this.alertElement.hidden = false;
   }
 
   banner(text: string | null, action?: BannerAction): void {

@@ -81,6 +81,23 @@ describe("the Desk profile", () => {
     expect(await new NodeChromeProfile(profile).singleton()).toBeNull();
   });
 
+  it.each([
+    ["Crashed", JSON.stringify({ profile: { exit_type: "Crashed" } }), "Crashed"],
+    ["Normal", JSON.stringify({ profile: { exit_type: "Normal", name: "Desk" } }), "Normal"],
+    ["no exit type", JSON.stringify({ profile: {} }), null],
+    ["a damaged file", "{", null],
+  ])("ChromeProfile reads exit_type %s from Default/Preferences", async (_, text, exit) => {
+    const profile = await mkdtemp(join(tmpdir(), "profile-"));
+    await mkdir(join(profile, "Default"));
+    await writeFile(join(profile, "Default", "Preferences"), text);
+
+    expect(await new NodeChromeProfile(profile).exitType()).toBe(exit);
+  });
+
+  it("ChromeProfile has no exit_type before Chrome's first run", async () => {
+    expect(await new NodeChromeProfile(await mkdtemp(join(tmpdir(), "profile-"))).exitType()).toBeNull();
+  });
+
   it("ChromeProfile reads SingletonLock's host and pid", async () => {
     const profile = await mkdtemp(join(tmpdir(), "profile-"));
     await symlink("alex-mbp.local-4242", join(profile, "SingletonLock"));
