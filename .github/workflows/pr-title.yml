@@ -1,0 +1,42 @@
+# `pr-title`, a required check (docs/IMPLEMENTATION.md §23.1, §23.7, D45). main's own check-pr.mjs judges the pull
+# request's title and head branch (through env) and its workflow files, read through the REST API at the head commit as
+# data and checked against main's workflow rules, each pinned SHA against its tag. It checks out main, installs from
+# main's lockfile with no scripts and no cache, and never checks out or runs anything from the pull request. It runs
+# again when the title is edited, which is why it lives apart from ci.yml.
+name: pr-title
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - name: The title, the branch, and the pull request's workflow files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: node scripts/delivery/check-pr.mjs --github

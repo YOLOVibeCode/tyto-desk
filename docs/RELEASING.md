@@ -96,8 +96,9 @@ not that anyone read it. A stable release is the version you read and chose to c
 
 ### Pre-flight
 
-- [ ] Slice 1c has merged. Before it there is no runtime to release, and the release PR's `ci-ok` stays red on
-      purpose.
+- [ ] Slices 1c and D2 have merged. Before 1c there is no runtime to release, and before D2 no `install.sh`, which
+      `publish` requires; until both, the release PR's `ci-ok` stays red and `release.yml`'s `plan` refuses, on
+      purpose (IMPLEMENTATION D58, D67).
 - [ ] CI on `main` is green: `gh run list --workflow ci.yml --branch main --limit 1`.
 - [ ] Find the release PR, a draft: `gh pr list --label "autorelease: pending"`.
 - [ ] Read what changed since the last release, not only the changelog: release-please writes it from PR titles and
@@ -107,9 +108,9 @@ not that anyone read it. A stable release is the version you read and chose to c
   ```bash
   git fetch origin --tags
   git log --oneline vPREV..origin/main
-  git diff --stat vPREV..origin/main -- .github scripts/delivery scripts/allowed-install-scripts.json .npmrc \
-    .gitleaks.toml scripts/lib/secrets.mjs package.json package-lock.json release-please-config.json \
-    CLAUDE.md AGENTS.md .claude .cursor
+  git diff --stat vPREV..origin/main -- .github scripts/delivery packages/core/src/release \
+    scripts/allowed-install-scripts.json .npmrc .gitleaks.toml scripts/lib/secrets.mjs package.json \
+    package-lock.json release-please-config.json CLAUDE.md AGENTS.md .claude .cursor
   ```
 
   Read every change to those paths in full (`git diff vPREV..origin/main -- <path>`) before you merge.
@@ -164,9 +165,10 @@ and after any change to the release path.
 | Symptom | Action |
 |---|---|
 | No release PR | Only a `feat`, `fix`, `perf`, `refactor`, or `revert` commit, or a breaking change, proposes one. Or the release App is missing: `release-please.yml`'s run says so (one-time setup, below) |
-| The release PR's checks are red | Fix it on `main` in a PR; release-please updates its PR. Before slice 1c, `ci-ok` is red on purpose |
+| The release PR's checks are red | Fix it on `main` in a PR; release-please updates its PR. Before slices 1c and D2, `ci-ok` is red on purpose: it names the missing runtime or installer |
 | The release PR merged, but there is no `vX.Y.Z` tag or draft | `release-please.yml` failed (the App's token, an outage): `gh workflow run release-please.yml` |
-| `release.yml` failed in `plan` | It names the refusal: a tag off `main`, a version that differs from package.json, or no release for the tag |
+| `release.yml` failed in `plan` | It names the refusal: a tag off `main`, a version that differs from package.json, or no runtime (slice 1c) or installer (slice D2) yet |
+| `publish` failed: no release for the tag | release-please drafts the release with its tag; if it did not, `gh workflow run release-please.yml`, then re-run the failed jobs |
 | `release.yml` failed in build, live, publish, or verify for a passing reason (runner, network, Sigstore) | `gh run rerun <run-id> --failed`. The draft and its tag wait. `publish` resumes: a release an earlier attempt already published with matching assets goes straight to `verify` |
 | The live suite failed because Google pruned the pinned Chrome | Bump the pin in a PR (IMPLEMENTATION §17.3), leave that tag a draft, and release the next patch. The release PR's own live run normally catches this first |
 | `release.yml` failed because of the code | Fix forward: a `fix:` PR, then merge the next release PR (X.Y.Z+1). The failed version stays an unpublished draft that nothing installs; delete the draft in the web UI if you like. Its tag stays, and nobody moves it |
@@ -208,9 +210,15 @@ It sets squash-only merges with the PR title and body as the commit, auto-merge,
 (GitHub-owned actions plus two named ones, full-SHA pinning, a read-only `GITHUB_TOKEN`, approval before any outside
 contributor's PR runs workflows), immutable releases, secret scanning with push protection, Dependabot alerts and
 security updates, the `release-please` and `publish` environments (you as `publish`'s required reviewer), the `live`
-and `owner-merge` labels, and the `main`, `tags`, and `release branch` rulesets. Until you have run it, every PR merges
-by the interim rule ([CONTRIBUTING](./CONTRIBUTING.md#open-a-pull-request)). Right after, edit or push to every PR that
-was already open, so `pr-title` runs on it. Run `--check` whenever you wonder whether a setting drifted.
+and `owner-merge` labels, and the `main`, `tags`, and `release branch` rulesets. Run it as soon as D1 has merged:
+until then no check is required, every PR merges by the interim rule
+([CONTRIBUTING](./CONTRIBUTING.md#open-a-pull-request)), and Dependabot, which starts the moment `dependabot.yml` is on
+`main`, gets a comment instead of auto-merge on every PR, even an allowed dev-tool patch (`dependabot-auto-merge.yml`
+turns auto-merge on only once `main` requires `pr-title` and `ci-ok`). Merge those by hand by the interim rule, or,
+after `--apply`, comment `@dependabot rebase` on each so the workflow runs again. Right after `--apply`, rebase every
+PR that was open before D1 merged onto `main` (or merge `main` into it): `pr-title` checks the workflow files at a
+PR's head, so a branch from before D1 fails it until its head carries D1's workflows. Run `--check` whenever you
+wonder whether a setting drifted.
 
 ### 2. The Desk Release App
 

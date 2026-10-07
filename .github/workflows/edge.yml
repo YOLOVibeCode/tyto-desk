@@ -1,0 +1,55 @@
+# Edge builds (docs/IMPLEMENTATION.md §23.3, §23.7, D39): every push to main that is not docs-only builds the next
+# patch's edge prerelease on macos-26, then attests it. `desk update --channel edge` installs only what this workflow
+# attested on refs/heads/main. Until slice 1c adds `npm run pack` there is no runtime: the build stamps and reports,
+# and nothing is attested.
+name: edge
+
+on:
+  push:
+    branches: [main]
+    # Everything but docs/, root Markdown other than CLAUDE.md and AGENTS.md, and LICENSE (ci-changes.mjs's rule).
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!*.md"
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - "!LICENSE"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: edge
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-darwin.yml
+    permissions:
+      contents: read
+    with:
+      channel: edge
+      ref: ${{ github.sha }}
+
+  attest:
+    needs: build
+    if: needs.build.outputs.runtime == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desk-edge-darwin-arm64
+          path: edge
+      - name: Check the files against SHA256SUMS
+        working-directory: edge
+        run: sha256sum --check --strict SHA256SUMS
+      - name: Attest build provenance for every file SHA256SUMS names
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: edge/SHA256SUMS

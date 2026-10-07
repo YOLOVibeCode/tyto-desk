@@ -10,7 +10,8 @@ terminal.
 them, follow the laws and say so.
 
 Path-specific rules: `.claude/rules/`. Product: `docs/SPEC.md`. Engineering contract: `docs/IMPLEMENTATION.md` (§0
-laws, §19 slices, §20 anti-patterns, §22 decisions). Manual checks on the Mac: `docs/CHECKLIST-macos.md`.
+laws, §19 slices, §20 anti-patterns, §22 decisions, §23 delivery). Manual checks on the Mac: `docs/CHECKLIST-macos.md`.
+Branches, pull requests and the rules for agents: `docs/CONTRIBUTING.md`. Versions and releases: `docs/RELEASING.md`.
 
 ## TDD
 
@@ -63,20 +64,40 @@ laws, §19 slices, §20 anti-patterns, §22 decisions). Manual checks on the Mac
   `Redactor` runs on every string that reaches disk. Desk sends nothing to a model.
 - Consent operations go through `Prompter` on an interactive TTY. There is no `--yes`.
 
+## Pull requests and releases (IMPLEMENTATION §23.1; CONTRIBUTING, rules for agents)
+
+- Work in your own worktree, on a `slice-<id>/<topic>`, `feat/…`, `fix/…`, `docs/…`, `ci/…` or `chore/…` branch from
+  `origin/main`. The PR title is a Conventional Commit (`feat(slice-1c): …`, the slice id as the scope); check it with
+  `node scripts/delivery/check-pr.mjs --title "<title>"` before `gh pr create`.
+- Never push to `main`, never create or push a tag, never `gh pr merge --admin`, `--merge` or `--rebase`.
+- Until `node scripts/delivery/github-setup.mjs` (its `--check`) is clean, never pass `--auto`: merge with
+  `gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>`. Afterwards,
+  `gh pr merge --auto --squash` right after `gh pr create`.
+- Never merge a PR labeled `owner-merge`, turn its auto-merge on, or remove the label. A change to an owner-merge path
+  (`scripts/delivery/owner-paths.json`: `.github/`, `scripts/delivery/`, the agent rules, …) goes in its own PR and
+  waits for the owner.
+- Never merge the release PR, mark it ready, turn its auto-merge on, or push to its branch. Never approve a deployment.
+- Never edit package.json's `version`, package-lock.json's root version, `.release-please-manifest.json`, or
+  `CHANGELOG.md`: release-please owns them.
+- Never run `npm run deploy`, `desk update`, `desk use`, `desk rollback`, or `github-setup.mjs --apply`. `npm run pack`
+  (it writes only `dist/`) and `github-setup.mjs --check` (it only reads) are fine.
+- Name the signed-in `gh` account with `gh api user --jq .login`. Never print a secret.
+
 ## Stack
 
 | Area | Standard |
 |---|---|
 | TypeScript 5.9.3 | `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`, Node16 ESM, `.ts` imports, named exports, no `any` |
-| Tests | Vitest 3.2.7, fakes on ports, offline by default |
+| Tests | Vitest 5.0.3, fakes on ports, offline by default |
 | Node | 22.22+ / 24.15+ / 26 (`.nvmrc` 26.10.0), ESM, `node:` specifiers, `fs/promises`, AbortSignal timeouts |
 | Supply chain | `.npmrc` `ignore-scripts=true`, exact pins, package-lock committed, `lint:install-scripts` |
 | Bundles | esbuild 0.28.2 |
-| CI | `npm run check` on Node 22.22.2 and 26.10.0, `npm audit signatures`, gitleaks 8.24.3 `--redact`, actions pinned by commit SHA |
+| CI | `npm run check` on Node 22.22.2 and 26.10.0, `npm audit signatures`, gitleaks 8.24.3 `--redact`, actions pinned by commit SHA; required checks `pr-title` and `ci-ok` |
+| Delivery | Conventional Commit PR titles, squash merges, release-please draft release PRs, attested builds (`scripts/delivery/`, IMPLEMENTATION §23) |
 
 After every change: `npm run check` (`lint:imports`, `lint:extension`, `lint:listen`, `lint:install-scripts`,
-`secrets:scan`, `test`, `typecheck`, `build`). Use Node 26 (`nvm use` reads `.nvmrc`); the default `node` on PATH may
-be older.
+`lint:workflows`, `secrets:scan`, `test`, `typecheck`, `build`). Use Node 26 (`nvm use` reads `.nvmrc`); the default
+`node` on PATH may be older.
 
 <!-- agent-playbook -->
 ## Efficient generation

@@ -1,0 +1,85 @@
+# The live suite in CI (docs/IMPLEMENTATION.md §17.3, §23.7, D47, D64): `npm run test:live -- --ci` drives the
+# runner's own Docker on ubuntu-24.04-arm, with the same phases, flags, seccomp profile and sandboxed Chrome as on the
+# Mac. Called by live.yml (weekly, on dispatch, on PRs labeled live) and by release.yml (the release gate). No secrets.
+#
+# Until slice 1b adds `npm run test:live`, this passes with a notice that there is nothing to run. Once it exists, the
+# suite runs, and a runner without the CI mode fails here rather than passing the gate unrun.
+#
+# The pinned Chrome .deb lives in an Actions cache keyed by its sha256 (test/live/image/Dockerfile's CHROME_SHA256),
+# never in a registry (D60): the runner's --ci mode keeps it under ~/.cache/desk-live/chrome/<sha256>/, which this job
+# restores before the suite and saves only on main after a miss (PR and tag runs read main's entries); live.yml keeps
+# the entry alive every three days.
+name: live-run
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to test
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Is there a live suite? (npm run test:live arrives with slice 1b)
+        id: suite
+        run: |
+          if [ "$(npm pkg get 'scripts.test:live')" = "{}" ]; then
+            echo "::notice title=live::No npm run test:live yet (slice 1b): there is no live suite to run, so this passes."
+            echo "No live suite yet: slice 1b adds npm run test:live." >> "$GITHUB_STEP_SUMMARY"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The pinned Chrome .deb's cache key
+        id: chrome
+        if: steps.suite.outputs.present == 'true'
+        run: |
+          sha="$(sed -n 's/^ARG CHROME_SHA256=\([0-9a-f]\{64\}\)$/\1/p' test/live/image/Dockerfile)"
+          if [ -z "$sha" ]; then
+            echo "::error title=live::test/live/image/Dockerfile pins no CHROME_SHA256."
+            exit 1
+          fi
+          echo "key=desk-live-chrome-$sha" >> "$GITHUB_OUTPUT"
+      - name: Restore the pinned Chrome .deb
+        id: restore
+        if: steps.suite.outputs.present == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/desk-live/chrome
+          key: ${{ steps.chrome.outputs.key }}
+      - name: Let Chrome's sandbox use unprivileged user namespaces (Ubuntu 24.04's AppArmor limit; never --no-sandbox)
+        if: steps.suite.outputs.present == 'true'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: The live suite, in its container on the runner's Docker
+        if: steps.suite.outputs.present == 'true'
+        run: npm run test:live -- --ci
+      - name: Keep the pinned Chrome .deb (runs on main only)
+        if: steps.suite.outputs.present == 'true' && github.ref == 'refs/heads/main' && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/desk-live/chrome
+          key: ${{ steps.chrome.outputs.key }}
+      - name: Upload the results (screenshots, logs)
+        if: always() && steps.suite.outputs.present == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desk-live-results-${{ github.run_attempt }}
+          path: test-results/
+          retention-days: 14
+          if-no-files-found: ignore

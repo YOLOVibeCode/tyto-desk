@@ -27,7 +27,8 @@ npm run check                         # lints, secret scan, tests, type check, b
 | `docs/<topic>` · `ci/<topic>` · `chore/<topic>` | documents, workflows, tooling |
 
 Topics are lowercase letters, digits, and hyphens, at most 50 characters. Branch from `origin/main`. `dependabot/…` and
-`release-please--branches--main` belong to the bots; nobody else pushes to them.
+`release-please--branches--main--components--tyto-desk` (the release PR's) belong to the bots; nobody else pushes to
+them.
 
 ## Pull request titles
 
@@ -52,6 +53,7 @@ slice's "Done when" stands. Put a `BREAKING CHANGE:` footer there for a breaking
 ```bash
 git switch -c slice-1c/walking-skeleton origin/main
 # tests first, then code; npm run check
+node scripts/delivery/check-pr.mjs --title "feat(slice-1c): one shell, one agent, in the left panel"   # pr-title, locally
 git push -u origin slice-1c/walking-skeleton
 gh pr create --title "feat(slice-1c): one shell, one agent, in the left panel" --body-file - <<'EOF'
 What changed and why. Tests that ran, by name. Where the slice's "Done when" stands.
@@ -62,7 +64,8 @@ gh pr merge --auto --squash
 **Interim rule.** Until the owner has applied the repository settings (slice D1, then
 `node scripts/delivery/github-setup.mjs --apply`; today), no check is required, and `gh pr merge --auto` merges a PR
 at once, even while its checks are running or failing. Until then, never pass `--auto`; wait for the checks and name
-the commit they ran on:
+the commit they ran on (`dependabot-auto-merge.yml` keeps the rule too: until `main` requires the checks, it comments
+instead of turning auto-merge on):
 
 ```bash
 gh pr checks <n> --watch --fail-fast && gh pr merge <n> --squash --match-head-commit <sha>
@@ -73,7 +76,7 @@ Afterwards, the PR merges itself once its two required checks pass:
 | Check | Workflow | What it runs |
 |---|---|---|
 | `pr-title` | `pr-title.yml` | from `main`'s copy of `scripts/delivery/check-pr.mjs`: the title and branch rules above, and the workflow rules on your PR's workflow files, each pinned SHA checked against its tag |
-| `ci-ok` | `ci.yml` | passes when `scan` (secret scan, gitleaks) passed and, if code changed, `check` (Node 22.22.2 and 26.10.0) and `macos` (the darwin-arm64 build) passed |
+| `ci-ok` | `ci.yml` | passes when `scan` (secret scan, gitleaks) passed and, if code changed, `check` (Node 22.22.2 and 26.10.0) and `macos` (the darwin-arm64 build) passed; on the release PR it also needs a runtime and an installer (slices 1c and D2) |
 
 A docs-only PR (`docs/`, root Markdown other than `CLAUDE.md` and `AGENTS.md`, `LICENSE`) runs only `pr-title`,
 `scan`, and `ci-ok`; agent rules and package files count as code. Label a PR `live` to run the live suite on it too.
@@ -84,8 +87,8 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
 | Pull request | Auto-merge |
 |---|---|
 | Yours or an agent's | `gh pr merge --auto --squash`, right after `gh pr create` (once the interim rule has ended) |
-| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/` | never: `owner-merge.yml` labels it `owner-merge` and turns auto-merge off; the operator reads the diff and merges it |
-| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml` | turned on by `dependabot-auto-merge.yml` |
+| One that touches an owner-merge path: `.github/`, `scripts/delivery/`, `packages/core/src/release/`, `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`, `scripts/lib/secrets.mjs`, the release-please config or manifest, `CLAUDE.md`, `AGENTS.md`, `.claude/`, `.cursor/`; or one whose files the API did not list in full | never: `owner-merge.yml` turns auto-merge off and labels it `owner-merge`; the operator reads the diff and merges it |
+| Dependabot: a patch update of `@types/*`, `typescript`, `vitest`, or `yaml` | turned on by `dependabot-auto-merge.yml`, once `main` requires `pr-title` and `ci-ok` (until then the operator merges it) |
 | Dependabot: the weekly GitHub Actions group | never: the operator reads the new SHAs and the tags they claim, then merges it |
 | Dependabot: anything else (runtime or bundled packages, esbuild, majors, the live image's base) | the operator decides |
 | The release PR, `chore(main): release X.Y.Z` | never: it opens as a draft; the operator marks it ready and merges it to release |
@@ -110,9 +113,10 @@ No approval is needed: GitHub never lets an author approve their own PR, and `ma
    green; a known gap is an `it.fails` naming its issue.
 9. Never print a secret. To see who `gh` is signed in as, run `gh api user --jq .login`, never `gh auth status`. Never
    give a secret to a workflow that runs on pull requests.
-10. In a workflow, pin every action to a commit SHA with its tag in a comment
-    (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`), set least-privilege `permissions`, and keep
-    `npm run lint:workflows` green; `main`'s `pr-title` applies the same rules to your workflow files.
+10. In a workflow, pin every action to a commit SHA with its tag in a comment, a tag and never a branch or a commit
+    (`gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`), set top-level `permissions: {}` and give each job only
+    the scopes it needs, and keep `npm run lint:workflows` green; `main`'s `pr-title` applies the same rules to your
+    workflow files.
 11. One slice, or one fix, per PR.
 
 ## Docs

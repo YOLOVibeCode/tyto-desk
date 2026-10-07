@@ -1,0 +1,59 @@
+# Dependabot auto-merge (docs/IMPLEMENTATION.md §23.7, D44, D54). Only for Dependabot's own pull requests from this
+# repository: fetch-metadata (never skip-verification) reads what changed, main's dependency-free
+# automerge-decision.mjs decides, and only patch updates of allowlisted dev tools (@types/*, typescript, vitest, yaml),
+# every member of a group included, get auto-merge, and only once main's rules require pr-title and ci-ok (the interim
+# rule: until then gh pr merge --auto would merge at once, before the checks). Any other gets a comment naming why the
+# owner merges it. No npm ci, no checkout of the pull request.
+name: dependabot-auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions: {}
+
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: What Dependabot updated
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/delivery
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Does it merge itself? (the update class, then main's rules, read-only)
+        id: decision
+        env:
+          UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: node scripts/delivery/automerge-decision.mjs
+      - name: Turn on auto-merge (squash)
+        if: steps.decision.outputs.merge == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+      - name: Say why the owner merges this one
+        if: steps.decision.outputs.merge != 'true' && github.event.action != 'synchronize'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REASON: ${{ steps.decision.outputs.reason }}
+        run: |
+          gh pr comment "$PR_URL" --body "The owner merges this one by hand: $REASON (IMPLEMENTATION §23.7, D44)."

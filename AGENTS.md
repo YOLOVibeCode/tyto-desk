@@ -18,7 +18,16 @@ driving the same Chrome over CDP. It is **TDD + ISP** with a pure, browser-safe 
    never a signal.
 7. **No secrets in git, logs, or files Desk writes.** Child processes take argv arrays, never shell strings.
 8. **Never re-implement agent-browser.**
-9. After changes: `npm run check`.
+9. **Pull requests and releases** ([CONTRIBUTING](./docs/CONTRIBUTING.md#rules-for-agents),
+   [RELEASING](./docs/RELEASING.md), IMPLEMENTATION §23.1). Conventional Commit titles on `slice-<id>/…`, `feat/…`,
+   `fix/…`, `docs/…`, `ci/…` or `chore/…` branches (`node scripts/delivery/check-pr.mjs --title "…"`). Never push to
+   `main` or a tag, never `--admin`, and no `--auto` until `github-setup.mjs --check` is clean. Never merge, ready or
+   auto-merge the release PR or a PR labeled `owner-merge`, never remove that label, never approve a deployment, never
+   edit the version or the changelog, and never run `npm run deploy`, `desk update`, `desk use`, `desk rollback` or
+   `github-setup.mjs --apply`.
+10. After changes: `npm run check`.
 
-Full contract: [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md). Desk is built interactively on the operator's Mac
-(the user's 2026-10-06 exception to the one-door rule): no farm, no Cloud Agents or Slack job.
+Full contract: [docs/IMPLEMENTATION.md](./docs/IMPLEMENTATION.md). Branches, pull requests and the rules for agents:
+[docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md). Releases: [docs/RELEASING.md](./docs/RELEASING.md). Desk is built
+interactively on the operator's Mac (the user's 2026-10-06 exception to the one-door rule): no farm, no Cloud Agents
+or Slack job.

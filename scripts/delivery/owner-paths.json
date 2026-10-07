@@ -1,0 +1,19 @@
+{
+  "$comment": "Owner-merge paths (docs/IMPLEMENTATION.md §23.1, D50, D61). A pull request that touches one changes the pipeline, code a privileged job runs, or what every later agent obeys: owner-merge.yml labels it owner-merge and turns its auto-merge off, and the owner merges it by hand after reading the diff. `dir/**` is everything under dir; other entries are exact files. Matched without case. Always read from the base branch. `branches` is the release PR's branch (scripts/delivery/lib/release-branch.mjs).",
+  "paths": [
+    ".github/**",
+    "scripts/delivery/**",
+    "packages/core/src/release/**",
+    "scripts/allowed-install-scripts.json",
+    ".npmrc",
+    ".gitleaks.toml",
+    "scripts/lib/secrets.mjs",
+    "release-please-config.json",
+    ".release-please-manifest.json",
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".claude/**",
+    ".cursor/**"
+  ],
+  "branches": ["release-please--branches--main--components--tyto-desk"]
+}
