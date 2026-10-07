@@ -1,0 +1,15 @@
+{
+  "name": "@desk/chrome",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome adapters: the installed Chrome's process and profile, its DevTools HTTP endpoint, and the CDP role adapters (the Desk extension, the panel opener) over Node's WebSocket.",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@desk/core": "0.1.0",
+    "@desk/node": "0.1.0"
+  }
+}

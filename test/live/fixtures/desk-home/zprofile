@@ -1,0 +1,3 @@
+# Copied to the Desk live test's HOME as .zprofile: a login shell's dotfiles build PATH (docs/IMPLEMENTATION.md §7.1),
+# as the operator's do; agent-browser lives in /usr/local/bin in the live image.
+export PATH="/usr/local/bin:$PATH"

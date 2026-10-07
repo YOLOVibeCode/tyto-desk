@@ -1,0 +1,4 @@
+# The fetch stage's build context is this directory (scripts/lib/live-runner.mjs); the live stage's is streamed from
+# the files the image's tag hashes (imageFileAllowed in scripts/lib/live.mjs). Neither ever carries node_modules: the
+# tools' node_modules here is for local use only, and the image installs its own with npm ci --ignore-scripts.
+**/node_modules

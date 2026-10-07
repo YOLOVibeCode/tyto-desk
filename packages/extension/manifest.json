@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Tyto Desk",
+  "version": "0.0.0",
+  "description": "The terminal in Tyto Desk's side panel.",
+  "minimum_chrome_version": "155",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqlu66q2ZLG/1NtfBiPXK1nCR84d/4se9Q/QpZhT9H0tVtiq8+M14DyNTAnFJrAeGqWnryzUBUHFwc0RsizY7TuRSPC310dazEabXQe6R9+FGE77vjybijYmxIK1iaUQYgFPj87ZHohMhP4LBCpL8WSUV6e4bjC4UDAsk6sZWBvOCqy7qLQSMhe2978MdsCd+pFBZP6AvWX8/7lWVaObT8ezdqnzBwAVDDKNRq48GjCWGQX3t8qbQzTlqHHYCsiY+oIlRRn/YknLM//Mtvm0ffXXOusDclfQY8SCtZPk3TpPYT+kn9vOuip8DikaqWeOz9OeRQCmQFlzbyFFrVUxh8QIDAQAB",
+  "permissions": [
+    "sidePanel",
+    "nativeMessaging",
+    "debugger",
+    "tabGroups"
+  ],
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "action": {
+    "default_title": "Desk terminal"
+  },
+  "commands": {
+    "toggle-terminal": {
+      "suggested_key": {
+        "mac": "Command+Shift+Period",
+        "default": "Ctrl+Shift+Period"
+      },
+      "description": "Show, focus, or hide the Desk terminal"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+  },
+  "externally_connectable": {
+    "ids": [],
+    "matches": []
+  }
+}

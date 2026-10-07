@@ -3,6 +3,8 @@ import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  NodeAppVersions,
+  NodeCodeSigning,
   NodePortProbe,
   TestIsolationError,
   assertPathAllowed,
@@ -40,6 +42,14 @@ describe("adapter isolation under Vitest", () => {
     ...dataVolumeRows,
   ])("the guard refuses %s", async (_label, path) => {
     await expect(assertPathAllowed(path)).rejects.toThrow(/real home directory/);
+  });
+
+  it.each([
+    ["the bundle codesign signs", () => new NodeCodeSigning("/nonexistent/codesign").adHocSign(join(realHome, "Applications", "Desk Terminal.app"), "com.noctusoft.desk.terminal")],
+    ["the bundle codesign verifies", () => new NodeCodeSigning("/nonexistent/codesign").verify(join(realHome, ".desk", "app", "0.3.0", "Desk Terminal.app"))],
+    ["the runtime a staging copies", async () => new NodeAppVersions(join(tmpdir(), "desk-home", ".desk")).stage(join(realHome, "Downloads", "desk-0.3.0"))],
+  ])("the Node adapters refuse %s inside the real home under Vitest", async (_label, call) => {
+    await expect(call()).rejects.toThrow(/real home directory/);
   });
 
   it("the guard refuses a relative path, because adapters take explicit roots", async () => {

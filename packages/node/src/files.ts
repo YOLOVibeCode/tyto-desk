@@ -8,11 +8,11 @@ function isMissing(err: unknown): boolean {
 }
 
 /**
- * Writes `text` to `path` as a 0600 file, creating missing directories as 0700. The text goes to a new temp file
+ * Writes `text` to `path` with `mode`, creating missing directories as 0700. The text goes to a new temp file
  * (exclusive create, so a planted file or link is never followed), is synced, and replaces `path` by rename, so
  * readers never see a partial file.
  */
-export async function writePrivate(path: string, text: string): Promise<void> {
+export async function writeAtomic(path: string, text: string, mode: number): Promise<void> {
   await assertPathAllowed(path);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const tmp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
@@ -24,12 +24,17 @@ export async function writePrivate(path: string, text: string): Promise<void> {
     } finally {
       await file.close();
     }
-    await chmod(tmp, 0o600);
+    await chmod(tmp, mode);
     await rename(tmp, path);
   } catch (err) {
     await rm(tmp, { force: true });
     throw err;
   }
+}
+
+/** Writes `text` to `path` as a 0600 file, atomically (writeAtomic). */
+export async function writePrivate(path: string, text: string): Promise<void> {
+  await writeAtomic(path, text, 0o600);
 }
 
 /** The file's text, or `null` when it does not exist. */

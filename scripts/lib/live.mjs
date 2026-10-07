@@ -355,6 +355,19 @@ export function depsVolumeName(files) {
 }
 
 /**
+ * Whether a file of the image directory (relative to test/live/image, `/`-separated) goes into the image's tag and into
+ * the build context the helper streams: never anything under a `node_modules` directory (installing the image's tools
+ * locally, test/live/image/tools/node_modules, must not change the tag and force a rebuild, or send a node_modules tree
+ * into the build), and never a dotfile or anything under a dot-directory (a Finder .DS_Store must not either; the
+ * Dockerfile copies none of them). The tag and the context are the same list of files.
+ * @param {string} path
+ */
+export function imageFileAllowed(path) {
+  if (path === "" || path.startsWith("/") || hasDotSegment(path)) return false;
+  return path.split("/").every((segment) => segment !== "" && segment !== "node_modules" && !segment.startsWith("."));
+}
+
+/**
  * The image tag for the image directory's contents: the image is rebuilt only when one of its files changes.
  * @param {readonly { path: string; bytes: Uint8Array }[]} files paths relative to test/live/image
  */

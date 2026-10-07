@@ -155,23 +155,24 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 | `log-sink.ts` | `write(event: LogEvent)` | node `FileLogSink` (1 MB × 3) |
 | `config-store.ts` | `load()` → `DeskConfig \| null`, `save(config)` | node |
 | `text-files.ts` | `read(path)` → `string \| null`, `write(path, text, mode)` (atomic), `remove(path)`, `names(dir)` (file names only), `realPath(path)` | node |
-| `instance-lock.ts` | `acquire(name)` → `{release}` or `{heldBy: pid}`; a dead holder's lock is reclaimed | node (`run/*.lock`) |
+| `instance-lock.ts` | `acquire(name)` → `{release}` or `{heldBy: pid}`; the lock names its holder's pid and start, a holder whose pid is gone or now runs a process that started at another time is dead (D97), and a dead holder's lock is reclaimed, one reclaimer at a time | node (`run/*.lock`, reclaimed under `<name>.lock.reclaim`) |
 | `detached-spawner.ts` | `spawn(file, args, env)` → pid; own session, stdio ignored | node |
 | `prompter.ts` | `confirm(question)`, `choose(question, items)`; refuses without an interactive TTY | cli |
-| `process-info.ts` | `alive(pid)`, `ttyOf(pid)`, `cwdOf(pid)`, `childrenOf(pid)`, `executablesUnder(dir)` → `{pid, exe}[]`; never reads environments | node: `ps` (`-axo pid=,comm=` for executables), `lsof` (macOS), `/proc` (Linux); argv, 3 s |
+| `process-info.ts` | `alive(pid)`, `startedAt(pid)` → ms since the epoch, to the second (D97), `ttyOf(pid)`, `cwdOf(pid)`, `childrenOf(pid)`, `executablesUnder(dir)` → `{pid, exe}[]`; never reads environments | node: `ps` (`-o etime= -p <pid>` for the start, `-axo pid=,comm=` for executables), `lsof` (macOS), `/proc` (Linux); argv, 3 s |
 | `listener-info.ts` | `listenerPid(port)` → `pid \| null`; `image(pid)` → `{exe, args} \| null` | node: `lsof -nP -iTCP@127.0.0.1:<port> -sTCP:LISTEN -Fp`, `ps -o comm=,args=` |
 | `port-probe.ts` | `isFree(port)` | node (`node:net`: busy when a 127.0.0.1 connect is accepted, then free only if a 127.0.0.1 bind succeeds; D32) |
 | `login-shell.ts` | `passwdShell()`; `exportedNames(signal)` → variable names only | node |
 | `tmux.ts` | `serverRunning()`, `clients()` → `{tty, session}[]`, `hasSession(name)`, `updateEnvironment()` → names, `appendUpdateEnvironment(names)`; never `show-environment` | node (argv, 3 s) |
-| `code-signing.ts` | `teamId(path)` → `string \| null`; `adHocSign(bundle, identifier)` | node (`codesign` argv; Linux: `null` and no-op) |
+| `code-signing.ts` | `teamId(path)` → `string \| null`; `adHocSign(bundle, identifier)`; `verify(bundle)` (`codesign --verify --strict`, §23.5 rule 2) | node (`codesign` argv; Linux: `null` and no-op) |
 | `launch-agent.ts` | `installed(label)`, `install(label, argv)`, `remove(label)` | node (plist via `TextFiles`, `launchctl` argv) |
-| `chrome-process.ts` | `version()` → `string \| null`; `start(args)` → `pid \| null`; refuses unless `guiAllowed` | chrome |
+| `chrome-process.ts` | `version()` → `string \| null`; `start(args)` → `{ok: true, pid \| null}` or `{ok: false, reason}` (`gui-refused` unless `guiAllowed`, `failed`) | chrome |
 | `chrome-profile.ts` | `exitType()`; `localStatePref(key)`; `singleton()` → `{host, pid} \| null`; `clearStaleSingleton()`; `seedFirstRun(prefs)` → `false` when `Default/Preferences` exists | chrome |
 | `main-chrome-profile.ts` | Read-only: `devToolsActivePort()` → `{port, path} \| null`; `remoteDebuggingEnabled()`; `singleton()`; `nativeHostManifests()` | chrome |
 | `native-host-dir.ts` | `list()`, `read(name)`, `write(manifest)`, `remove(name)` for the Desk profile's `NativeMessagingHosts` | chrome |
 | `dev-tools-http.ts` | `version(port, signal)` → `{browser, wsUrl} \| null` | chrome (`GET /json/version`) |
 | `desk-extension.ts` | `installedVersion(id)` → `string \| null`; `load(path)` → id; `otherUnpacked()` → ids | chrome (`Extensions.getExtensions`, `loadUnpacked`) |
-| `panel-opener.ts` | `tabTargetInWindow(windowId)` → `targetId \| null`; `open(extensionId, tabTargetId)`; `newWindow()` | chrome (`Target.getTargets` with a `tab` filter, `Browser.getWindowForTarget`, `Extensions.triggerAction`, `Target.createTarget`) |
+| `panel-opener.ts` | `tabTargetInWindow(windowId)` → `targetId \| null` (a page target of the window when Chrome places no tab target in it, D90); `anyTabTarget()` (§6.1 step 10's wake); `open(extensionId, tabTargetId)`; `newWindow()` | chrome (`Target.getTargets` with a `tab` filter, `Browser.getWindowForTarget`, `Extensions.triggerAction`, `Target.createTarget`) |
+| `browser-connector.ts` | `connect(wsUrl)` → `{extension: DeskExtension, panels: PanelOpener, close()}` over one browser session (D90) | chrome (Node's WebSocket) |
 | `chrome-settings.ts` | `get(pref)`, `set(pref, value)` for an allowlist (§5) | chrome (`chrome.settingsPrivate` on a background `chrome://settings` target) |
 | `browser-lifecycle.ts` | `close()`; `closed` (a promise) | chrome (`Browser.close`) |
 | `target-watch.ts` | `watch(signal)` → events `deskTargetAttached`, `panelCrashed`, `browserReplaced`; `attachedPageCount()` | chrome (`Target.setDiscoverTargets`, `targetInfoChanged`, `targetCrashed`, `getTargets`) |
@@ -179,25 +180,25 @@ No `@xterm/addon-clipboard`: Desk's own OSC 52 handler (§10).
 | `cookie-jar.ts` | `read(filter)` → cookies; `write(cookies)` → `{set, failed}` | chrome (`Storage.getCookies`/`setCookies` on the browser session) |
 | `pty-spawner.ts` | `spawn({file, args, cwd, env, cols, rows})` → `Pty {pid, write, resize, pause, resume, kill, onData, onExit}` | ptyd |
 | `terminal-mirror.ts` | `create(cols, rows, scrollback)` → `{write(data): Promise<void>, flush(): Promise<void>, resize, snapshot() → {data, modes, altScreen}, dispose}` | ptyd |
-| `message-server.ts` | `listen(onConnection)`; a connection is `{messages(signal), send(line), close()}` | ptyd (Unix socket) |
+| `message-server.ts` | `listen(accept)`, where `accept(peer)` gets a peer `{send(message), close()}` and returns the daemon's handle `{receive(line), closed()}`; `close()` (D90) | ptyd (Unix socket) |
 | `daemon-dialer.ts` | `connect(signal)` → connection | nmhost |
 | `daemon-client.ts` | `open(kind, signal)` → `{request(msg) → reply, events(signal)}` | cli, watch |
 | `layout-store.ts` · `pane-store.ts` | `load()`, `save(value)` | ptyd |
 | `host-connector.ts` | `open()` → `HostChannel` | extension (`chrome.runtime.connectNative`) |
 | `host-channel.ts` | `post(msg)`, `onMessage(fn)`, `onDisconnect(fn(error?))` | extension |
-| `side-panel-api.ts` | `open(windowId)` (called synchronously), `close(windowId)`, `onOpened`, `onClosed`, `openWindows()` | extension (`chrome.sidePanel`, `runtime.getContexts`) |
+| `side-panel-api.ts` | `openOnActionClick()` (`setPanelBehavior`), `open(windowId)` (called synchronously), `close(windowId)`, `onOpened`, `onClosed`, `openWindows()` | extension (`chrome.sidePanel`, `runtime.getContexts`) |
 | `extension-windows.ts` | `normalWindows()` → `{id, focused, lastFocused}[]`, `focus(id)`, `onChange(fn)` | extension (`chrome.windows`, `chrome.tabs` events) |
 | `tab-targets.ts` | `activeTabTarget(windowId)` → `targetId \| null` | extension (`chrome.tabs.query`, `chrome.debugger.getTargets`) |
 | `agent-tabs.ts` | `find(group)` → `tabId \| null`; `create(group, windowId)` → background `tabId` | extension (`chrome.tabs`, `chrome.tabGroups`) |
 | `action-badge.ts` | `set(text)` | extension (`chrome.action.setBadgeText`) |
 | `panel-link.ts` | Panel ⇄ worker: `send(state)`, `onRequest(fn)` | extension (`chrome.runtime.connect`) |
-| `terminal-view.ts` | `create(paneId, opts)` → `{write(data, done), reset(), paste(text), onInput, onResize, onFocus, onBell, size(), focus(), dispose()}` | extension (xterm) |
+| `terminal-view.ts` | `create(paneId, opts)` → `{write(data, done), reset(), paste(text), onInput, onResize, onFocus, onBell, size(), focus(), dispose()}`; `banner(text \| null)` (shown as text) | extension (xterm) |
 | `agent-sessions.ts` | `list(prefix)`, `close(session)`; always Desk's config and a clean environment | cli (agent-browser argv; socket-dir rules from Tyto's `agentBrowserSocketDir`) |
 | `extension-bridge.ts` | `windows()`, `tabCurrent()`, `tabMine(pane)`, `focusWindow(id)` | cli, watch (via `DaemonClient` `ext.call`) |
 | `release-feed.ts` | `latest(channel, signal)` → `ReleaseRef \| null`; `find(version, signal)`; `onMain(commit, signal)` → boolean; `fetch(ref, dir, signal)` → the tarball's and `SHA256SUMS`' paths; a `ReleaseRef` is `{tag, version, channel, commit, run?, assets: {name, size, digest}[]}` | cli: GitHub REST without a token for stable (`releases`, `commits/<tag>`, `compare/<commit>...main`; 30 s per call, 300 MB cap); `gh run list`, `gh api …/artifacts`, and `gh run download` argv for edge (§23.5) |
 | `provenance.ts` | `verify(path, {identity, sourceRef, sourceDigest}, signal)` and `verifyReleaseAsset(tag, path, signal)` → `verified \| refused \| unavailable` (`gh` missing, signed out, or older than 2.102.0) | cli: `gh --version`, then `gh attestation verify … --cert-identity … --source-ref … --source-digest … --deny-self-hosted-runners` and `gh release verify-asset` argv, 60 s |
 | `file-digest.ts` | `sha256(path, signal)` → hex | node (`node:crypto`, streamed) |
-| `app-versions.ts` | `list()`, `current()`, `stage()` → a staging directory, `commit(staging, version)`, `use(version)` (atomic link swap), `remove(version)`, `inUse()` → the versions `ptyd.lock` and `watch.lock` name, plus every version whose Desk Terminal a process runs (`ProcessInfo.executablesUnder`, which finds native hosts too) | node (`fs/promises`, `rename`, `symlink`) |
+| `app-versions.ts` | `list()`, `current()`, `build(version)` → the sha256 of an installed version's files.sha256 (D98), `stage(from)` → a staging copy checked against its files.sha256 (D91), `commit(staging, version)`, `discard(staging)`, `use(version)` (atomic link swap), `remove(version)`, `inUse()` → the versions `ptyd.lock` and `watch.lock` name, plus every version whose Desk Terminal a process runs (`ProcessInfo.executablesUnder`, which finds native hosts too) | node (`fs/promises`, `rename`, `symlink`) |
 
 Each file exports the port named in PascalCase (`listener-info.ts` → `ListenerInfo`). Fakes are separate classes in
 `@desk/core/testing`, one per port, named `Fake<Port>` or, for stores, `Memory<Port>`; plus `FakeClock`, `SeqRandom`,
@@ -227,7 +228,8 @@ method they use. Node adapters are tested with stub executables (`fake-tmux.mjs`
   extension/                      0700  what Chrome loads: the current version's extension, manifest rendered with your key
   bin/desk-nmhost                 0700  launcher → the current version's Desk Terminal + the nmhost entry
   run/                            0700  ptyd.sock (0600, bound under umask 077), ptyd.lock, watch.lock, launch.lock,
-                                        install.lock (§23.5), quit.marker
+                                        install.lock (§23.5), quit.marker; `<lock>.reclaim` only while a dead
+                                        holder's lock is reclaimed (D97)
   logs/                           0700  desk.log, ptyd.log, nmhost.log, watch.log (typed events, 1 MB × 3)
 ~/.local/bin/desk                 0700  launcher → the current version's Desk Terminal + the cli entry (your dotfiles put
                                         ~/.local/bin on PATH)
@@ -438,7 +440,8 @@ missing, or Desk not running · 70 internal (an extension id mismatch, or loadin
 | `launch.lock` wait; a quitting Chrome; `Browser.close` until the port closes | 10 s each |
 | Host → daemon connect, including starting it | 3 s |
 | `hello` handshake · `ext.call` round trip | 2 s · 2 s |
-| `ps`, `lsof`, `tmux`, `codesign`, `launchctl` | 3 s |
+| `ps`, `lsof`, `tmux`, `launchctl` | 3 s |
+| `codesign` (ad hoc signing and `--verify --strict` hash all of Desk Terminal's Node; D100) | 60 s |
 | `agent-browser close` | 10 s |
 | Login-shell variable names | 10 s |
 | Main Chrome's Allow · its remote debugging turned off | 60 s · 5 minutes |
@@ -456,9 +459,9 @@ missing, or Desk not running · 70 internal (an extension id mismatch, or loadin
 - At start it checks that `~/.desk` and `run/` are owned by you, mode 0700, and not symlinks; sets umask 077; takes
   `run/ptyd.lock` `{pid, build (its version), protocol range, startedAt}` (a live holder wins, a dead holder's lock
   is reclaimed); then binds `run/ptyd.sock`.
-- It stops only on `shutdown` (from `desk quit --all`, `desk daemon restart`, or the panel's "Restart now"): it flushes
-  `panes.json` and sends SIGHUP to its shells; tmux servers are separate processes and survive. It also flushes
-  `panes.json` on SIGTERM and SIGHUP.
+- It stops on `shutdown` (from `desk quit --all`, `desk daemon restart`, or the panel's "Restart now"), and on SIGTERM
+  and SIGHUP (a logout's SIGTERM), which end it the same way (D97): it flushes `panes.json`, sends SIGHUP to its
+  shells, closes its socket and releases its lock; tmux servers are separate processes and survive.
 - Shell: argv `[shell, "-l"]` with `shell = config.terminal.shell ?? LoginShell.passwdShell()`; cwd = the requested one
   (the `cwdFrom` pane's, or the saved one) when it is a directory, else HOME; size = the panel's measured cols and
   rows, so nothing reflows from 80×24 [RF].
@@ -595,10 +598,11 @@ The tmux binary is `config.terminal.tmux`, else the first of `/opt/homebrew/bin/
   its child with the caller origin as the first argument and, on macOS, disclaims privacy responsibility for it [RC;
   PROTO `nmhost/host.mjs`; source `launch_context_posix.cc:92-96`].
 - `bin/desk-nmhost` resolves `~/.desk/app/current` once (`realpath`) into `<version>` and runs
-  `exec /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE
+  `exec /usr/bin/env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE DESK_HOME=<the install's ~/.desk>
   "<version>/Desk Terminal.app/Contents/MacOS/desk-node" "<version>/desk.mjs" nmhost "$@"`: a bundled entry in the
   installed version, never the source tree, so a panel shows without TypeScript stripping, and never a path through
-  `current`, so a running host never loads a chunk from another version (§23.5).
+  `current`, so a running host never loads a chunk from another version (§23.5). Chrome starts the host with
+  launchd's environment, which names no `DESK_HOME`, so the launcher carries the one it was installed for (D92).
 - The host exits 1 without contacting the daemon unless `argv[1]` is exactly the Desk origin.
 - Relay: each native message becomes one NDJSON line and each daemon line one native message. A frame over 1 MiB drops
   the connection and logs only its size. On stdin EOF it closes the socket and exits 0.
@@ -966,7 +970,8 @@ release workflows (§23.6), and is installed by its own `desk install --from <di
 - Writes `version.json` (§23.4) and `files.sha256`; the build id is the sha256 of `files.sha256`; the target is
   `~/.desk/app/<version>/` (0700), complete and immutable once installed.
 - Launchers (`~/.local/bin/desk`, `~/.desk/bin/desk-nmhost`) resolve `~/.desk/app/current` once and exec that version
-  through `env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE`; only `desk` sets `DESK_ALLOW_GUI=1`.
+  through `env -u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE`, with the `DESK_HOME` they were installed for
+  (D92); only `desk` sets `DESK_ALLOW_GUI=1`.
 - After you confirm, switches `current` with one `rename(2)`, then keeps three versions and never one a running process
   uses, native hosts included (§23.5).
 - Writes the native host manifest and the skills; then, each after consent: the web-access rule step, the tmux line
@@ -1163,9 +1168,15 @@ test wrote into that `~/.desk`.
   helper; measured 2026-10-06). `--cap-drop=ALL` breaks it (`sys_chroot` fails in the zygote), so the container keeps
   Docker's default capabilities (measured 2026-10-06). Xvfb `:99` at 1440×900×24, no TCP. WebGL2 is absent without
   SwiftShader, so the VM exercises the DOM renderer [VMLAB].
-- The repo-level live suites (Chrome, the extension and its host, the PTY package, agent-browser) live in `test/live/`,
-  with fixtures in `test/live/fixtures/`; adapters' live tests join them in `packages/*/test/live/` (D80). Nothing
-  else imports the PTY package (`test/pty-boundary.test.ts`, §17.1's lint). Live Chrome starts only through
+- The repo-level live suites (Chrome, the extension and its host, the PTY package, agent-browser, and from slice 1c
+  Desk itself) live in `test/live/`, with fixtures in `test/live/fixtures/`; adapters' live tests join them in
+  `packages/*/test/live/` (D80). Outside them only the daemon's PTY adapter imports the PTY package, and only the
+  daemon's entry, reached by a dynamic import, imports that adapter (`test/pty-boundary.test.ts`, §17.1's lint, D88).
+  `desk.test.ts` packs the test build in the container, installs it with the packed runtime's own `desk install`
+  (answering its question through a PTY), and runs the installed launcher, so there Desk's own `ChromeProcess` starts
+  Chrome, with `chromeArgs`' arguments, which is what that file tests. It records the cold launch-to-shell time, from
+  running the launcher until the panel shows the shell's prompt (`desk-cold-launch.json`; slice 1c's baseline in the VM:
+  0.64 s and 0.72 s, SPEC §8). Every other live Chrome starts only through
   `test/live/lib/chrome.ts`: arguments from core's `chromeArgs` for a fresh `newDeskConfig`, a fresh profile and HOME,
   after `guiAllowed`, on its file's own port (`test/live/lib/ports.ts`); it refuses a port that already answers,
   requires the browser behind it to be the process it started (`SystemInfo.getProcessInfo`), and quits with
@@ -1424,16 +1435,16 @@ Protocol v1 (§7.2): negotiation, client kinds, ids, errors, limits; the daemon 
 recovery; panel error states; logging policy and crash handlers; `desk status`; `desk daemon restart`.
 
 - `hello picks the highest protocol version both sides support`
-- `hello with no common version gets E_STALE and the daemon keeps running`
-- `shutdown is accepted after E_STALE`
+- `hello with no common version gets E_STALE and the daemon keeps running` (held since slice 1c, D100)
+- `shutdown is accepted after E_STALE` (held since slice 1c, D100)
 - `a <kind> client sending <verb> gets E_VERB` (it.each)
 - `replies and errors echo the request id, and pane errors name the pane`
 - `a line over 1 MiB gets E_PROTO and only its size is logged`
 - `the daemon accepts at most 32 connections`
 - `layout.put over 64 KiB, deeper than 16, or naming an unknown pane gets E_LIMIT`
-- `a second daemon exits when a live daemon holds the lock`
-- `a dead daemon's lock is reclaimed`
-- `the daemon refuses to start when ~/.desk is a symlink, not 0700, or not yours`
+- `a second daemon exits when a live daemon holds the lock` (held since slice 1c, D100)
+- `a dead daemon's lock is reclaimed` (held since slice 1c, D100)
+- `the daemon refuses to start when ~/.desk is a symlink, not 0700, or not yours` (held since slice 1c, D100)
 - `a corrupt or newer state file is moved aside and the daemon continues with its live panes`
 - `the panel shows <state> and <retries or stops>` (it.each over the panel-state table)
 - `desk status lists pane ids with alive or exited and never a title or directory`
@@ -1457,8 +1468,8 @@ recovery; panel error states; logging policy and crash handlers; `desk status`; 
 - `the PTY pauses above 100,000 unacknowledged characters and resumes below 5,000`
 - `an owner over the limit for 10 s is detached as stuck and the pane resumes`
 - `a hidden owner receives no output and never pauses the PTY`
-- `open from another panel takes the pane and tells the previous owner it was taken`
-- `only the owner's resize changes the PTY size`
+- `open from another panel takes the pane and tells the previous owner it was taken` (held since slice 1c, D100)
+- `only the owner's resize changes the PTY size` (held since slice 1c, D100)
 - `the mirror never writes to the PTY`
 - `sanitizePaste removes ESC, C1 and C0 controls except tab, CR and LF`
 - `a paste containing ESC[201~ reaches the PTY without the escape and inside one bracketed paste`
@@ -1547,7 +1558,7 @@ server; config keys that flags cannot override).
 
 - `the agent-browser config points cdp at the guarded endpoint with restoreSave never, pinTab, contentBoundaries, idleTimeout 15m and Desk's policy`
 - `a new install writes the open policy`
-- `the strict policy denies cookie, storage, state, credential and HAR actions`
+- `the strict policy denies cookie, storage, state, credential and HAR actions` (held since slice 1c, D100)
 - `desk agents pause writes a deny-all policy that still allows close`
 - `desk agents resume asks on a TTY and restores the previous mode`
 - `desk config agent-policy open asks on a TTY`
@@ -1615,7 +1626,7 @@ the release PR and `release.yml`'s `plan` (D67).
 - `an install stages, verifies and then renames the version into place, and a failed one leaves nothing behind`
 - `desk use switches current atomically and records the previous version`
 - `desk use refuses a version whose state schemas are older than the files on disk`
-- `an older Desk keeps the installed.json keys it does not know when it writes the file`
+- `an older Desk keeps the installed.json keys it does not know when it writes the file` (held since slice 1c, D100)
 - `desk rollback returns to the previous version`
 - `desk versions marks current, previous and the versions the daemon, desk watch and native hosts run`
 - `retention keeps current, previous and the most recently installed other version, and never one a running process uses`
@@ -1655,8 +1666,8 @@ theme, the extension's CSP and lints.
 - `only http and https links open, on Cmd+click, as a new Desk tab`
 - `OSC 52 reads are ignored and writes need osc52Write`
 - `a title containing markup renders as text, cut at 200 characters`
-- `the manifest declares the strict CSP and no external connections`
-- `the extension never uses innerHTML, eval or chrome.debugger.attach`
+- `the manifest declares the strict CSP and no external connections` (held since slice 1c, D100)
+- `the extension never uses innerHTML, eval or chrome.debugger.attach` (held since slice 1c, D100)
 - `font size changes are saved in layout.json`
 - `a bell while the panel is hidden sets the toolbar badge`
 - live `three panes in two tabs come back with the same layout after quit and desk`
@@ -1748,8 +1759,8 @@ provenance check · an update that moves to an older version on its own · a run
 |---|---|---|---|
 | node-pty 1.2.0-beta.15 (Microsoft) or `@lydell/node-pty` prebuilds for darwin-arm64 and linux-arm64 under Node 26; esbuild without install scripts | verified: `@lydell/node-pty@1.2.0-beta.15` chosen (D71); its linux-arm64 prebuild runs a login, interactive zsh on a real tty under Node 26.10.0, resizes it, and a tmux session outlives its SIGKILL (live, slice 1b); its darwin-arm64 `pty.node` and executable `spawn-helper` are byte-identical to Microsoft's (inspected; first run on the Mac in slice 2a); esbuild in slice 1a (D28) | yes | slices 1a, 1b |
 | `extensionIdFromKey` matches the id Chrome assigns to a manifest with `key` | verified (live, slice 1b): branded Chrome 155.0.8059.39 linux-arm64 gave a keyed fixture the id core derives; the manifest carried §9's CSP and an empty `externally_connectable` | yes | slice 1b |
-| A `connectNative` port keeps the MV3 worker alive in Chrome 155 | documented | yes | slice 1c |
-| CDP and extension window ids are equal; `triggerAction` needs a `tab` target | inferred / verified | yes | slice 1c |
+| A `connectNative` port keeps the MV3 worker alive in Chrome 155 | verified (live, slice 1c, two runs on 2026-10-07): Desk's worker, its `connectNative` port open, stayed connected through 5 idle minutes in branded Chrome 155.0.8059.39 linux-arm64; the daemon counted one worker connection before and after, Chrome still listed the worker, and it answered `windows`; in slice 1c's review's run Chrome listed the worker as unattached before and after the idle minutes, so no debugger kept it alive | yes | slice 1c |
+| CDP and extension window ids are equal; `triggerAction` needs a `tab` target | verified (live, slice 1c) but for a `page` target: Chrome 155 lists a `tab` target in each normal window; `Browser.getWindowForTarget` gives the id `chrome.windows` reports (each panel's hello names its window from `chrome.windows.getCurrent()`, and agent-browser's tab and the panel shared one); `Extensions.triggerAction` on a window's `tab` target opened the panel in that window. A `page` target was never tried: `CdpPanelOpener` falls back to one only when a window has no `tab` target (D90) | yes | slice 1c |
 | Chrome terminates only the host; a detached daemon survives Chrome | inferred | yes | slice 2a |
 | Serialize plus mode replay plus the alt-screen redraw restores vim and tmux | prior art [OR] | yes | slice 2b |
 | Keystroke latency and show time through native messaging | unmeasured | partly (the Mac spot check decides) | slice 2b, M6 |
@@ -1761,6 +1772,7 @@ provenance check · an update that moves to an older version on its own · a run
 | Synthetic key events on Linux fire extension commands | unverified | yes | slice 6 |
 | Agent commands change the user's tab or focus; background-tab screenshots and frozen-tab wake under the focus guard | unverified | yes | slice 4b |
 | `Target.createTarget {background: true}` keeps the user's tab | unverified | yes | slice 4b |
+| agent-browser's first `open` over the Desk port opens its page in a tab of its own, and nothing else | observed (live, slice 1c's review): agent-browser 0.38.1's first `open` opened the fixture in a new tab of the Desk window, and a second new tab with `about:blank`; no tab already open was navigated | yes | slice 4b |
 | `tyto brief` tolerates a refused step; `agent-browser screenshot` without a path writes a temp file | unverified | yes | slice 4b |
 | Tab groups come back with session restore | documented | yes | slice 4b |
 | Loading extensions over the port keeps working in later Chrome versions | verified on 155 only | weekly live CI | ongoing; doctor |
@@ -1797,7 +1809,7 @@ sections above; these entries record choices, deviations, and rejections. D28–
 the delivery design and its security and operability review, the same day; D62–D70 from slice D1 and its review;
 D71–D80 from slice 1b and its review; D81–D86 from the owner's decision on who merges owner-merge PRs and the
 hardening that followed slice D1's security reviews (PR #5) and the reviews of that hardening (PR #7); D87 from slice
-1b's second review.
+1b's second review; D88–D96 from slice 1c; D97–D100 from slice 1c's review.
 
 | # | Decision | Why |
 |---|---|---|
@@ -1888,6 +1900,19 @@ hardening that followed slice D1's security reviews (PR #5) and the reviews of t
 | D85 | `pr-title` caps what one run reads (slice D1 hardening): at most 25 workflow files and 25 distinct pins (action and tag), so one run makes at most 1 + 25 + 25 × 6 = 176 REST requests (the listing, the files, and per pin its tag ref and up to five peels). Above either cap, or when the listing holds 1,000 entries (the most the contents API lists), it fails closed without reading further, and any request the API refuses (for a spent quota too) fails the check. The cap is per run, not per hour: nothing limits how many runs fork PRs start (each `opened`, `edited`, `synchronize` or `reopened` event starts one), and six full runs (6 × 176 = 1,056) spend the hour's 1,000-request `GITHUB_TOKEN` quota that every workflow of the repository shares. That is a denial of service, never a pass: until the hour resets, `pr-title` fails on every PR, so none merges on it, and the other workflows' API calls fail too (`owner-merge.yml` neither labels nor turns auto-merge off, `dependabot-auto-merge.yml` turns nothing on, and `ci.yml`'s `changes` fails, failing `ci-ok`). Today `main` has 10 workflow files and 9 pins | `pr-title` runs on `pull_request_target`, for fork PRs too, on the repository's `GITHUB_TOKEN`, whose 1,000 REST requests an hour every workflow shares: uncapped, one fork PR with thousands of pins could spend them all in one run. The cap bounds a run, not the hour (PR #7's review); bounding the hour would need state across runs, which a `pull_request_target` job should not keep, and either way the check fails closed. A listing the API cut short could hide a workflow file from the check |
 | D86 | Edge's `attest` and release's `publish` take `pack`'s artifact by its id and check its sha256 (slice D1 hardening): `build-darwin.yml` passes `pack`'s `upload-artifact` outputs out as `artifact-id` and `artifact-digest`; the job downloads that id alone, still zipped (`artifact-ids`, `skip-decompress`, `digest-mismatch: error`), compares the zip's sha256 with `artifact-digest`, and only then unpacks it and checks `SHA256SUMS` | Downloading by name takes whatever artifact of that name the run holds, and `build-darwin.yml`'s `test` job, which runs every dev tool, and the live suite run in the same workflow run and can upload one, or replace `pack`'s (`overwrite` deletes it and uploads anew under another id). With the id and the digest, only the bytes `pack` uploaded are attested or published, and a replaced artifact fails the download |
 | D87 | Supply chain and containment (slice 1b's second review). Every npm project in the repo sets `ignore-scripts=true` and `save-exact=true` in its own `.npmrc`, `test/live/image/tools/.npmrc` included, and `lint:install-scripts` fails on a project without them, on a project of its own (a directory outside `node_modules` with a `package.json` or lockfile that is not a root workspace) missing from `OTHER_LOCKFILE_DIRS` or without a `package-lock.json`; an offline test asks npm itself (`npm config get`, with no user, global or environment config). Tests pin `--ignore-scripts` in the Dockerfile's `npm ci` (its only other npm command is `npm --version`) and in `install.mjs`'s only npm process. `ci.yml`'s `check` runs `npm ci --ignore-scripts` and `npm audit signatures` in `test/live/image/tools` as well, and Dependabot's npm updater watches that directory (prefix `test`); its packages are all runtime dependencies there, outside the class that merges itself (D44), which a test checks for each one. `live-run.yml` uploads `test-results/` only after a step finds nothing in it but plain files and directories, and prints no name it finds. Phase 2 mounts only the allowlisted top-level entries, each read-only, never a symbolic link, as phase 1 mounts only its files | The tools directory has its own `package.json` and is not a workspace, so npm took it as a project of its own and read none of the root's settings there: `npm config get ignore-scripts` printed `false`. A routine `npm install agent-browser@<next>` there on a dev Mac would have run agent-browser's postinstall, which relinks npm's global `bin/agent-browser` (Homebrew's, say) to the worktree's binary, and saved a caret range. The Dockerfile and phase 1 passed `--ignore-scripts`, but nothing kept them doing so. The image's 27 packages were pinned by integrity with no signature gate (measured: 27 registry signatures, 11 attestations). upload-artifact follows symbolic links, and a job cancelled between `docker cp` and the runner's own check would have uploaded one. Phase 2 mounted the whole checkout, `.git` and untracked `.env*` files included, and filtered it only inside the container. Whether `test/live/image/tools/.npmrc` joins the owner-merge paths, as the root's `.npmrc` is, is the owner's call (`scripts/delivery/owner-paths.json`); the lint fails a PR that drops either setting either way |
+| D88 | The terminal daemon owns the PTY package from slice 1c (amends D71's "until `packages/ptyd` takes it in slice 2a"): `@lydell/node-pty@1.2.0-beta.15` moves from the root's devDependencies to `packages/ptyd`'s dependencies, and the PTY boundary (`scripts/lib/pty-boundary.mjs`, §17.1's lint) holds three rules: only the live suites and the daemon's PTY adapter (`packages/ptyd/src/node-pty-spawner.ts`) import the package; only the daemon's entry (`packages/ptyd/src/main.ts`) and the live suites import that adapter; and the entry is reached only by a dynamic `import()` from `packages/cli/src/`, which only `desk.mjs ptyd` evaluates. The live harness's `environment.json` finds the package among the workspaces | Slice 1c's daemon spawns real shells, and the runtime build copies the package beside `desk.mjs` (§15.1), so it belongs to the workspace that ships it (the bundle check reads each workspace's dependencies). The offline suite still never loads it: no test imports the adapter or the entry, and importing the CLI evaluates no dynamic import |
+| D89 | Desk's extension key (2026-10-07): an RSA-2048 key pair generated once, in memory; the public half (base64 SPKI) is `packages/extension/manifest.json`'s `key`, which gives the id `nmnljgjkacmplpfllopodplgmpjogdbf`, core's `DESK_EXTENSION_ID` and the native host manifest's only allowed origin. The private half was never serialized or written. `npm run build` refuses a manifest whose key gives another id, whose pages lack §9's CSP, whose `externally_connectable` is missing or not empty, or that has web-accessible resources | The id pins `allowed_origins` (§8). Desk loads the extension unpacked over CDP and never packs a `.crx`, so nothing needs the private half; not keeping it leaves no secret to protect. The build check is §18's "the id derived from the manifest key matches the constant in the host manifest" |
+| D90 | Slice 1c's launch is §6.1 steps 1–3, 5, 7–10, 12 and 14, as §19 lists them, plus step 6 (the first-run seed: the slice puts the panel on the left; step 11 waits for 3a). Its classification: launch only when no Desk singleton is alive and nothing answers on the Desk port, else exit 75 (3b brings §6.1's table); a second `desk` waits 10 s for `run/launch.lock`, then exits 75 (reuse is 3b). Ports, amending §3: the plan takes a factory for the config-bound Chrome ports (`ChromeProcess`, `ChromeProfile`, `NativeHostDir`), since the config is loaded under the lock; `BrowserConnector` hands out the CDP role adapters over one browser session; `PanelOpener` gains `anyTabTarget()` for step 10's wake, and `tabTargetInWindow` falls back to a page target of the window when Chrome places no tab target in one; `MessageServer`'s connection is the daemon's peer and handle; `SidePanelApi` gains `openOnActionClick()`, `TerminalView` `banner()`, `CodeSigning` `verify()`, and `ChromeProcess.start` a result union (`gui-refused`, `failed`) | Each later slice adds its rows to these plans without changing their shape. A port's adapter is built from the config the plan loaded, never from a config read before the lock. Core plans stay off raw CDP (§0); the connector is the one place a WebSocket becomes role adapters |
+| D91 | Slice 1c's `desk install --from <dir>` is the version steps only (§15.1, §23.5 rules 1–4): under `run/install.lock` the runtime is copied into `app/.staging-<id>` and checked there against its `files.sha256` (every file listed and equal, none extra, no link), its `version.json` must parse, and on macOS `codesign --verify --strict` must pass on Desk Terminal; then it is renamed into `app/<version>`, `current` switches after consent, `installed.json` records it (`previous` from the link when the file is new; provenance `dev` for a dev build, `directory` otherwise until slice D2 records provenance), and the launchers and host manifest are written. It makes `config.json` when there is none, since the host manifest goes into the profile it names. No version is removed until slice D2's retention; `AppVersions.stage(from)` copies and verifies, beside §3's empty staging for D2's downloads. The host's files check before it starts a daemon (§8) is slice 5's | What is verified is the copy that gets installed, so a source changed afterwards changes nothing installed. Keeping every version until retention can see running processes means no install can remove one a process uses |
+| D92 | The launchers carry the `DESK_HOME` of the install that wrote them (`DESK_HOME=<path>` in their `env -u …` line; amends §8 and §15.1) | Chrome starts native hosts with launchd's environment, which names no `DESK_HOME`, so a host could only ever find `~/.desk`; the tests and the live suite install into a fresh `DESK_HOME`, as an operator may |
+| D93 | The runtime build is `npm run pack` (`scripts/pack.mjs`, `scripts/lib/pack.mjs`; §2 named the CLI package for it, but it is build tooling: it runs esbuild and the repo's own code, and never ships). Locally it stamps (`classifyBuild`, `local`); in CI it takes the `dist/version.json` the workflow's stamp step wrote (only that step knows a dry run and the expected channel) and refuses one naming another commit. It writes `dist/desk-<version>/` and `desk-<version>-<platform>-<arch>.tar.gz`. Desk Terminal is the Node running the build, copied only when its sha256 is the pin in `scripts/delivery/node-runtime.json` (darwin-arm64, and for the test container only linux-arm64, the live image's `NODE_SHA256`), in `Desk Terminal.app` with an `Info.plist` naming `com.noctusoft.desk.terminal`, `LSUIElement` and no version, signed ad hoc; on Linux `node/desk-node`. The stamp now names the pin's version (D65's ".nvmrc until slice 1c" ends; a test keeps `.nvmrc` equal to it). The pin's reader lives beside the stamp under `scripts/delivery/lib/`, an owner-merge path (D61) | setup-node's darwin-arm64 26.10.0 binary is byte-identical to nodejs.org's (sha256 `56d28b39…`, checked 2026-10-07), so `build-darwin.yml`'s pack passes the pin with no download. `build-darwin.yml` checks every pack it makes: its Desk Terminal prints `desk --version --json` and passes `codesign --verify --strict` (D100). A stamp in CI re-run by pack could not know a dry run, and would name another version than the step that publishes |
+| D94 | Slice 1c's daemon: one owner per pane; input and resizes from the owner only; output to the owner only, and none while a pane has no owner (no mirror until slice 2b, so a re-attached pane starts from an empty snapshot); extension calls relayed to the service worker with §6.6's 2 s budget; a resize that arrives while a pane's shell is starting sets the size it starts at; and the verbs per client kind that 1c implements (slice 2a fills §7.2's table). At start it checks `~/.desk` and `run/` (owner, 0700, no symlink), sets umask 077, and takes `run/ptyd.lock`; a live holder wins. The protocol subset is `core/protocol/messages.ts`, whose parsers drop any unknown type or key | The walking skeleton needs one shell, its input and output, and the launcher's questions to the worker; everything else in §7 arrives with the slices that test it. The lock keeps two hosts that both found the socket dead from leaving two daemons |
+| D95 | The live image's tag and its build context take one list of files (`imageFileAllowed`: nothing under `node_modules`, no dotfile): the helper that streams the context binds each of those files on its own instead of the image directory, and the fetch stage's context leaves `node_modules` out through `test/live/image/.dockerignore`. A test checks that §22's decision numbers are unique and strictly increasing (slice 1b's reviews) | `test/live/image/tools/node_modules`, from installing the tools on the Mac, changed the tag and sent about 2 GB into a rebuild. A decision number is cited across the plan, so a reused or reordered one would point readers at the wrong entry |
+| D96 | Slice 1c's extension declares the `chrome.*` calls it makes in `packages/extension/src/chrome-api.d.ts` (`runtime`, `sidePanel`, `windows`, `tabs`; its tsconfig loads no `@types`), not through §2's `@types/chrome@0.3.4`. The npm registry was unreachable from the Mac while the slice was finished, and neither that package nor its dependencies were in npm's cache. A later change adds the package and deletes the file | The file names only what the extension calls, typed as Chrome 155 defines it, and the live suite runs those calls in Chrome 155. The package is a dev dependency, so nothing shipped changes when it replaces the file |
+| D97 | Locks and the daemon's process (slice 1c's review). Every `run/*.lock` names its holder's pid and start (`startedAt`); `ptyd.lock` also its build and protocol range, as §7.1 says. A holder is alive while its pid runs a process that started within 3 s of that start (`ProcessInfo.startedAt`, `ps -o etime=`; amends §3), so a pid the system has given to a newer process, after a reboot or a wrap, holds nothing. A dead holder's lock is reclaimed under `<name>.lock.reclaim`, which link(2) creates, and only while the lock still holds the dead holder's text, so two processes that found the same dead holder never both take it; a gate whose reclaimer died is cleared by the next one. The daemon stops on SIGTERM and SIGHUP as on `shutdown` (amends §7.1's "stops only on `shutdown`"). Its start-up checks, its lock and its signals are `serveDaemon` (`packages/ptyd/src/daemon-process.ts`), which takes the PTY adapter as a parameter; `main.ts` only adds it | Nothing but a `shutdown` stopped the daemon, so a logout left `ptyd.lock` naming a dead pid, and `kill(pid, 0)` counted whatever process got that pid as its holder: every daemon a host started exited, and the panel never got a shell again. Two processes could both find a dead holder and both take its lock, the case D94's lock exists for. The socket's own check before it replaces a stale file needs nothing more, since only the lock's holder binds. The one window left needs a process to die inside a reclaim and two others to clear its gate at once. The PTY boundary (D88) kept the daemon's entry, and so every one of its refusals, out of the offline suite |
+| D98 | Installs and launchers (slice 1c's review). Installing an installed version changes nothing of it (§23.5 rule 1): installed.json keeps the entry it recorded, or, without one, records the installed copy's build (`AppVersions.build`; amends §3), and the message says when the runtime given was another build of that version. A damaged installed.json stops the install before it stages, asks, or switches anything. `AppVersions.stage` also requires the staged files.sha256 to be the text it read and verified. The launchers hold `DESK_HOME` only single-quoted, never in a comment or between double quotes, and print their message with `printf '%s\n'` | Every pack stamps a new `builtAt`, so a second deploy of one commit is another build of an installed version, and installed.json named a build and an install time that no installed file had. A damaged installed.json was found after `current` had switched, so the rerun lost the real `previous`. A list rewritten during the copy would have been installed unverified. A `DESK_HOME` holding `$(…)`, a backtick or a newline ran as shell code |
+| D99 | Guards around the CDP connection and the other adapters (slice 1c's review). `DevToolsHttp.version(port)` returns a WebSocket URL only when it is Chrome's browser endpoint on 127.0.0.1 at the port it asked; the browser connector takes only such a URL, and it and `openWebSocket` apply the Vitest port guard before connecting (§0). `CodeSigning`, `AppVersions.stage`'s source and `ChromeProcess.version`'s app apply the path guard | The connector opened a WebSocket on any 127.0.0.1 port, so a test could have driven the operator's Chrome or Desk; whatever answers on the Desk port could have sent the launch to another one |
+| D100 | Deviations and sentences recorded (slice 1c's review). `codesign` gets 60 s, not §6.6's 3 s. The ports `Clock.sleep`, `DevToolsHttp.version`, `DaemonClient.open` and `DaemonDialer.connect` take no `AbortSignal` yet (amends D90's list of §3 changes): each adapter applies its §6.6 budget, and the slice that first cancels one early adds it. Slice 1c's tests already hold these sentences of later slices, which the walking skeleton needed, and §19 marks them: 2a's `hello with no common version gets E_STALE and the daemon keeps running`, `shutdown is accepted after E_STALE`, `a second daemon exits when a live daemon holds the lock`, `a dead daemon's lock is reclaimed` and `the daemon refuses to start when ~/.desk is a symlink, not 0700, or not yours`; 2b's `open from another panel takes the pane and tells the previous owner it was taken` and `only the owner's resize changes the PTY size`; 4b's `the strict policy denies cookie, storage, state, credential and HAR actions`; D2's `an older Desk keeps the installed.json keys it does not know when it writes the file`; 6's `the manifest declares the strict CSP and no external connections` and `the extension never uses innerHTML, eval or chrome.debugger.attach`. Slice 1c's Done-when says nothing ran on the Mac during development, but a pack's Desk Terminal ran `desk --version` and `codesign --verify --strict` there once (no window, nothing in `~/.desk`); D93 now cites `build-darwin.yml`'s check instead, and whether that run stands is the owner's call. The live runner's script tests are two files that run in parallel, and the offline suite's stub executables (`fakeExecutable`, the runner's stub docker, the launchers' Desk Terminal) are hard links to one file per kind | Ad hoc signing and `--verify --strict` hash all of Desk Terminal's Node, about 100 MB. A sentence a slice holds early has no failing test left for the slice that lists it, so §19 says where it is held. A rule the slice broke is recorded rather than dropped. npm test took 27 s on the Mac, close to SPEC §8's 30 s: macOS checks every new executable file the first time it runs (about 0.3 s, one file at a time), and a hard link is the same file. It now takes about 8 s |
 
 ## 23. Delivery: branches, versions, deploy paths, releases
 

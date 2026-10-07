@@ -7,14 +7,21 @@
   "license": "MIT",
   "workspaces": [
     "packages/core",
-    "packages/node"
+    "packages/node",
+    "packages/chrome",
+    "packages/ptyd",
+    "packages/nmhost",
+    "packages/extension",
+    "packages/cli"
   ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "node scripts/live.mjs",
-    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/core/test && tsc --noEmit -p packages/node && tsc --noEmit -p test && tsc --noEmit -p scripts",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/core/test && tsc --noEmit -p packages/node && tsc --noEmit -p packages/chrome && tsc --noEmit -p packages/ptyd && tsc --noEmit -p packages/nmhost && tsc --noEmit -p packages/extension && tsc --noEmit -p packages/cli && tsc --noEmit -p test && tsc --noEmit -p scripts",
     "build": "node scripts/build.mjs",
+    "pack": "node scripts/pack.mjs",
+    "deploy": "node scripts/deploy.mjs",
     "lint:imports": "node scripts/check-core-imports.mjs",
     "lint:extension": "node scripts/check-extension.mjs",
     "lint:listen": "node scripts/check-listen.mjs",
@@ -27,7 +34,6 @@
     "node": "^22.22.2 || ^24.15.0 || >=26"
   },
   "devDependencies": {
-    "@lydell/node-pty": "1.2.0-beta.15",
     "@types/node": "26.6.4",
     "esbuild": "0.28.2",
     "typescript": "5.9.3",
