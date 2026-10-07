@@ -156,6 +156,10 @@ describe("the guarded endpoint's HTTP routes (docs/IMPLEMENTATION.md §12)", () 
 
   it.each([
     ["GET", "/json/version", { kind: "version" }],
+    ["GET", "/json/version/", { kind: "version" }],
+    ["GET", "/json/", { kind: "list" }],
+    ["GET", "/json/list/", { kind: "list" }],
+    ["GET", "/json/activate/PAGE/", { kind: "activate", targetId: "PAGE" }],
     ["GET", "/json", { kind: "list" }],
     ["GET", "/json/list", { kind: "list" }],
     ["PUT", "/json/new?https://app.example/", { kind: "new", url: "https://app.example/" }],

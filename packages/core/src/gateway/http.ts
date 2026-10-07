@@ -19,7 +19,9 @@ export type GatewayRoute =
  */
 export function routeGatewayHttp(method: string, path: string): GatewayRoute {
   const question = path.indexOf("?");
-  const pathname = question === -1 ? path : path.slice(0, question);
+  const raw = question === -1 ? path : path.slice(0, question);
+  // Chrome answers its /json endpoints with or without a trailing slash, and Playwright asks for /json/version/.
+  const pathname = raw.startsWith("/json/") && raw.length > "/json/".length && raw.endsWith("/") ? raw.slice(0, -1) : raw === "/json/" ? "/json" : raw;
   const query = question === -1 ? "" : path.slice(question + 1);
   if (pathname === "/json/new") return method === "PUT" ? { kind: "new", url: decodeURIComponent(query) } : { kind: "method-not-allowed" };
   if (method !== "GET") return { kind: "method-not-allowed" };
