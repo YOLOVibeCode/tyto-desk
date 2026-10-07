@@ -43,6 +43,8 @@ async function connectPanel(prompt = true): Promise<Panel> {
     { label: "the Desk panel that owns the pane" },
   );
   const { target, session } = found;
+  // Typed text reaches the panel's focused element even when its window is not the one with the X focus.
+  await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true }, { sessionId: session });
   const pane = await waitFor(() => evaluate<string | null>(cdp, session, "typeof deskTest === 'object' && deskTest.panes().length > 0 ? deskTest.panes()[0] : null"), {
     label: "the panel's pane",
   });
