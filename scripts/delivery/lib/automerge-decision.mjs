@@ -7,8 +7,8 @@
  * And only Dependabot's own pull request, as the event named it (D83): every commit on it authored by dependabot[bot]
  * and signed by GitHub, its commits ending at the head commit the event named, its head still that commit, and none of
  * its files an owner-merge path (`owner-paths.json`, or a file list the API cut short). The workflow runs only on events
- * Dependabot sent and turns auto-merge on for that head commit alone (`--match-head-commit`), so a commit someone else
- * pushes never rides on it.
+ * Dependabot sent and turns auto-merge on only while the head is that commit (`--match-head-commit`), so a push by
+ * anyone else never turns auto-merge on; a later push that touches an owner-merge path turns it off (owner-merge.yml).
  *
  * And only once `main` requires the checks (the interim rule, D54): with no ruleset requiring `pr-title` and `ci-ok`,
  * `gh pr merge --auto` merges a pull request whose checks are still running or failing at once. Until `github-setup
