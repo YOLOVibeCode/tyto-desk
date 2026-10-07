@@ -61,6 +61,9 @@ const COALESCE_MAX = 65_536;
 const PAUSE_ABOVE = 100_000;
 const RESUME_BELOW = 5_000;
 const STUCK_MS = 10_000;
+/** The PTY also pauses while the mirror is this far behind, and resumes below the second (D106). */
+const MIRROR_PAUSE_ABOVE = 1_000_000;
+const MIRROR_RESUME_BELOW = 100_000;
 
 /** What each client kind may send after hello (§7.2's table). */
 const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
@@ -95,6 +98,11 @@ type Pane = {
   paused: boolean;
   /** Bumps whenever the pane resumes or changes owner, so an older stuck check does nothing. */
   flowEpoch: number;
+  /** Characters written to the mirror and not yet parsed; the PTY also pauses above 1,000,000. */
+  mirrorBehind: number;
+  mirrorPaused: boolean;
+  /** Whether the PTY is paused now: for the owner, for the mirror, or both. */
+  ptyPaused: boolean;
 };
 
 /** An extension call on its way: who asked, under which id, and the worker it went to. */
@@ -314,6 +322,8 @@ export class Daemon {
         return;
       }
     }
+    // An exited pane opened again starts its new shell with a new mirror.
+    existing?.screen?.dispose();
     const pane: Pane = {
       id: message.pane,
       pty: null,
@@ -332,6 +342,9 @@ export class Daemon {
       unacked: 0,
       paused: false,
       flowEpoch: 0,
+      mirrorBehind: 0,
+      mirrorPaused: false,
+      ptyPaused: false,
     };
     this.panes.set(pane.id, pane);
     let shell: PaneShell;
@@ -402,7 +415,7 @@ export class Daemon {
 
   /** Shell output into the mirror and toward the owner. */
   private process(pane: Pane, data: string): void {
-    void pane.screen?.write(data);
+    this.mirror(pane, data);
     pane.tail.feed(data);
     pane.modes.feed(data);
     const owner = pane.owner;
@@ -442,9 +455,40 @@ export class Daemon {
     if (!pane.paused && pane.unacked > PAUSE_ABOVE) this.pause(pane);
   }
 
+  /**
+   * Into the mirror, which parses on its own time: a shell that prints faster than the mirror parses is paused while
+   * the mirror is more than 1,000,000 characters behind, so the mirror never falls far behind (xterm refuses writes past
+   * 50 MB waiting).
+   */
+  private mirror(pane: Pane, data: string): void {
+    const screen = pane.screen;
+    if (screen === null) return;
+    pane.mirrorBehind += data.length;
+    void screen.write(data).then(() => {
+      pane.mirrorBehind -= data.length;
+      if (pane.mirrorPaused && pane.mirrorBehind < MIRROR_RESUME_BELOW) {
+        pane.mirrorPaused = false;
+        this.applyPause(pane);
+      }
+    });
+    if (!pane.mirrorPaused && pane.mirrorBehind > MIRROR_PAUSE_ABOVE) {
+      pane.mirrorPaused = true;
+      this.applyPause(pane);
+    }
+  }
+
+  /** Pauses the PTY while its owner or its mirror is behind, and resumes it once neither is. */
+  private applyPause(pane: Pane): void {
+    const pause = pane.paused || pane.mirrorPaused;
+    if (pause === pane.ptyPaused) return;
+    pane.ptyPaused = pause;
+    if (pause) pane.pty?.pause();
+    else pane.pty?.resume();
+  }
+
   private pause(pane: Pane): void {
     pane.paused = true;
-    pane.pty?.pause();
+    this.applyPause(pane);
     const epoch = pane.flowEpoch;
     const owner = pane.owner;
     void this.ports.clock.sleep(STUCK_MS).then(() => {
@@ -459,7 +503,7 @@ export class Daemon {
   private resume(pane: Pane): void {
     pane.paused = false;
     pane.flowEpoch += 1;
-    pane.pty?.resume();
+    this.applyPause(pane);
   }
 
   /** Forgets what the owner has not acknowledged, and resumes a paused PTY. */

@@ -51,6 +51,16 @@ describe("the panes' mirrors (docs/IMPLEMENTATION.md §7.3)", () => {
     screen.dispose();
   });
 
+  it("a write xterm refuses (50 MB already waiting) resolves instead of rejecting", async () => {
+    const screen = new NodeTerminalMirror().create(80, 24, 0);
+    void screen.write("z".repeat(50_000_001));
+
+    const refused = await Promise.race([screen.write("after").then(() => "resolved", () => "rejected"), new Promise((resolve) => setTimeout(() => resolve("pending"), 1_000))]);
+
+    expect(refused).toBe("resolved");
+    screen.dispose();
+  });
+
   it("flush resolves once every write before it is parsed", async () => {
     // 80 columns × (24 rows + 2,000 lines of scrollback) holds all 100,000 characters.
     const screen = new NodeTerminalMirror().create(80, 24, 2_000);

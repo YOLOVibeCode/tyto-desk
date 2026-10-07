@@ -5,7 +5,7 @@ import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "@de
 export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
 
 /** What the live suite reads in a test build (docs/IMPLEMENTATION.md §17.3); production builds drop it. */
-type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string };
+type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string; calls(paneId: string): string[] };
 
 /**
  * The panel's terminals (§10's xterm options, slice 1c's subset): `convertEol` false, the scrollback the mirror keeps,
@@ -17,6 +17,8 @@ export class XtermView implements TerminalView {
   private readonly bannerElement: HTMLElement;
   private readonly options: XtermOptions;
   private readonly terminals = new Map<string, Terminal>();
+  /** In a test build, each pane's last 200 resets, writes (their length) and resizes, for the live suite's reports. */
+  private readonly calls = new Map<string, string[]>();
 
   constructor(container: HTMLElement, bannerElement: HTMLElement, options: XtermOptions) {
     this.container = container;
@@ -33,6 +35,7 @@ export class XtermView implements TerminalView {
         },
         panes: () => [...this.terminals.keys()],
         banner: () => (this.bannerElement.hidden ? "" : (this.bannerElement.textContent ?? "")),
+        calls: (paneId) => [...(this.calls.get(paneId) ?? [])],
       };
       (globalThis as { deskTest?: TestHooks }).deskTest = hooks;
     }
@@ -53,8 +56,13 @@ export class XtermView implements TerminalView {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(element);
-    fit.fit();
-    const observer = new ResizeObserver(() => fit.fit());
+    // Fit only a laid-out element: before the side panel lays the page out, fit measures nothing and gives 2×1, and a
+    // pane opened at that size reflows its mirror and makes zsh redraw a prompt it believes is six lines tall (D106).
+    const laidOut = () => element.clientWidth > 0 && element.clientHeight > 0;
+    if (laidOut()) fit.fit();
+    const observer = new ResizeObserver(() => {
+      if (laidOut()) fit.fit();
+    });
     observer.observe(element);
     this.terminals.set(paneId, term);
     const pasteListeners: ((text: string) => void)[] = [];
@@ -67,14 +75,28 @@ export class XtermView implements TerminalView {
     element.addEventListener("paste", (event) => intercept(event, event.clipboardData?.getData("text/plain")), { capture: true });
     element.addEventListener("drop", (event) => intercept(event, event.dataTransfer?.getData("text/plain")), { capture: true });
     element.addEventListener("dragover", (event) => event.preventDefault(), { capture: true });
+    const note = (call: string) => {
+      if (!DESK_TEST) return;
+      const list = this.calls.get(paneId) ?? [];
+      list.push(`${Math.round(performance.now())} ${call}`);
+      if (list.length > 200) list.shift();
+      this.calls.set(paneId, list);
+    };
+    term.onResize((size) => note(`resized ${size.cols}x${size.rows}`));
     return {
-      write: (data, done) => term.write(data, done),
+      write: (data, done) => {
+        note(`write ${data.length} ${JSON.stringify(data.slice(0, 120))}`);
+        term.write(data, done);
+      },
       paste: (text) => term.paste(text),
       bracketedPasteMode: () => term.modes.bracketedPasteMode,
       onPaste: (listener) => {
         pasteListeners.push(listener);
       },
-      reset: () => term.reset(),
+      reset: () => {
+        note("reset");
+        term.reset();
+      },
       size: (): TerminalSize => ({ cols: term.cols, rows: term.rows }),
       onInput: (listener) => {
         term.onData(listener);

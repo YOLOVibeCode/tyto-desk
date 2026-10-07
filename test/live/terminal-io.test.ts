@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DESK_EXTENSION_ID } from "../../packages/core/src/index.ts";
@@ -6,7 +6,7 @@ import { Cdp, attach, evaluate, targets, waitFor, type TargetInfo } from "./lib/
 import { browserVersion } from "./lib/chrome.ts";
 import { installDesk, runAnswering, userEnv, type InstalledDesk } from "./lib/desk-run.ts";
 import { LIVE_PORTS } from "./lib/ports.ts";
-import { saveResult } from "./lib/results.ts";
+import { saveFile, saveResult } from "./lib/results.ts";
 
 const PORT = LIVE_PORTS.terminal;
 const PANEL_URL = `chrome-extension://${DESK_EXTENSION_ID}/panel.html`;
@@ -96,6 +96,9 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
   afterAll(async () => {
     panel?.cdp.close();
     if (installed === undefined) return;
+    // The daemon's and the hosts' logs, for a failure's report.
+    const logs = join(installed.deskHome, "logs");
+    for (const name of await readdir(logs).catch(() => [])) await saveFile(`terminal-log-${name}`, await readFile(join(logs, name)));
     await runAnswering(join(installed.home, ".local", "bin", "desk"), ["quit", "--all"], userEnv(installed.home), "y").catch(() => undefined);
   }, 60_000);
 
@@ -108,9 +111,10 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
 
       await quitAndRelaunch();
       const after = await lines();
+      const calls = await evaluate<string[]>(current().cdp, current().session, `deskTest.calls(${JSON.stringify(current().pane)})`);
       await typeLine("echo again-$$");
       const again = await waitFor(async () => /again-(\d+)/.exec((await screen()).split("echo again-$$").pop() ?? "")?.[1], { label: "the pid after" });
-      await saveResult("terminal-reattach", { pid, again, before, after });
+      await saveResult("terminal-reattach", { pid, again, before, after, calls });
 
       expect(after.join("\n")).toContain(`marker-${pid}`);
       expect(again).toBe(pid);
@@ -136,7 +140,7 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       await typeLine("tmux new -s desklive");
       await waitFor(async () => (await screen()).includes("[desklive]"), { label: "tmux's status line", timeoutMs: 20_000 });
       await typeLine("echo inside-tmux");
-      await waitFor(async () => (await screen()).includes("inside-tmux\n") || (await lines()).includes("inside-tmux"), { label: "output in tmux" });
+      await waitFor(async () => (await lines()).includes("inside-tmux"), { label: "output in tmux" });
       const tmuxBefore = await lines();
       await quitAndRelaunch(false);
       await waitFor(async () => (await screen()).includes("[desklive]"), { label: "tmux after the re-attach" });
@@ -157,8 +161,23 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
     async () => {
       await waitFor(async () => (await screen()).includes("desk-live %"), { label: "a prompt", timeoutMs: 20_000 });
       const started = Date.now();
-      await typeLine("head -c 50000000 /dev/zero | tr '\\0' x | fold -w 100; echo done-50mb");
-      await waitFor(async () => (await lines()).includes("done-50mb"), { label: "the end of 50 MB", timeoutMs: 180_000, intervalMs: 250 });
+      // fold ends without a newline, so the marker gets a line of its own.
+      await typeLine("head -c 50000000 /dev/zero | tr '\\0' x | fold -w 100; echo; echo done-50mb");
+      // Progress every 5 s, for a report when it is slow: the panel's writes and resets so far, and its last line.
+      const progress: { s: number; writes: number; resets: number; last: string }[] = [];
+      const sampler = setInterval(() => {
+        const { cdp, session, pane } = current();
+        void evaluate<string[]>(cdp, session, `deskTest.calls(${JSON.stringify(pane)})`).then(async (calls) => {
+          const shown = await lines();
+          progress.push({ s: Math.round((Date.now() - started) / 1000), writes: calls.filter((c) => c.includes(" write ")).length, resets: calls.filter((c) => c.endsWith(" reset")).length, last: (shown.filter(Boolean).at(-1) ?? "").slice(0, 40) });
+        }, () => undefined);
+      }, 5_000);
+      try {
+        await waitFor(async () => (await lines()).includes("done-50mb"), { label: "the end of 50 MB", timeoutMs: 180_000, intervalMs: 250 });
+      } finally {
+        clearInterval(sampler);
+        await saveResult("terminal-heavy-progress", progress);
+      }
       const fiftyMs = Date.now() - started;
 
       await typeLine("yes desk-flood");
@@ -177,8 +196,9 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
   it(
     "minimizing the window during heavy output never pauses the shell for more than 1 s",
     async () => {
-      const { cdp, target } = current();
-      const { windowId } = await cdp.send<{ windowId: number }>("Browser.getWindowForTarget", { targetId: target.targetId });
+      const { cdp, session } = current();
+      // A side panel is in no browser window of its own for CDP; the panel's chrome.windows id is the CDP window id.
+      const windowId = await evaluate<number>(cdp, session, "chrome.windows.getCurrent().then((w) => w.id)");
       await typeLine("for i in $(seq 1 400); do date +%s%3N >> ~/ticks; head -c 50000 /dev/zero | tr '\\0' y; echo; done; echo ticks-done");
       await new Promise((resolve) => setTimeout(resolve, 1_000));
       await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "minimized" } }).catch(() => undefined);

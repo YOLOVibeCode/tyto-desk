@@ -760,6 +760,46 @@ describe("the terminal daemon's output, attach and flow control (slice 2b)", () 
     expect(pty.paused).toBe(false);
   });
 
+  it("opening an exited pane again gives its new shell a new mirror and disposes the old one", async () => {
+    const { pty, panel, mirror } = await opened();
+    pty.end({ code: 0, signal: null });
+    await settle();
+
+    panel.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(mirror.screens.map((screen) => screen.disposed)).toEqual([true, false]);
+  });
+
+  it("the PTY pauses while its mirror is more than 1,000,000 characters behind, and resumes once the mirror catches up", async () => {
+    const { pty, panel, screen, clock } = await opened();
+    panel.send({ type: "visibility", state: "hidden" });
+    await clock.advance(5);
+    screen.holding = true;
+
+    pty.print("x".repeat(600_000));
+    const under = pty.paused;
+    pty.print("y".repeat(400_001));
+    const over = pty.paused;
+    screen.release();
+    await settle();
+
+    expect([under, over, pty.paused]).toEqual([false, true, false]);
+  });
+
+  it("a PTY paused for its owner stays paused while only the mirror catches up", async () => {
+    const { pty, screen, clock } = await opened();
+    await clock.advance(5);
+    screen.holding = true;
+
+    pty.print("x".repeat(1_000_001));
+    await clock.advance(4);
+    screen.release();
+    await settle();
+
+    expect(pty.paused).toBe(true);
+  });
+
   it("a hidden owner receives no output and never pauses the PTY", async () => {
     const { pty, panel, clock } = await opened();
     panel.send({ type: "visibility", state: "hidden" });
