@@ -12,7 +12,7 @@
 #
 # The results come out of the container with docker cp, which keeps symbolic links, and upload-artifact follows them.
 # The runner deletes results that hold anything but plain files and directories, but a job cancelled or timed out in
-# between would not, so the upload also waits for a step that checks test-results/ itself (D81).
+# between would not, so the upload also waits for a step that checks test-results/ itself (D87).
 name: live-run
 
 on:

@@ -103,7 +103,7 @@ jobs:
           package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm audit signatures
-      # The live image's npm tools are an npm project of their own, with their own lockfile and .npmrc (§2, D81).
+      # The live image's npm tools are an npm project of their own, with their own lockfile and .npmrc (§2, D87).
       - name: npm ci --ignore-scripts (the live image's tools)
         working-directory: test/live/image/tools
         run: npm ci --ignore-scripts
