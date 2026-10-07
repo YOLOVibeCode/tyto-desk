@@ -18,12 +18,14 @@ import {
   FakeClock,
   FakeDaemonClient,
   FakeDeskExtension,
+  FakeDetachedSpawner,
   FakeDevToolsHttp,
   FakeExtensionBridge,
   FakeInstanceLock,
   FakePanelOpener,
   FakePortProbe,
   FakeProcessInfo,
+  FakeProcessSignals,
   MemoryConfigStore,
   MemoryNativeHostDir,
   MemoryTextFiles,
@@ -45,6 +47,7 @@ const template = {
   commands: { "toggle-terminal": { suggested_key: { mac: "Command+Shift+Period", default: "Ctrl+Shift+Period" } } },
 };
 const config = newDeskConfig({ home, platform: "darwin", chromePort: 9417, gatewayPort: 9583 });
+const watchCommand = { file: `${appDir}/Desk Terminal.app/Contents/MacOS/Desk Terminal`, args: [`${appDir}/desk.mjs`, "watch"], env: { HOME: home, DESK_HOME: deskHome } };
 
 const win = (id: number, change: Partial<DeskWindow> = {}): DeskWindow => ({ id, focused: false, lastFocused: false, panelOpen: false, ...change });
 
@@ -81,6 +84,9 @@ function setup(
   const profile = new FakeChromeProfile({ preferencesExist: options.preferencesExist ?? false });
   const processes = new FakeProcessInfo();
   const lock = new FakeInstanceLock();
+  const spawner = new FakeDetachedSpawner();
+  const signals = new FakeProcessSignals(log);
+  spawner.onStart = () => log.push("watch started");
   const store = new MemoryConfigStore(options.config ?? config);
   for (const [id, tab] of options.tabs ?? [[1, "tab-1"]]) panels.tabs.set(id, tab);
   const tabWindow = new Map([...panels.tabs].map(([id, tab]) => [tab, id]));
@@ -126,10 +132,12 @@ function setup(
         daemon,
         bridge,
         files,
+        spawner,
+        signals,
       },
-      { home, deskHome, platform: "darwin", version, appDir },
+      { home, deskHome, platform: "darwin", version, appDir, watchCommand },
     );
-  return { log, clock, chrome, devTools, extension, panels, settings, browser, daemon, bridge, files, hosts, profile, processes, lock, store, run };
+  return { log, clock, chrome, devTools, extension, panels, settings, browser, daemon, bridge, files, hosts, profile, processes, lock, spawner, signals, store, run };
 }
 
 describe("desk, a fresh launch", () => {
@@ -475,5 +483,67 @@ describe("desk, Chrome's settings at launch", () => {
     expect(workerUp).toBeGreaterThan(-1);
     expect(written).toBeGreaterThan(workerUp);
     expect(opened).toBeGreaterThan(written);
+  });
+});
+
+describe("desk watch at launch (§6.1 step 13)", () => {
+  it.each([
+    ["free", null, 1],
+    ["held by a live watch of this version", version, 0],
+  ])("desk starts desk watch when run/watch.lock is free and leaves a live watch of its own version running (%s)", async (_, build, starts) => {
+    const desk = setup();
+    if (build !== null) desk.lock.holders.set("watch", { pid: 5151, build });
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.spawner.started).toEqual(starts === 1 ? [watchCommand] : []);
+    expect(desk.signals.terminated).toEqual([]);
+  });
+
+  it("desk replaces a desk watch that runs another version and never stops the daemon", async () => {
+    const desk = setup();
+    desk.lock.holders.set("watch", { pid: 5151, build: "0.2.0" });
+    desk.signals.onTerminate = () => desk.lock.holders.delete("watch");
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.signals.terminated).toEqual([5151]);
+    expect(desk.spawner.started).toEqual([watchCommand]);
+    expect(desk.log.indexOf("signals.terminate 5151")).toBeLessThan(desk.log.indexOf("watch started"));
+    expect(desk.daemon.notices).toEqual([]);
+  });
+
+  it("desk starts desk watch after the panel opens", async () => {
+    const desk = setup();
+
+    await desk.run();
+
+    expect(desk.log.indexOf("panel hello in window 1")).toBeLessThan(desk.log.indexOf("watch started"));
+  });
+
+  it("desk says agents cannot reach the guarded endpoint when desk watch does not start, and the panel still opens", async () => {
+    const desk = setup();
+    desk.spawner.failing = true;
+
+    const result = await desk.run();
+
+    expect(result).toEqual({
+      ok: true,
+      message: expect.stringMatching(/in \d+\.\d s\. desk watch did not start, so agents cannot reach the guarded endpoint until the next desk; desk cdp --raw still works$/),
+    });
+    expect(desk.daemon.panels).toEqual([1]);
+  });
+
+  it("desk does not start a second watch while the older one has not let go of its lock within 10 s", async () => {
+    const desk = setup();
+    desk.lock.holders.set("watch", { pid: 5151, build: "0.2.0" });
+
+    const result = await desk.run();
+
+    expect(desk.signals.terminated).toEqual([5151]);
+    expect(desk.spawner.started).toEqual([]);
+    expect(result).toEqual({ ok: true, message: expect.stringMatching(/desk watch did not start/) });
   });
 });

@@ -12,6 +12,7 @@ export { FakeDetachedSpawner } from "./fake-detached-spawner.ts";
 export { FakeDevToolsHttp } from "./fake-dev-tools-http.ts";
 export { FakeExtensionBridge } from "./fake-extension-bridge.ts";
 export { FakeExtensionWindows } from "./fake-extension-windows.ts";
+export { FakeGuardedEndpoint } from "./fake-guarded-endpoint.ts";
 export { FakeHostChannel, FakeHostConnector } from "./fake-host-connector.ts";
 export { FakeInstanceLock } from "./fake-instance-lock.ts";
 export { FakeLoginShell } from "./fake-login-shell.ts";

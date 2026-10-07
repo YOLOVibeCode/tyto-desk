@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { parseVersionInfo, versionLine, type Prompter, type VersionInfo } from "@desk/core";
 import { ConfigFileError } from "@desk/node";
 import { runHost } from "@desk/nmhost";
+import { cdpCommand } from "./cdp.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
 import { TtyPrompter } from "./prompter.ts";
 import { quitCommand } from "./quit.ts";
+import { watchCommand } from "./watch.ts";
 
 export type MainInput = {
   argv: readonly string[];
@@ -24,6 +26,7 @@ const USAGE = [
   "usage: desk                       start the Desk Chrome with the terminal panel",
   "       desk --version [--json]    this version, its channel, commit and build time",
   "       desk quit [--all]          close the Desk Chrome; --all also stops the terminal daemon and desk watch",
+  "       desk cdp [--raw] [--ws]    the guarded endpoint for CDP clients; --raw the browser's own port",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -79,6 +82,21 @@ export async function main(input: MainInput): Promise<number> {
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         channel: version.info.channel,
       });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "watch" && rest.length === 0) {
+      const until = new Promise<void>((resolve) => {
+        process.once("SIGTERM", () => resolve());
+        process.once("SIGHUP", () => resolve());
+      });
+      return await watchCommand({ deskHome, version: version.info.version, until });
+    }
+    if (command === "cdp") {
+      const flags = new Set(rest);
+      if (flags.size !== rest.length || rest.some((flag) => flag !== "--raw" && flag !== "--ws")) return usage();
+      const result = await cdpCommand({ deskHome, raw: flags.has("--raw"), ws: flags.has("--ws") });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
       return result.code;

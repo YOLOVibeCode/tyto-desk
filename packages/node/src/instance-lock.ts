@@ -13,7 +13,7 @@ function errorCode(err: unknown): string | undefined {
 const START_TOLERANCE_MS = 3_000;
 
 /** A lock file as read: its text, and the pid and start it names (`null` when it names none). */
-type Holder = { text: string; pid: number | null; startedAt: number | null };
+type Holder = { text: string; pid: number | null; startedAt: number | null; build: string | null };
 
 export type InstanceLockOptions = {
   /** Whether the pid a lock names runs, and since when. */
@@ -40,12 +40,12 @@ async function readHolder(path: string): Promise<Holder | null> {
   try {
     json = JSON.parse(text);
   } catch {
-    return { text, pid: null, startedAt: null };
+    return { text, pid: null, startedAt: null, build: null };
   }
   const fields = typeof json === "object" && json !== null ? (json as Record<string, unknown>) : {};
   const pid = typeof fields.pid === "number" && Number.isInteger(fields.pid) && fields.pid > 0 ? fields.pid : null;
   const started = typeof fields.startedAt === "string" ? Date.parse(fields.startedAt) : Number.NaN;
-  return { text, pid, startedAt: Number.isNaN(started) ? null : started };
+  return { text, pid, startedAt: Number.isNaN(started) ? null : started, build: typeof fields.build === "string" ? fields.build : null };
 }
 
 /** Creates `path` holding `text`, whole, with link(2): false when it exists. Nobody ever reads a half-written lock. */
@@ -109,6 +109,15 @@ export class NodeInstanceLock implements InstanceLock {
       if (reclaiming !== null) return { ok: false, heldBy: reclaiming };
     }
     return { ok: false, heldBy: (await readHolder(path))?.pid ?? 0 };
+  }
+
+  async holder(name: string): Promise<{ pid: number; build: string | null } | null> {
+    if (!/^[a-z][a-z0-9-]*$/.test(name)) throw new Error(`a lock name is a plain word, not ${JSON.stringify(name)}`);
+    const path = join(this.runDir, `${name}.lock`);
+    await assertPathAllowed(path);
+    const holder = await readHolder(path);
+    if (holder === null || holder.pid === null || !(await this.alive(holder))) return null;
+    return { pid: holder.pid, build: holder.build };
   }
 
   /** Whether the lock's holder runs: its pid is alive and started when the lock says, give or take `ps`'s second. */

@@ -53,6 +53,7 @@ addEventListener("load", () => {
 /**
  * The live suite's web pages, on 127.0.0.1 only, ported from the lab's fixture.mjs. Pages are passive.
  * - `/page1.html`, `/page2.html`: a heading, a link and a button, for agent-browser.
+ * - `/form.html`: a text field and a button, for agent-browser's fill and click.
  * - `/measure?tag=<tag>`: reports the window's readings to `/report` until the window settles (measureScript).
  */
 export async function startFixtureServer(): Promise<FixtureServer> {
@@ -69,6 +70,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         break;
       case "/page2.html":
         body = page("Fixture Two", FIXTURE_PAGE);
+        break;
+      case "/form.html":
+        body = page("Fixture Form", '<label>Query <input id="q" name="q"></label> <button id="b" onclick="document.title = \'clicked\'">Click me</button>');
         break;
       case "/measure":
         body = page("measure", measureScript(tag));

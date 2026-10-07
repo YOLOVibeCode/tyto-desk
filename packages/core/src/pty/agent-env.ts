@@ -55,15 +55,15 @@ export type PaneEnvironmentInput = {
 };
 
 /**
- * A pane's environment: core's allowlist (`shellEnv`) and, when the gate allows, the agent variables. Until slice 4a,
- * `DESK_CDP_URL` names the Desk Chrome's raw port, as `agent-browser.json` does.
+ * A pane's environment: core's allowlist (`shellEnv`) and, when the gate allows, the agent variables. `DESK_CDP_URL` is
+ * the guarded endpoint (slice 4a); `agent-browser.json` follows it in slice 4b.
  */
 export function paneEnvironment(input: PaneEnvironmentInput): Record<string, string> {
   const agent = input.gate.allowed
     ? {
         config: `${input.deskHome}/${AGENT_BROWSER_CONFIG_FILE}`,
         session: `${input.config.agents.sessionPrefix}-${input.pane}`,
-        cdpUrl: cdpUrl(input.config.chrome.port),
+        cdpUrl: cdpUrl(input.config.gateway.port),
         pane: input.pane,
       }
     : null;

@@ -1,8 +1,9 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { newDeskConfig, serializeDeskConfig } from "@desk/core";
 import { main } from "../src/index.ts";
 
 const version = {
@@ -17,7 +18,10 @@ const version = {
 };
 
 /** Runs desk's main with a runtime directory holding `versionJson`, and returns its exit code and output. */
-async function desk(argv: string[], versionJson: string | null = JSON.stringify(version)) {
+/** A Desk config with the Desk Chrome on 9417 and the guarded endpoint on 9583. */
+const CONFIG = serializeDeskConfig(newDeskConfig({ home: "/Users/alex", platform: "linux", chromePort: 9417, gatewayPort: 9583 }));
+
+async function desk(argv: string[], versionJson: string | null = JSON.stringify(version), config: string | null = null) {
   const runtimeDir = await mkdtemp(join(tmpdir(), "runtime-"));
   if (versionJson !== null) await writeFile(join(runtimeDir, "version.json"), versionJson);
   const stdout = new PassThrough();
@@ -27,6 +31,10 @@ async function desk(argv: string[], versionJson: string | null = JSON.stringify(
   stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
   stderr.on("data", (chunk: Buffer) => (err += chunk.toString("utf8")));
   const home = await mkdtemp(join(tmpdir(), "home-"));
+  if (config !== null) {
+    await mkdir(join(home, ".desk"), { mode: 0o700 });
+    await writeFile(join(home, ".desk", "config.json"), config, { mode: 0o600 });
+  }
   const code = await main({
     argv,
     env: { HOME: home, DESK_HOME: join(home, ".desk") },
@@ -65,7 +73,7 @@ describe("the desk command", () => {
     expect(err).toMatch(/version\.json is missing or damaged/);
   });
 
-  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"]])("desk %s is a usage error (64)", async (...argv) => {
+  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"]])("desk %s is a usage error (64)", async (...argv) => {
     const { code, err } = await desk(argv);
 
     expect(code).toBe(64);
@@ -82,5 +90,14 @@ describe("the desk command", () => {
       out: "",
       err: "desk: desk quit --all needs an interactive terminal to ask you first\n",
     });
+  });
+
+  it("desk cdp prints the guarded endpoint and --raw prints the browser port", async () => {
+    expect(await desk(["cdp"], JSON.stringify(version), CONFIG)).toEqual({ code: 0, out: "http://127.0.0.1:9583\n", err: "" });
+    expect(await desk(["cdp", "--raw"], JSON.stringify(version), CONFIG)).toEqual({ code: 0, out: "http://127.0.0.1:9417\n", err: "" });
+  });
+
+  it("desk cdp exits 69 naming desk when Desk has no config yet", async () => {
+    expect(await desk(["cdp"])).toEqual({ code: 69, out: "", err: "desk: Desk has no config yet; run desk\n" });
   });
 });
