@@ -13,12 +13,15 @@ export type TerminalPane = {
   dispose(): void;
 };
 
+/** A button beside the banner's text: "Restart now" (§9). */
+export type BannerAction = { label: string; run(): void };
+
 /**
  * The panel's terminals and its banner (docs/IMPLEMENTATION.md §3, §9). Adapter: packages/extension (xterm). Text in
  * the banner is shown as text, never as markup.
  */
 export interface TerminalView {
   create(paneId: string): TerminalPane;
-  /** Shows a line above the terminal, or hides it with `null`. */
-  banner(text: string | null): void;
+  /** Shows a line above the terminal, with a button when `action` is given, or hides it with `null`. */
+  banner(text: string | null, action?: BannerAction): void;
 }

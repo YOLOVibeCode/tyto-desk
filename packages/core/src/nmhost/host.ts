@@ -2,6 +2,7 @@ import { DESK_EXTENSION_ORIGIN } from "../extension/desk-extension.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { DaemonDialer } from "../ports/daemon-dialer.ts";
 import type { DetachedSpawner } from "../ports/detached-spawner.ts";
+import type { HostState } from "../protocol/messages.ts";
 
 /** How long the host keeps trying the daemon it started (§6.6: host → daemon connect, including starting it). */
 export const DAEMON_START_MS = 3_000;
@@ -56,4 +57,15 @@ export async function startHost<Link>(input: HostInput<Link>): Promise<HostStart
     await input.clock.sleep(Math.min(wait, left));
     wait = Math.min(wait * 2, RETRY_CAP_MS);
   }
+}
+
+/**
+ * What the host tells the panel before it ends, when it could not reach a daemon (§9's panel states): no current
+ * version means the install is damaged; a daemon that never answered means it is unreachable. A caller that is not the
+ * Desk extension is told nothing.
+ */
+export function hostStateFor(reason: "foreign-origin" | "no-current-version" | "daemon-unreachable"): HostState | null {
+  if (reason === "no-current-version") return { type: "host", state: "install-damaged" };
+  if (reason === "daemon-unreachable") return { type: "host", state: "no-daemon" };
+  return null;
 }

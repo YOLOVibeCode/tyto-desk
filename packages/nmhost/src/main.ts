@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { daemonEnvironment, startHost, terminalBinary, type DaemonCommand } from "@desk/core";
-import { NodeDetachedSpawner, SystemClock } from "@desk/node";
+import { daemonEnvironment, encodeNativeFrame, hostStateFor, startHost, terminalBinary, type DaemonCommand } from "@desk/core";
+import { FileLogSink, NodeDetachedSpawner, SystemClock, logCrashes } from "@desk/node";
 import { UnixDaemonDialer } from "./dialer.ts";
 import { relay } from "./relay.ts";
 
@@ -19,6 +19,10 @@ export async function runHost(input: {
   stdin: NodeJS.ReadableStream;
   stdout: NodeJS.WritableStream;
 }): Promise<number> {
+  const log = new FileLogSink(join(input.deskHome, "logs", "nmhost.log"));
+  logCrashes(process, log, (code) => {
+    void log.flushed().then(() => process.exit(code));
+  });
   const daemonCommand = async (): Promise<DaemonCommand | null> => {
     const version = await realpath(join(input.deskHome, "app", "current")).catch(() => null);
     if (version === null) return null;
@@ -35,6 +39,11 @@ export async function runHost(input: {
     clock: new SystemClock(),
     daemonCommand,
   });
-  if (!started.ok) return 1;
+  if (!started.ok) {
+    const state = hostStateFor(started.reason);
+    const report = state === null ? null : encodeNativeFrame(new TextEncoder().encode(JSON.stringify(state)));
+    if (report?.ok === true) await new Promise<void>((resolve) => input.stdout.write(report.frame, () => resolve()));
+    return 1;
+  }
   return relay({ stdin: input.stdin, stdout: input.stdout, socket: started.link });
 }

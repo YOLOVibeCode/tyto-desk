@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DESK_EXTENSION_ORIGIN, startHost } from "../src/index.ts";
+import { DESK_EXTENSION_ORIGIN, hostStateFor, startHost } from "../src/index.ts";
 import { FakeClock, FakeDaemonDialer, FakeDetachedSpawner } from "../src/testing/index.ts";
 
 const daemon = { file: "/Users/alex/.desk/app/0.3.0/node/desk-node", args: ["/Users/alex/.desk/app/0.3.0/desk.mjs", "ptyd"], env: { HOME: "/Users/alex" } };
@@ -87,5 +87,13 @@ describe("the native host", () => {
 
     expect(result).toEqual({ ok: false, reason: "no-current-version" });
     expect(spawner.started).toEqual([]);
+  });
+
+  it.each([
+    ["no-current-version", { type: "host", state: "install-damaged" }],
+    ["daemon-unreachable", { type: "host", state: "no-daemon" }],
+    ["foreign-origin", null],
+  ] as const)("a host that could not start for %s tells the panel %j before it ends", (reason, message) => {
+    expect(hostStateFor(reason)).toEqual(message);
   });
 });

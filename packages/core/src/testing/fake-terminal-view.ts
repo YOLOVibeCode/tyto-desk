@@ -1,4 +1,4 @@
-import type { TerminalPane, TerminalSize, TerminalView } from "../ports/terminal-view.ts";
+import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "../ports/terminal-view.ts";
 
 /** A pane's terminal in memory: what was written since the last reset, and input the test types. */
 export class FakeTerminalPane implements TerminalPane {
@@ -61,6 +61,7 @@ export class FakeTerminalPane implements TerminalPane {
 export class FakeTerminalView implements TerminalView {
   readonly panes: FakeTerminalPane[] = [];
   bannerText: string | null = null;
+  bannerAction: BannerAction | null = null;
   private readonly size: TerminalSize;
 
   constructor(size: TerminalSize = { cols: 100, rows: 30 }) {
@@ -73,8 +74,9 @@ export class FakeTerminalView implements TerminalView {
     return pane;
   }
 
-  banner(text: string | null): void {
+  banner(text: string | null, action?: BannerAction): void {
     this.bannerText = text;
+    this.bannerAction = action ?? null;
   }
 
   /** The latest pane, failing the test when there is none. */

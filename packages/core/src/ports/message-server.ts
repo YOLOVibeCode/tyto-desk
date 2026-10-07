@@ -6,8 +6,11 @@ export interface DaemonPeer {
   close(): void;
 }
 
-/** What the transport tells the daemon about a connection: each line it read, and that it closed. */
-export type DaemonConnection = { receive(line: string): void; closed(): void };
+/**
+ * What the transport tells the daemon about a connection: each line it read, a line it refused for being over 1 MiB
+ * (its size only; the connection ends after), and that it closed.
+ */
+export type DaemonConnection = { receive(line: string): void; refused(size: number): void; closed(): void };
 
 /**
  * The daemon's listener on `run/ptyd.sock` (docs/IMPLEMENTATION.md §3, §7.2): NDJSON lines in, one line per message

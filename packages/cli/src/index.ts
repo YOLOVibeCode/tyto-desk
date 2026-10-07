@@ -6,5 +6,6 @@ export { main, type MainInput } from "./main.ts";
 export { cdpCommand } from "./cdp.ts";
 export { TtyPrompter } from "./prompter.ts";
 export { quitCommand } from "./quit.ts";
+export { daemonRestartCommand, statusCommand } from "./status.ts";
 export { tabCommand } from "./tab.ts";
 export { watchCommand } from "./watch.ts";

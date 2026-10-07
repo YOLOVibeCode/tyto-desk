@@ -1,4 +1,7 @@
+import { checkLayout, defaultLayout, type Layout } from "../layout/layout.ts";
 import type { Clock } from "../ports/clock.ts";
+import type { LayoutStore } from "../ports/layout-store.ts";
+import type { LogSink } from "../ports/log-sink.ts";
 import type { DaemonConnection, DaemonPeer } from "../ports/message-server.ts";
 import type { Pty, PtyExit, PtySpawner } from "../ports/pty-spawner.ts";
 import {
@@ -33,6 +36,8 @@ export type DaemonPorts = {
   shellFor(pane: string): Promise<PaneShell>;
   /** Called once, after a shutdown was accepted and every running shell got SIGHUP. */
   onShutdown(mode: "stop" | "restart"): void;
+  layouts: LayoutStore;
+  log: LogSink;
 };
 
 /** The panes Desk keeps at most (§7.2). */
@@ -41,12 +46,12 @@ const PANES_MAX = 64;
 /** How long the daemon waits for the service worker to answer an extension call (§6.6). */
 const EXT_CALL_MS = 2_000;
 
-/** What each client kind may send after hello (§7.2's table, the verbs slice 1c implements). */
+/** What each client kind may send after hello (§7.2's table). */
 const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
-  panel: ["open", "in", "resize", "list", "shutdown"],
+  panel: ["layout.get", "layout.put", "open", "in", "resize", "ack", "visibility", "detach", "close", "list", "shutdown"],
   sw: ["ext.result"],
-  cli: ["list", "ext.call", "shutdown"],
-  watch: ["list", "ext.call"],
+  cli: ["list", "layout.get", "ext.call", "agents.state", "shutdown"],
+  watch: ["list", "alert", "ext.call", "gateway.state"],
 };
 
 type Client = { peer: DaemonPeer; kind: ClientKind | null; window: number | null; stale: boolean };
@@ -79,6 +84,11 @@ export class Daemon {
   private swConnects = 0;
   private nextCall = 0;
   private shuttingDown = false;
+  /** The layout as saved, loaded at the first ask; `null` until then or when none is saved. */
+  private layout: Layout | null = null;
+  private layoutLoaded: Promise<void> | null = null;
+  private gatewayClients = 0;
+  private paused = false;
 
   constructor(ports: DaemonPorts) {
     this.ports = ports;
@@ -89,6 +99,10 @@ export class Daemon {
     this.clients.add(client);
     return {
       receive: (line) => this.receive(client, line),
+      refused: (size) => {
+        this.ports.log.write({ event: "line-refused", size });
+        this.fail(client, "E_PROTO");
+      },
       closed: () => this.disconnect(client),
     };
   }
@@ -109,6 +123,8 @@ export class Daemon {
   private receive(client: Client, line: string): void {
     const message = parseClientMessage(line);
     if (message === null) {
+      // Only the size: a malformed line, or a parser's error about it, can quote what a client typed.
+      this.ports.log.write({ event: "bad-line", size: line.length });
       this.fail(client, "E_PROTO");
       return;
     }
@@ -160,6 +176,34 @@ export class Daemon {
         return;
       case "ext.result":
         this.relayResult(message);
+        return;
+      case "layout.get":
+        void this.layoutFor().then((layout) => this.send(client, { type: "layout", id: message.id, layout }));
+        return;
+      case "layout.put":
+        void this.putLayout(client, message.id, message.layout);
+        return;
+      case "close":
+        this.close(client, message.id, message.pane);
+        return;
+      case "detach": {
+        const pane = this.panes.get(message.pane);
+        if (pane !== undefined && pane.owner === client) pane.owner = null;
+        return;
+      }
+      case "ack":
+      case "visibility":
+        // Flow control and hidden owners are slice 2b's (§7.3).
+        return;
+      case "alert":
+        this.broadcast({ type: "alert", kind: message.kind });
+        return;
+      case "agents.state":
+        this.paused = message.paused;
+        this.broadcast({ type: "notice", kind: message.paused ? "agents-paused" : "agents-resumed" });
+        return;
+      case "gateway.state":
+        this.gatewayClients = message.clients;
         return;
       default: {
         const never: never = message;
@@ -285,7 +329,55 @@ export class Daemon {
         .map((pane) => ({ id: pane.id, alive: pane.alive, owned: pane.owner !== null })),
       panels,
       sw: { connected: this.sw !== null, connects: this.swConnects },
+      gatewayClients: this.gatewayClients,
+      paused: this.paused,
     };
+  }
+
+  /** Sends to every panel. */
+  private broadcast(message: DaemonMessage): void {
+    for (const client of this.clients) if (client.kind === "panel" && !client.stale) this.send(client, message);
+  }
+
+  private livePanes(): string[] {
+    return [...this.panes.values()].filter((pane) => pane.alive || pane.starting).map((pane) => pane.id);
+  }
+
+  /** The saved layout, loaded once; a moved-aside file is logged, and without a layout each live pane gets a tab. */
+  private async layoutFor(): Promise<Layout> {
+    this.layoutLoaded ??= this.ports.layouts.load().then(
+      (loaded) => {
+        if (loaded.recovered) this.ports.log.write({ event: "state-recovered", file: "layout" });
+        this.layout ??= loaded.layout;
+      },
+      () => undefined,
+    );
+    await this.layoutLoaded;
+    return this.layout ?? defaultLayout(this.livePanes());
+  }
+
+  private async putLayout(client: Client, id: string, value: unknown): Promise<void> {
+    const layout = checkLayout(value, this.panes.keys());
+    if (layout === null) {
+      this.fail(client, "E_LIMIT", { id });
+      return;
+    }
+    await this.layoutFor();
+    this.layout = layout;
+    await this.ports.layouts.save(layout);
+    this.broadcast({ type: "layout", layout });
+  }
+
+  /** Ends a pane: SIGHUP to its shell, its metadata removed, and `closed` to its owner. */
+  private close(client: Client, id: string, paneId: string): void {
+    const pane = this.panes.get(paneId);
+    if (pane === undefined || (pane.owner !== null && pane.owner !== client)) {
+      this.fail(client, "E_NOPANE", { id, pane: paneId });
+      return;
+    }
+    this.panes.delete(paneId);
+    if (pane.alive) pane.pty?.kill("SIGHUP");
+    this.send(client, { type: "closed", pane: paneId });
   }
 
   private relayCall(caller: Client, message: ExtCall): void {
@@ -330,6 +422,7 @@ export class Daemon {
     this.shuttingDown = true;
     for (const pane of this.panes.values()) if (pane.alive) pane.pty?.kill("SIGHUP");
     for (const client of [...this.clients]) client.peer.close();
+    this.ports.log.write({ event: "shutdown", mode });
     this.ports.onShutdown(mode);
   }
 }

@@ -104,6 +104,31 @@ describe("process adapters", () => {
     expect(await new NodeProcessSignals().terminate(child.pid ?? -1)).toBe(false);
   });
 
+  it("Desk processes start with stdio ignored", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "stdio-"));
+    const out = join(dir, "out.json");
+    const script = join(dir, "child.mjs");
+    await writeFile(
+      script,
+      `import { fstatSync, openSync, writeFileSync } from "node:fs"; const nul = fstatSync(openSync("/dev/null", "r")); writeFileSync(${JSON.stringify(out)}, JSON.stringify([0, 1, 2].map((fd) => { const s = fstatSync(fd); return s.dev === nul.dev && s.ino === nul.ino; })));\n`,
+    );
+
+    await new NodeDetachedSpawner().spawn(process.execPath, [script], { HOME: dir });
+
+    expect(JSON.parse(await waitForFile(out, 10_000))).toEqual([true, true, true]);
+  });
+
+  it("ProcessInfo never runs ps with e or eww and never reads a process environment", async () => {
+    const ps = await fakeExecutable("ps", [{ match: ["-o", "etime="], stdout: "  01:02\n" }]);
+
+    await new NodeProcessInfo({ ps: ps.path }).startedAt(4242);
+    await new NodeProcessInfo({ ps: ps.path }).alive(process.pid);
+    const source = await readFile(new URL("../src/process.ts", import.meta.url), "utf8");
+
+    for (const call of await ps.calls()) expect(call.argv.filter((arg) => /^-?[a-zA-Z]*e[a-zA-Z]*$/.test(arg) || arg.includes("ww"))).toEqual([]);
+    expect(source).not.toMatch(/\/environ\b|["'`]environ["'`]/);
+  });
+
   it("the login shell is the account's passwd shell", async () => {
     const shell = userInfo().shell;
 

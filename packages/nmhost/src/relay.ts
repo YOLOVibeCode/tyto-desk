@@ -4,7 +4,7 @@ import { NativeFrameDecoder, NdjsonLineDecoder, encodeNativeFrame, encodeNdjsonL
 /**
  * The host's relay (docs/IMPLEMENTATION.md §8): each native message from Chrome becomes one NDJSON line to the daemon,
  * and each daemon line one native message, both through core's codecs and never parsed. A frame or line over 1 MiB
- * ends both connections (exit 1). Chrome closing stdin ends the daemon connection (exit 0); the daemon going away ends
+ * ends both connections (exit 1), after the host tells the panel it dropped one (`{type: "host", state: "dropped"}`). Chrome closing stdin ends the daemon connection (exit 0); the daemon going away ends
  * the host (exit 0), which Chrome sees as a disconnect.
  */
 export function relay(io: { stdin: NodeJS.ReadableStream; stdout: NodeJS.WritableStream; socket: Socket }): Promise<number> {
@@ -13,9 +13,14 @@ export function relay(io: { stdin: NodeJS.ReadableStream; stdout: NodeJS.Writabl
   const lines = new NdjsonLineDecoder();
   return new Promise((resolve) => {
     let finished = false;
+    const dropped = () => {
+      const report = encodeNativeFrame(new TextEncoder().encode(JSON.stringify({ type: "host", state: "dropped" })));
+      if (report.ok) stdout.write(report.frame);
+    };
     const finish = (code: number) => {
       if (finished) return;
       finished = true;
+      if (code === 1) dropped();
       stdin.removeAllListeners("data");
       if (code === 0) socket.end();
       else socket.destroy();

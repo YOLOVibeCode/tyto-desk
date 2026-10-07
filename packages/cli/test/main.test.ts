@@ -73,7 +73,7 @@ describe("the desk command", () => {
     expect(err).toMatch(/version\.json is missing or damaged/);
   });
 
-  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"], ["tab"], ["tab", "theirs"], ["tab", "current", "mine"]])("desk %s is a usage error (64)", async (...argv) => {
+  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"], ["tab"], ["tab", "theirs"], ["tab", "current", "mine"], ["daemon"], ["daemon", "stop"], ["status", "--json"]])("desk %s is a usage error (64)", async (...argv) => {
     const { code, err } = await desk(argv);
 
     expect(code).toBe(64);
@@ -107,5 +107,15 @@ describe("the desk command", () => {
 
   it("desk tab current exits 69 when Desk is not running", async () => {
     expect(await desk(["tab", "current"])).toEqual({ code: 69, out: "", err: "desk: Desk is not running, or its extension did not answer; run desk\n" });
+  });
+
+  it("desk status says Desk has no config yet in a fresh home", async () => {
+    expect(await desk(["status"])).toEqual({ code: 0, out: "Desk has no config yet; run desk\n", err: "" });
+  });
+
+  it("desk daemon restart refuses without an interactive terminal (64), and writes its audit line to desk.log", async () => {
+    const result = await desk(["daemon", "restart"]);
+
+    expect(result).toEqual({ code: 64, out: "", err: "desk: desk daemon restart needs an interactive terminal to ask you first\n" });
   });
 });

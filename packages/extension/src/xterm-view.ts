@@ -1,6 +1,6 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { TerminalPane, TerminalSize, TerminalView } from "@desk/core";
+import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "@desk/core";
 
 export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
 
@@ -76,8 +76,16 @@ export class XtermView implements TerminalView {
     };
   }
 
-  banner(text: string | null): void {
+  banner(text: string | null, action?: BannerAction): void {
     this.bannerElement.textContent = text ?? "";
+    if (text !== null && action !== undefined) {
+      // A real button, its label set as text: the banner never takes markup.
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = action.label;
+      button.addEventListener("click", () => action.run(), { once: true });
+      this.bannerElement.append(" ", button);
+    }
     this.bannerElement.hidden = text === null;
   }
 }

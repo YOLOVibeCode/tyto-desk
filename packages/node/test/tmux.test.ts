@@ -34,4 +34,14 @@ describe("NodeTmux", () => {
     expect(call?.env.HOME).toBe("/Users/alex");
     expect((await tmux.calls()).flatMap((c) => c.argv)).not.toContain("show-environment");
   });
+
+  it("Tmux never runs show-environment", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["show-options"], stdout: LISTING }]);
+    const adapter = new NodeTmux(tmux.path, { HOME: "/Users/alex", PATH: "/usr/bin:/bin" });
+
+    await adapter.serverRunning();
+    await adapter.updateEnvironment();
+
+    expect((await tmux.calls()).filter((call) => call.argv.includes("show-environment"))).toEqual([]);
+  });
 });

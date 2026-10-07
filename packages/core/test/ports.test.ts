@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const ports = fileURLToPath(new URL("../src/ports/", import.meta.url));
 
 /** What a port may import besides other ports: the data types it carries, never a plan that uses it. */
-const CARRIED_TYPES = new Set(["protocol/messages.ts", "config/schema.ts"]);
+const CARRIED_TYPES = new Set(["protocol/messages.ts", "config/schema.ts", "layout/layout.ts", "log/events.ts"]);
 
 /** Each relative module a port file names, as a path under src/. */
 async function portImports(): Promise<{ port: string; module: string }[]> {
