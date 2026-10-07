@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import { CHROME_CACHE_DIR, CI_CACHE_DIR, USERNS_LIMIT, chromeCacheFile, chromePin, imageFileAllowed, imageTag } from "../scripts/lib/live.mjs";
 import { ci, exists, harness, inActions, modes, onTheMac, phase2Call, repo, run, subcommand, withoutContext } from "./fixtures/live-runner-harness.ts";
 
-describe("the live runner script, driving a stub docker: interrupts, docker contexts, phases and the image", () => {
+// Each test runs scripts/live.mjs, which starts the stub docker, a Node process, for every docker call: on a busy
+// CI runner one run can take more than Vitest's default 5 s, which PRs #8 and #9 hit on Node 22.22.2.
+describe("the live runner script, driving a stub docker: interrupts, docker contexts, phases and the image", { timeout: 30_000 }, () => {
   it.each(modes)("a missing docker CLI is one test:live line, not a stack trace ($mode)", async ({ scenario, options }) => {
     const live = await harness(scenario);
 

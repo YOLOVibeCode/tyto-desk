@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { anotherRunners, ci, colimaVm, exists, harness, modes, onTheMac, subcommand, withoutContext } from "./fixtures/live-runner-harness.ts";
 
-describe("the live runner script, driving a stub docker: guards, results and other runners' containers", () => {
+// Each test runs scripts/live.mjs, which starts the stub docker, a Node process, for every docker call: on a busy
+// CI runner one run can take more than Vitest's default 5 s, which PRs #8 and #9 hit on Node 22.22.2.
+describe("the live runner script, driving a stub docker: guards, results and other runners' containers", { timeout: 30_000 }, () => {
   it("the live runner refuses before it runs anything but docker context inspect and info", async () => {
     const live = await harness(() => ({ context: "unix:///var/run/docker-desktop.sock", info: colimaVm }));
 
