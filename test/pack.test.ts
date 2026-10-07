@@ -34,7 +34,7 @@ async function fakeNode(text = "#!/bin/sh\necho fake-node\n") {
   await writeFile(path, text);
   await chmod(path, 0o755);
   const pin = { archive: "node.tar.gz", archiveSha256: "0".repeat(64), binarySha256: sha256(text) };
-  return { path, runtime: { version: "26.10.0", platforms: { "darwin-arm64": pin, "linux-arm64": pin } } };
+  return { path, runtime: { version: "26.10.0", source: "https://nodejs.org/dist/v26.10.0/", platforms: { "darwin-arm64": pin, "linux-arm64": pin } } };
 }
 
 async function pack(platform: string, options: { node?: Awaited<ReturnType<typeof fakeNode>>; tarball?: boolean } = {}) {

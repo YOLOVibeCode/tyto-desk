@@ -60,6 +60,14 @@ const facts = await gatherBuildFacts({
 });
 if (facts.problems.length > 0) fail(`stamp: ${facts.problems.join("; ")}`, 65);
 
+/** @type {string} */
+let node;
+try {
+  node = await pinnedNode(root);
+} catch (err) {
+  fail(`stamp: the Node pin is refused (${err instanceof Error ? err.message : String(err)}); nothing was written`, 65);
+}
+
 const build = classifyBuild(facts.input);
 if (!build.ok) {
   console.error("stamp: this build is refused; nothing was written:");
@@ -83,7 +91,7 @@ if (!options.plan) {
   if (!(await outsideTheRepository(git, root, outDir))) {
     fail(`stamp: version.json goes into the build output (dist/), never into the repository: ${options.out}`, 64);
   }
-  await writeVersionFile(outDir, versionFile(facts.input, build, await pinnedNode(root)));
+  await writeVersionFile(outDir, versionFile(facts.input, build, node));
 }
 if (process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_OUTPUT) {
   await appendFile(process.env.GITHUB_OUTPUT, githubOutput(build));
