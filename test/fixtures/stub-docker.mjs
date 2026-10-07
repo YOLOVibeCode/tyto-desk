@@ -6,7 +6,8 @@
  * answers the way the scenario says, playing the harness's containers by the command each one runs:
  *
  *   context inspect, info     the docker context's endpoint and the engine's facts (null: the command fails)
- *   ps, image ls, volume ls   nothing listed
+ *   ps                        the scenario's `containers`, one JSON line each (none by default)
+ *   image ls, volume ls       nothing listed
  *   image inspect             exit 0 when `imageCached`
  *   volume inspect            exit 0 when `volumesExist`
  *   run … test -f             the dependency volume's readiness check: exit 0 when `depsReady`, or `depsCheckExit`
@@ -34,6 +35,7 @@ const [scenarioPath = "", logPath = "", ...argv] = process.argv.slice(2);
  *   volumesExist?: boolean;
  *   depsReady?: boolean;
  *   depsCheckExit?: number;
+ *   containers?: { ID: string; Names: string; State: string; Labels: string }[];
  *   phase1Exit?: number;
  *   phase2?: { stdout?: string[]; stderr?: string; untilKilled?: boolean; ignoreKill?: boolean; done?: number | null; exit: number };
  *   results?: string;
@@ -75,6 +77,9 @@ switch (command) {
       exit(1);
     }
     process.stdout.write(JSON.stringify(scenario.info));
+    exit(0);
+  case "ps":
+    for (const container of scenario.containers ?? []) process.stdout.write(`${JSON.stringify(container)}\n`);
     exit(0);
   case "image":
     exit(sub === "inspect" && !scenario.imageCached ? 1 : 0);

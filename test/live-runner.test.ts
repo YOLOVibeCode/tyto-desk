@@ -1,20 +1,27 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   CACHE_VOLUME,
+  CHROME_CACHE_DIR,
+  CI_CACHE_DIR,
+  CI_CONTEXT,
   MAX_DESK_CONTAINERS,
   OWNER_LABEL,
   RESOURCE_LABEL,
+  RESULTS_DIR,
   RUNNER_LABEL,
   STALE_AFTER_MS,
   STARTED_LABEL,
+  USERNS_LIMIT,
   canStartDeskContainer,
+  chromeCacheFile,
   chromePin,
   deskContainerCap,
   depsVolumeName,
@@ -32,6 +39,7 @@ import {
   runnerArgs,
   runnerRefusal,
   suiteRefusal,
+  userNamespaceRefusal,
   volumesToPrune,
 } from "../scripts/lib/live.mjs";
 import { readResultFile, unsafeResultEntries } from "../scripts/lib/live-results.mjs";
@@ -149,6 +157,21 @@ describe("where the live harness runs", () => {
     {
       label: "the runner with --ci while the runner's Docker engine is not answering",
       refusal: () => runnerRefusal({ ...inActions, info: null }),
+      refused: true,
+    },
+    {
+      label: "the runner with --ci where GITHUB_ACTIONS is not exactly true",
+      refusal: () => runnerRefusal({ ...inActions, env: { GITHUB_ACTIONS: "1" } }),
+      refused: true,
+    },
+    {
+      label: "the runner with --ci against a Windows Docker engine",
+      refusal: () => runnerRefusal({ ...inActions, info: { ...runnerEngine, osType: "windows" } }),
+      refused: true,
+    },
+    {
+      label: "the runner without --ci in GitHub Actions on linux-arm64",
+      refusal: () => runnerRefusal({ ...inActions, ci: false }),
       refused: true,
     },
     {
@@ -386,28 +409,71 @@ describe("the live runner's containers", () => {
     ]);
   });
 
-  it("in GitHub Actions both phases drive the runner's own Docker engine, with the Chrome cache in the Actions cache directory", () => {
-    const common = {
-      context: "default" as const,
+  it("in GitHub Actions phase 1 drives the runner's own engine through the default context, with the Actions cache directory bound where the Mac mounts the cache volume", () => {
+    const args = phase1RunArgs({
+      context: CI_CONTEXT,
+      name: "desk-live-deps-1a2b3c4d",
+      runner: "runnervm:7",
+      started: 1_700_000_000_000,
+      image: "desk-live:0123456789abcdef",
+      repo: "/home/runner/work/tyto-desk/tyto-desk",
+      installFiles: ["package.json", "package-lock.json", ".npmrc"],
+      depsVolume: "desk-live-deps-0123456789abcdef",
+      cache: { kind: "dir", path: "/home/runner/.cache/desk-live" },
+    });
+
+    // prettier-ignore
+    expect(args).toEqual([
+      "--context", "default", "run", "--rm", "--interactive", "--pull", "never",
+      "--name", "desk-live-deps-1a2b3c4d",
+      "--label", `${OWNER_LABEL}=1`, "--label", `${RUNNER_LABEL}=runnervm:7`, "--label", `${STARTED_LABEL}=1700000000000`,
+      "--memory", "2g", "--cpus", "2", "--pids-limit", "2048", "--security-opt", "no-new-privileges",
+      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/package.json,target=/src/package.json,readonly",
+      "--mount",
+      "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/package-lock.json,target=/src/package-lock.json,readonly",
+      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/.npmrc,target=/src/.npmrc,readonly",
+      "--mount",
+      "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/scripts/lib/live.mjs,target=/src/scripts/lib/live.mjs,readonly",
+      "--mount",
+      "type=bind,source=/home/runner/work/tyto-desk/tyto-desk/test/live/harness/install.mjs,target=/src/test/live/harness/install.mjs,readonly",
+      "--mount", "type=volume,source=desk-live-deps-0123456789abcdef,target=/work/node_modules",
+      "--mount", "type=bind,source=/home/runner/.cache/desk-live,target=/cache",
+      "--env", "DESK_IN_CONTAINER=1",
+      "desk-live:0123456789abcdef",
+      "flock", "--exclusive", "--wait", "1200", "/cache/desk-live-deps-0123456789abcdef.lock",
+      "node", "/src/test/live/harness/install.mjs",
+    ]);
+  });
+
+  it("in GitHub Actions phase 2 is the Mac's: no network, the lab's limits and seccomp profile, the repo and dependencies read-only, through the default context", () => {
+    const args = phase2RunArgs({
+      context: CI_CONTEXT,
+      name: "desk-live-run-1a2b3c4d",
       runner: "runnervm:7",
       started: 1_700_000_000_000,
       image: "desk-live:0123456789abcdef",
       repo: "/home/runner/work/tyto-desk/tyto-desk",
       depsVolume: "desk-live-deps-0123456789abcdef",
-    };
-    const phase1 = phase1RunArgs({
-      ...common,
-      name: "desk-live-deps-1a2b3c4d",
-      installFiles: ["package.json", "package-lock.json"],
-      cache: { kind: "dir", path: "/home/runner/.cache/desk-live" },
+      run: "1a2b3c4d",
+      vitestArgs: [],
     });
-    const phase2 = phase2RunArgs({ ...common, name: "desk-live-run-1a2b3c4d", run: "1a2b3c4d", vitestArgs: [] });
-    const colimaPhase2 = phase2RunArgs({ ...common, context: "colima", name: "desk-live-run-1a2b3c4d", run: "1a2b3c4d", vitestArgs: [] });
 
-    expect(phase1.slice(0, 3)).toEqual(["--context", "default", "run"]);
-    expect(phase1).toContain("type=bind,source=/home/runner/.cache/desk-live,target=/cache");
-    expect(phase2.slice(0, 2)).toEqual(["--context", "default"]);
-    expect(phase2.slice(2)).toEqual(colimaPhase2.slice(2));
+    // prettier-ignore
+    expect(args).toEqual([
+      "--context", "default", "run", "--rm", "--interactive", "--pull", "never",
+      "--name", "desk-live-run-1a2b3c4d",
+      "--label", `${OWNER_LABEL}=1`, "--label", `${RUNNER_LABEL}=runnervm:7`, "--label", `${STARTED_LABEL}=1700000000000`,
+      "--network", "none", "--shm-size", "1g", "--memory", "3g", "--cpus", "3", "--pids-limit", "2048",
+      "--security-opt", "seccomp=/home/runner/work/tyto-desk/tyto-desk/test/live/chrome-seccomp.json",
+      "--security-opt", "no-new-privileges",
+      "--mount", "type=bind,source=/home/runner/work/tyto-desk/tyto-desk,target=/src,readonly",
+      "--mount", "type=volume,source=desk-live-deps-0123456789abcdef,target=/work/node_modules,readonly",
+      "--env", "DESK_IN_CONTAINER=1",
+      "--env", "DESK_LIVE_RUN=1a2b3c4d",
+      "--env", "DESK_LIVE_IMAGE=desk-live:0123456789abcdef",
+      "--env", "DESK_LIVE_DEPS=desk-live-deps-0123456789abcdef",
+      "desk-live:0123456789abcdef", "node", "/src/test/live/harness/run.mjs",
+    ]);
   });
 
   it("the live runner takes the suite's done line only with this run's id, so test output cannot fake it", () => {
@@ -417,6 +483,102 @@ describe("the live runner's containers", () => {
     expect(doneCode("::desk-live-done:: 0", "1a2b3c4d")).toBeNull();
     expect(doneCode("::desk-live-done:: deadbeef 0", "1a2b3c4d")).toBeNull();
     expect(doneCode("  ::desk-live-done:: 1a2b3c4d 0", "1a2b3c4d")).toBeNull();
+  });
+});
+
+describe("the live runner in GitHub Actions, as live-run.yml runs it", () => {
+  type Step = { id?: string; run?: string; uses?: string; if?: string; with?: Record<string, unknown> };
+  type Workflow = { jobs: Record<string, { "runs-on"?: string; steps?: Step[] }> };
+  const liveRun = async () => {
+    const workflow = parse(await readFile(`${repo}.github/workflows/live-run.yml`, "utf8")) as Workflow;
+    const job = workflow.jobs.live;
+    return { runsOn: job?.["runs-on"], steps: job?.steps ?? [] };
+  };
+  const action = (steps: Step[], name: string) => steps.filter((step) => step.uses?.split("@")[0] === name);
+
+  it("live-run.yml runs npm run test:live -- --ci on GitHub's ubuntu-24.04-arm runner, once AppArmor's user-namespace limit is lifted", async () => {
+    const { runsOn, steps } = await liveRun();
+    const suite = steps.findIndex((step) => step.run === "npm run test:live -- --ci");
+    const lift = steps.findIndex((step) => step.run === `sudo sysctl -w ${USERNS_LIMIT}=0`);
+
+    expect(runsOn).toBe("ubuntu-24.04-arm");
+    expect(suite).toBeGreaterThan(-1);
+    expect(lift).toBeGreaterThan(-1);
+    expect(lift).toBeLessThan(suite);
+  });
+
+  it("live-run.yml restores and saves the Chrome .deb's cache where the --ci runner keeps it", async () => {
+    const { steps } = await liveRun();
+    const [restore] = action(steps, "actions/cache/restore");
+    const [save] = action(steps, "actions/cache/save");
+
+    expect(restore?.with).toEqual({ path: `~/${CI_CACHE_DIR}/${CHROME_CACHE_DIR}`, key: "${{ steps.chrome.outputs.key }}" });
+    expect(save?.with).toEqual(restore?.with);
+  });
+
+  it("the --ci runner keeps the Chrome .deb under chrome/<sha256>/ of its cache, inside the path live-run.yml caches", async () => {
+    const pin = chromePin(await readFile(`${repo}test/live/image/Dockerfile`, "utf8"));
+
+    expect(chromeCacheFile(pin)).toBe(`${CHROME_CACHE_DIR}/${pin.sha256}/${pin.deb}`);
+  });
+
+  it("live-run.yml keys the cache by the sha256 of the Chrome .deb that the Dockerfile pins and the runner fetches", async () => {
+    const { steps } = await liveRun();
+    const keyStep = steps.find((step) => step.id === "chrome");
+    const root = await mkdtemp(join(tmpdir(), "live-run-key-"));
+    await mkdir(join(root, "test", "live", "image"), { recursive: true });
+    await cp(`${repo}test/live/image/Dockerfile`, join(root, "test", "live", "image", "Dockerfile"));
+    await writeFile(join(root, "step.sh"), keyStep?.run ?? "exit 3");
+    await writeFile(join(root, "output"), "");
+    await run("bash", ["--noprofile", "--norc", "-eo", "pipefail", join(root, "step.sh")], {
+      cwd: root,
+      env: { PATH: "/usr/bin:/bin", GITHUB_OUTPUT: join(root, "output") },
+      timeout: 20_000,
+    });
+    const pin = chromePin(await readFile(`${repo}test/live/image/Dockerfile`, "utf8"));
+
+    expect(await readFile(join(root, "output"), "utf8")).toBe(`key=desk-live-chrome-${pin.sha256}\n`);
+  });
+
+  it("live-run.yml uploads test-results/, where the live runner leaves the results, whether or not the suite passed", async () => {
+    const { steps } = await liveRun();
+    const [upload] = action(steps, "actions/upload-artifact");
+
+    expect(upload?.if).toMatch(/^always\(\)/);
+    expect(upload?.with?.path).toBe("test-results/");
+    expect(RESULTS_DIR.startsWith(String(upload?.with?.path))).toBe(true);
+  });
+
+  it.each([
+    ["1\n", true],
+    ["2\n", true],
+    ["", true],
+    ["0\n", false],
+    ["0", false],
+    [null, false],
+  ])(
+    "with --ci the live runner refuses while Ubuntu's AppArmor limits unprivileged user namespaces, which Chrome's sandbox needs (%j)",
+    (value, refused) => {
+      const reason = userNamespaceRefusal(value);
+
+      expect(reason !== null).toBe(refused);
+      if (reason !== null) expect(reason).toContain(`sudo sysctl -w ${USERNS_LIMIT}=0`);
+    },
+  );
+
+  it("the live runner needs nothing npm installs, since live-run.yml runs it before any npm ci", async () => {
+    const root = await mkdtemp(join(tmpdir(), "live-runner-bare-"));
+    await cp(`${repo}scripts`, join(root, "scripts"), { recursive: true });
+    const result = await run(process.execPath, [join(root, "scripts", "live.mjs"), "--ci"], {
+      env: { PATH: dirname(process.execPath), HOME: root },
+      timeout: 20_000,
+    }).then(
+      () => ({ code: 0, stderr: "" }),
+      (failure: { code?: number; stderr?: string }) => ({ code: failure.code ?? -1, stderr: failure.stderr ?? "" }),
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/^test:live: --ci runs only in GitHub Actions/);
   });
 });
 
@@ -550,6 +712,15 @@ describe("the live image and the files it sees", () => {
 
     expect(dockerfile).toMatch(/^FROM debian:trixie-slim@sha256:[0-9a-f]{64} AS fetch$/m);
     expect(dockerfile).not.toMatch(/^FROM \$/m);
+  });
+
+  it("Dependabot's docker updater watches /test/live/image, where the live image's Dockerfile is", async () => {
+    type Update = { "package-ecosystem"?: string; directory?: string };
+    const config = parse(await readFile(`${repo}.github/dependabot.yml`, "utf8")) as { updates?: Update[] };
+    const docker = (config.updates ?? []).filter((update) => update["package-ecosystem"] === "docker");
+
+    expect(docker.map((update) => update.directory)).toEqual(["/test/live/image"]);
+    expect(await readFile(`${repo}test/live/image/Dockerfile`, "utf8")).toMatch(/^FROM debian:/m);
   });
 
   it.each([

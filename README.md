@@ -33,8 +33,8 @@ Branded Chrome, the PTYs and agent-browser run inside the container on a private
 nothing opens on your screen. The first run builds the `desk-live` image and installs the dependencies into a volume
 (a few minutes); later runs take seconds, and a rebuild removes the older images it leaves. Results land in
 `test-results/live/`; Ctrl+C stops the suite and still copies its results out, and a second Ctrl+C abandons them. In
-GitHub Actions, `npm run test:live -- --ci` drives the linux-arm64 runner's own Docker instead (docs/IMPLEMENTATION.md
-§17.3).
+GitHub Actions, `live.yml` runs `npm run test:live -- --ci` on the `ubuntu-24.04-arm` runner's own Docker instead:
+weekly, on pull requests labeled `live`, and as the release gate (docs/IMPLEMENTATION.md §17.3).
 
 | Path | Role |
 |---|---|

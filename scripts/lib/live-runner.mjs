@@ -1,8 +1,11 @@
 /**
  * test:live, the part of the live suite that runs outside the container (docs/IMPLEMENTATION.md §17.3). On the Mac it
  * drives `docker --context colima` and nothing else: it never starts, stops or restarts the VM, never touches a
- * container it did not start, and opens nothing on the screen. In GitHub Actions (`--ci`, on a Linux arm64 runner) it
- * drives the runner's own engine the same way. Chrome, the PTYs and agent-browser run in a Linux container under Xvfb.
+ * container it did not start, and opens nothing on the screen. In GitHub Actions (`--ci`, on a Linux arm64 runner, as
+ * live-run.yml runs it before any npm ci, so it imports nothing npm installs) it drives the runner's own engine through
+ * the default context the same way, once AppArmor's user-namespace limit is lifted, with the Chrome .deb under
+ * ~/.cache/desk-live/chrome, where live-run.yml caches it. Chrome, the PTYs and agent-browser run in a Linux container
+ * under Xvfb.
  *
  *   image    desk-live:<hash of test/live/image>, built only when a file there changes; the pinned Chrome .deb comes
  *            from the cache (the desk-live-cache volume, or the Actions cache directory in CI), fetched once by sha256,
@@ -14,8 +17,8 @@
  *
  * Every container is named desk-live-* and labelled with this runner; leftovers of dead runs are removed first, and no
  * more Desk containers run at once than the VM's memory allows (two at most: the VM also runs the operator's own).
- * Every input (argv, environment, platform, paths, the docker CLI, output) is passed in, so the offline tests can drive
- * it against a stub docker; scripts/live.mjs passes the process's own.
+ * Every input (argv, environment, platform, paths, /proc/sys, the docker CLI, output) is passed in, so the offline tests
+ * can drive it against a stub docker; scripts/live.mjs passes the process's own.
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -30,8 +33,11 @@ import {
   OWNER_LABEL,
   RESOURCE_LABEL,
   RESULTS,
+  RESULTS_DIR,
+  USERNS_LIMIT,
   cacheMount,
   canStartDeskContainer,
+  chromeCacheFile,
   chromePin,
   containerFlags,
   deskContainerCap,
@@ -48,6 +54,7 @@ import {
   phase1RunArgs,
   phase2RunArgs,
   runnerArgs,
+  userNamespaceRefusal,
   volumesToPrune,
 } from "./live.mjs";
 import { readResultFile, unsafeResultEntries } from "./live-results.mjs";
@@ -73,6 +80,7 @@ const SIGNALS = /** @type {const} */ (["SIGINT", "SIGTERM", "SIGHUP"]);
  *   host: string;
  *   pid: number;
  *   docker: string;
+ *   procSys: string;
  *   out: (text: string) => void;
  *   err: (text: string) => void;
  *   signals: { on(signal: string, listener: () => void): unknown; off(signal: string, listener: () => void): unknown } | null;
@@ -180,7 +188,7 @@ export async function runLive(options) {
   const run = randomBytes(4).toString("hex");
   const runner = `${host}:${pid}`;
   const imageDir = join(repo, "test", "live", "image");
-  const resultsDir = join(repo, "test-results", "live");
+  const resultsDir = join(repo, ...RESULTS_DIR.split("/"));
   /** @type {CacheStore} */
   const cache = ci ? { kind: "dir", path: join(home, CI_CACHE_DIR) } : { kind: "volume", name: CACHE_VOLUME };
   const cacheName = ci ? "the Actions cache directory" : CACHE_VOLUME;
@@ -515,7 +523,7 @@ export async function runLive(options) {
     const fetched = await streamed(
       onEngine([
         "run", "--rm", "--pull", "never", ...flagsFor("fetch"), "--user", "1000:1000", "--security-opt", "no-new-privileges",
-        ...cacheMount(cache), fetchTag, "fetch-verified", pin.url, pin.sha256, `/cache/chrome/${pin.sha256}/${pin.deb}`,
+        ...cacheMount(cache), fetchTag, "fetch-verified", pin.url, pin.sha256, `/cache/${chromeCacheFile(pin)}`,
       ]),
       20 * MINUTE,
     );
@@ -784,11 +792,31 @@ export async function runLive(options) {
   const listeners = SIGNALS.map((signal) => /** @type {const} */ ([signal, () => onSignal(signal)]));
   for (const [signal, listener] of listeners) signals?.on(signal, listener);
 
+  /**
+   * A sysctl of the host (the CI runner) by its dotted name, or `null` when this kernel has none.
+   * @param {string} name
+   * @returns {Promise<string | null>}
+   */
+  const sysctl = async (name) => {
+    const path = join(options.procSys, ...name.split("."));
+    try {
+      return await readFile(path, "utf8");
+    } catch (failure) {
+      if (/** @type {{ code?: string }} */ (failure).code === "ENOENT") return null;
+      throw new RunFailure(`reading ${path} failed: ${messageOf(failure)}`);
+    }
+  };
+
   const main = async () => {
     const homeReal = await realpath(home).catch(() => home);
     const repoReal = await realpath(repo);
     const hostReason = hostRefusal({ ci, env, platform, arch, homeReal, repoReal });
     if (hostReason !== null) throw new RunFailure(hostReason);
+    // On the Mac the limit, if any, is the Colima VM's, where Chrome's sandbox is measured to work (§17.3).
+    if (ci) {
+      const usernsReason = userNamespaceRefusal(await sysctl(USERNS_LIMIT));
+      if (usernsReason !== null) throw new RunFailure(usernsReason);
+    }
     const facts = await dockerFacts();
     const engineReason = engineRefusal({ ci, env, home, context: facts.context, info: facts.info });
     if (engineReason !== null) throw new RunFailure(engineReason);

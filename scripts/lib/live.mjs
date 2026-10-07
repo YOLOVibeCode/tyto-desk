@@ -35,8 +35,22 @@ export const STALE_AFTER_MS = 2 * 60 * 60_000;
 
 /** The Chrome .deb (by sha256) and npm's cache, on the Mac. Google prunes old builds from its pool, so the .deb is kept. */
 export const CACHE_VOLUME = "desk-live-cache";
-/** The same cache in GitHub Actions, under the runner's HOME: the directory live-run.yml restores and saves. */
+/**
+ * The same cache in GitHub Actions, under the runner's HOME. live-run.yml restores its `chrome/` directory from, and on
+ * main saves it to, the Actions cache under the key `desk-live-chrome-<sha256>` (IMPLEMENTATION D64).
+ */
 export const CI_CACHE_DIR = ".cache/desk-live";
+/** Where a cache keeps the pinned Chrome .deb: `chrome/<sha256>/<deb>`, which the image's build-context reads too. */
+export const CHROME_CACHE_DIR = "chrome";
+
+/** Where each run's results land, relative to the checkout; live-run.yml uploads `test-results/`. */
+export const RESULTS_DIR = "test-results/live";
+
+/**
+ * The sysctl with which Ubuntu 24.04's AppArmor limits unprivileged user namespaces. Chrome's sandbox needs them, so on
+ * GitHub's runner live-run.yml lifts the limit before the suite; the suite never runs Chrome with --no-sandbox.
+ */
+export const USERNS_LIMIT = "kernel.apparmor_restrict_unprivileged_userns";
 
 /** Where the container sees the repo (read-only), where the suite runs from, and where it leaves its results. */
 export const SRC = "/src";
@@ -179,6 +193,23 @@ export function engineRefusal({ ci, env, home, context, info }) {
  */
 export function runnerRefusal(input) {
   return hostRefusal(input) ?? engineRefusal(input);
+}
+
+/**
+ * Why the live suite must not start on this GitHub Actions runner, or `null`: while Ubuntu's AppArmor limits
+ * unprivileged user namespaces, Chrome cannot start sandboxed in the container. Decided before any docker command, so a
+ * workflow that forgot to lift the limit fails in a second with the fix, not after the image build with Chrome's.
+ * @param {string | null} value the host's `kernel.apparmor_restrict_unprivileged_userns`, or `null` when the kernel has
+ *   no such limit
+ * @returns {string | null}
+ */
+export function userNamespaceRefusal(value) {
+  if (value === null || value.trim() === "0") return null;
+  return (
+    `Chrome's sandbox needs unprivileged user namespaces, and ${USERNS_LIMIT} is ${JSON.stringify(value.trim())}: ` +
+    `lift the limit first (sudo sysctl -w ${USERNS_LIMIT}=0, as live-run.yml does); the live suite never runs Chrome ` +
+    "with --no-sandbox"
+  );
 }
 
 /**
@@ -341,6 +372,15 @@ export function chromePin(dockerfile) {
     throw new Error("test/live/image/Dockerfile must pin CHROME_DEB and CHROME_SHA256");
   }
   return { deb, sha256, url: `https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/${deb}` };
+}
+
+/**
+ * The pinned .deb's place in a cache, `chrome/<sha256>/<deb>`: in CI under ~/.cache/desk-live/chrome, the directory
+ * live-run.yml restores and saves.
+ * @param {{ deb: string; sha256: string }} pin
+ */
+export function chromeCacheFile(pin) {
+  return `${CHROME_CACHE_DIR}/${pin.sha256}/${pin.deb}`;
 }
 
 /**

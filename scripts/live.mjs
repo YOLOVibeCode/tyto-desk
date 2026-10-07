@@ -23,6 +23,7 @@ const code = await runLive({
   host: hostname(),
   pid: process.pid,
   docker: "docker",
+  procSys: "/proc/sys",
   out: (text) => process.stdout.write(text),
   err: (text) => process.stderr.write(text),
   signals: process,
