@@ -81,30 +81,36 @@ describe("the Desk extension in branded Chrome", () => {
     const page = (await targets(cdp)).find((t) => t.type === "page" && !t.url.startsWith("chrome-extension://"));
     if (page === undefined) throw new Error("Chrome has no page target");
     const { bounds } = await cdp.send<{ bounds: Bounds }>("Browser.getWindowForTarget", { targetId: page.targetId });
-    const panelWidth = await evaluate<number>(cdp, session, "innerWidth");
     const row = bounds.top + Math.round(bounds.height / 2);
-    // The panel slides in: wait until the screen shows its whole width, the same in two reads in a row. The last screen
-    // read is saved either way.
-    const seen: { screen: Screen | null; run: [number, number] | null } = { screen: null, run: null };
+    // The panel slides in, and its page reports innerWidth 0 until Chrome sizes its view, which can come after the page
+    // has loaded (GitHub's runner, D79). So each read takes both: the panel is drawn once its page has a width and the
+    // screen shows that whole width, the same in two reads in a row. The last read is saved either way.
+    const seen: { screen: Screen | null; run: [number, number] | null; panelWidth: number | null } = {
+      screen: null,
+      run: null,
+      panelWidth: null,
+    };
     const drawn = await waitFor(
       async () => {
+        const panelWidth = await evaluate<number>(cdp, session, "innerWidth");
         const screen = await readScreen();
         const run = longestRun(screen, row, PANEL_BACKGROUND);
         const still = run !== null && seen.run !== null && run[0] === seen.run[0] && run[1] === seen.run[1];
-        Object.assign(seen, { screen, run });
-        return still && run !== null && Math.abs(run[1] - run[0] + 1 - panelWidth) <= 4 ? { screen, run } : null;
+        Object.assign(seen, { screen, run, panelWidth });
+        const whole = run !== null && panelWidth > 0 && Math.abs(run[1] - run[0] + 1 - panelWidth) <= 4;
+        return still && whole ? { screen, run, panelWidth } : null;
       },
-      { label: `the whole panel (${panelWidth} px), drawn and still, on the screen`, intervalMs: 200 },
+      { label: "the whole panel, with its page's width, drawn and still on the screen", intervalMs: 200 },
     ).finally(async () => {
       if (seen.screen !== null) await saveFile("extension-screen.png", screenPng(seen.screen));
-      await saveResult("extension-panel-screen", { row, lastRun: seen.run, panelWidth });
+      await saveResult("extension-panel-screen", { row, lastRun: seen.run, panelWidth: seen.panelWidth });
     });
     await saveScreenshot("extension-panel", (await cdp.send<{ data: string }>("Page.captureScreenshot", {}, { sessionId: session })).data);
     await saveResult("extension-panel", {
       panel: { type: panel.type, url: panel.url },
       layout,
       window: bounds,
-      panelOnScreen: { row, from: drawn.run[0], to: drawn.run[1], panelWidth },
+      panelOnScreen: { row, from: drawn.run[0], to: drawn.run[1], panelWidth: drawn.panelWidth },
     });
 
     expect(panel.type).toBe("page");
