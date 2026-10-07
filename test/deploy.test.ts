@@ -13,6 +13,7 @@ import { packRuntime, type PackResult } from "../scripts/lib/pack.mjs";
 import { gitCheckout, gitEnv } from "./delivery/helpers.ts";
 import { fakeExecutable } from "./fixtures/fake-exec.ts";
 import { ptyPackages } from "./fixtures/pty-packages.ts";
+import { nodePinJson } from "./fixtures/node-pin.ts";
 
 const repo = fileURLToPath(new URL("..", import.meta.url));
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -31,7 +32,7 @@ const version: VersionInfo = {
 
 /** The operator's Mac as deploy sees it: macOS on arm64, an interactive terminal, the pinned Node, no CI or VITEST. */
 const mac = { platform: "darwin", arch: "arm64", isTTY: true, nodeVersion: "26.10.0" };
-const runtime = { version: "26.10.0", platforms: {} };
+const runtime = { version: "26.10.0", source: "https://nodejs.org/dist/v26.10.0/", platforms: {} };
 
 function output() {
   const lines: string[] = [];
@@ -57,7 +58,7 @@ async function guiStubs(): Promise<{ bin: string; ran: string }> {
 const PACK_MS = 20_000;
 
 type SharedPack = {
-  runtime: { version: string; platforms: Record<string, { archive: string; archiveSha256: string; binarySha256: string }> };
+  runtime: { version: string; source: string; platforms: Record<string, { archive: string; archiveSha256: string; binarySha256: string }> };
   codesign: string;
   pack: (stamped: VersionInfo) => Promise<PackResult>;
   /** What the packed Desk Terminal last recorded, and the exit code it gives next. */
@@ -89,7 +90,7 @@ function sharedPack(): Promise<SharedPack> {
     const node = join(control, "node");
     await writeFile(node, nodeText);
     await chmod(node, 0o755);
-    const runtime = { version: "26.10.0", platforms: { "darwin-arm64": { archive: "node.tar.gz", archiveSha256: "0".repeat(64), binarySha256: sha256(nodeText) } } };
+    const runtime = { version: "26.10.0", source: "https://nodejs.org/dist/v26.10.0/", platforms: { "darwin-arm64": { archive: "node.tar.gz", archiveSha256: "0".repeat(64), binarySha256: sha256(nodeText) } } };
     const codesign = await fakeExecutable("codesign", []);
     const modules = await ptyPackages("darwin");
     const out = await mkdtemp(join(tmpdir(), "deploy-dist-"));
@@ -154,7 +155,7 @@ describe("npm run deploy", () => {
       "package.json": `${JSON.stringify({ name: "x", version: "0.3.0" })}\n`,
       ".nvmrc": "26.10.0\n",
       ".gitignore": "dist/\n",
-      "scripts/delivery/node-runtime.json": `${JSON.stringify(runtime)}\n`,
+      "scripts/delivery/node-runtime.json": nodePinJson("26.10.0"),
     });
     await writeFile(join(root, "uncommitted.txt"), "work in progress\n");
     const packed: string[] = [];

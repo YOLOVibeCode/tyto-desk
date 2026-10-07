@@ -8,6 +8,7 @@ import { DESK_COMPAT } from "../../packages/core/src/index.ts";
 import { dirtyFiles, gitRunner, tagOnMain } from "../../scripts/delivery/lib/git-facts.mjs";
 import { gatherBuildFacts } from "../../scripts/delivery/lib/stamp.mjs";
 import { fixture, git, gitCheckout, gitEnv, repo, runScript, tempTree } from "./helpers.ts";
+import { nodePinJson } from "../fixtures/node-pin.ts";
 
 const stamp = join(repo, "scripts/delivery/stamp.mjs");
 const sha = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -16,7 +17,7 @@ const now = () => new Date("2026-10-06T18:00:00.250Z");
 const project = {
   "package.json": `${JSON.stringify({ name: "x", version: "0.3.0" })}\n`,
   ".nvmrc": "26.10.0\n",
-  "scripts/delivery/node-runtime.json": `${JSON.stringify({ version: "26.10.0", platforms: {} })}\n`,
+  "scripts/delivery/node-runtime.json": nodePinJson("26.10.0"),
   ".gitignore": "dist/\nnode_modules/\n",
   "a.txt": "a\n",
 };
@@ -73,11 +74,21 @@ describe("the stamp", () => {
   });
 
   it("the stamp names Desk Terminal's pinned Node, from scripts/delivery/node-runtime.json", async () => {
-    const pinned = { ...project, "scripts/delivery/node-runtime.json": `${JSON.stringify({ version: "26.11.1", platforms: {} })}\n` };
+    const pinned = { ...project, "scripts/delivery/node-runtime.json": nodePinJson("26.11.1") };
     const { root } = await gitCheckout(pinned, "slice-1c/walking-skeleton");
 
     expect((await runScript(stamp, [], { cwd: root })).code).toBe(0);
     expect(JSON.parse(await readFile(join(root, "dist", "version.json"), "utf8")).node).toBe("26.11.1");
+  });
+
+  it.each(["not json", `${JSON.stringify({ version: "26.10.0", platforms: {} })}\n`])("the stamp refuses a Node pin it cannot trust in one line, exits 65 and writes nothing (%j)", async (pin) => {
+    const { root } = await gitCheckout({ ...project, "scripts/delivery/node-runtime.json": pin }, "slice-1c/walking-skeleton");
+
+    const refused = await runScript(stamp, [], { cwd: root });
+
+    expect(refused.code).toBe(65);
+    expect(refused.stderr.trim().split("\n")).toEqual([expect.stringMatching(/^stamp: the Node pin is refused \(.+\); nothing was written$/)]);
+    expect(existsSync(join(root, "dist", "version.json"))).toBe(false);
   });
 
   it.each([".", "..cache", "packages/x"])(
