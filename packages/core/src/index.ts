@@ -130,7 +130,7 @@ export {
   type AgentGate,
   type PaneEnvironmentInput,
 } from "./pty/agent-env.ts";
-export { Daemon, type DaemonConnection, type DaemonPeer, type DaemonPorts, type PaneShell } from "./ptyd/daemon.ts";
+export { Daemon, type DaemonPorts, type PaneShell } from "./ptyd/daemon.ts";
 export { planPaneShell, type PaneShellInput } from "./ptyd/pane-shell.ts";
 export { BRANCH_SLUG_MAX, branchSlug } from "./release/branch-slug.ts";
 export {

@@ -14,6 +14,8 @@ export interface AppVersions {
   list(): Promise<readonly string[]>;
   /** The version `current` names, or `null`. */
   current(): Promise<string | null>;
+  /** An installed version's build id, the sha256 of its files.sha256; `null` when it has none (a damaged install). */
+  build(version: string): Promise<string | null>;
   /**
    * Copies a runtime directory into a new `.staging-<id>` and checks every file against its files.sha256; `build` is the
    * list's own sha256. A staging that failed is already removed.

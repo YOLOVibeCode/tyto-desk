@@ -1,3 +1,5 @@
+import { assertPortAllowed } from "@desk/node";
+
 /** How a CDP connection moves text: Node's WebSocket in production, an in-memory endpoint in tests. */
 export interface CdpTransport {
   send(text: string): void;
@@ -80,8 +82,19 @@ export class CdpConnection {
   }
 }
 
-/** Opens Node's WebSocket client on a browser WebSocket URL within `timeoutMs` (§6.6: 3 s), or `null`. */
+/**
+ * Opens Node's WebSocket client on a browser WebSocket URL within `timeoutMs` (§6.6: 3 s), or `null`. Under Vitest the
+ * guard refuses Chrome's usual port and Desk's first, throwing before any connection (§0).
+ */
 export function openWebSocket(url: string, timeoutMs = 3_000): Promise<CdpTransport | null> {
+  let port: number;
+  try {
+    const parsed = new URL(url);
+    port = parsed.port === "" ? (parsed.protocol === "wss:" ? 443 : 80) : Number(parsed.port);
+  } catch {
+    return Promise.resolve(null);
+  }
+  assertPortAllowed(port);
   return new Promise((resolve) => {
     let socket: WebSocket;
     try {

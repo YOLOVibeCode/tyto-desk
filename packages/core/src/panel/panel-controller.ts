@@ -3,7 +3,7 @@ import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
 import type { Random } from "../ports/random.ts";
 import type { TerminalPane, TerminalView } from "../ports/terminal-view.ts";
-import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type PaneSummary } from "../protocol/messages.ts";
+import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type ErrorCode, type PaneSummary } from "../protocol/messages.ts";
 import { Backoff } from "../time/backoff.ts";
 
 export type PanelPorts = {
@@ -26,6 +26,12 @@ const NOTICES: Readonly<Record<string, string>> = {
 
 const EXITED = "\r\n[the shell exited: press Enter for a new one]\r\n";
 
+/** What the banner says when the daemon cannot give this panel's pane a shell; Enter tries again. */
+const PANE_ERRORS: Readonly<Partial<Record<ErrorCode, string>>> = {
+  E_SPAWN: "The shell could not start: press Enter to try again",
+  E_LIMIT: "Desk's terminal daemon has no room for another pane: press Enter to try again",
+};
+
 /**
  * The side panel (docs/IMPLEMENTATION.md §9 `PanelController`; slice 1c: one pane). It opens its own native connection,
  * says hello with its window, and attaches the daemon's live pane, or a new one at the terminal's size. Typed input
@@ -43,6 +49,7 @@ export class PanelController {
   private exited = false;
   private opens = 0;
   private focused = false;
+  private failed = false;
 
   constructor(ports: PanelPorts) {
     this.ports = ports;
@@ -112,11 +119,19 @@ export class PanelController {
         if (text !== undefined) this.ports.view.banner(text);
         return;
       }
-      case "error":
+      case "error": {
         if (message.code === "E_STALE") {
           this.ports.view.banner("Desk was updated. Restart the terminal daemon to use it; tmux sessions survive");
+          return;
         }
+        const text = PANE_ERRORS[message.code];
+        if (text === undefined || message.pane === undefined || message.pane !== this.paneId) return;
+        this.exited = true;
+        this.attached = false;
+        this.failed = true;
+        this.ports.view.banner(text);
         return;
+      }
       case "panes":
       case "ext.call":
       case "ext.result":
@@ -152,7 +167,13 @@ export class PanelController {
     term.onInput((data) => {
       if (this.term !== term) return;
       if (this.exited) {
-        if (data.includes("\r")) this.open(this.ports.random.id("p"));
+        if (!data.includes("\r")) return;
+        if (this.failed) {
+          this.failed = false;
+          this.ports.view.banner(null);
+        }
+        // The same pane: the daemon starts its new shell there, so exited shells never pile up as panes.
+        this.open(paneId);
         return;
       }
       if (this.attached) this.post({ type: "in", pane: paneId, data });

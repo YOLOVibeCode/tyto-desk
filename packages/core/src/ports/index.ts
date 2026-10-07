@@ -16,7 +16,7 @@ export type { HostChannel } from "./host-channel.ts";
 export type { HostConnector } from "./host-connector.ts";
 export type { InstanceLock } from "./instance-lock.ts";
 export type { LoginShell } from "./login-shell.ts";
-export type { MessageServer } from "./message-server.ts";
+export type { DaemonConnection, DaemonPeer, MessageServer } from "./message-server.ts";
 export type { NativeHostDir } from "./native-host-dir.ts";
 export type { PanelOpener } from "./panel-opener.ts";
 export type { PortProbe } from "./port-probe.ts";

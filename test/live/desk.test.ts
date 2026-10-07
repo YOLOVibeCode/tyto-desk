@@ -236,17 +236,27 @@ describe("Desk's walking skeleton in the live container", () => {
     const url = `${fixture.origin}/page1.html`;
     const { cdp, daemon, pane } = desk();
 
+    const pagesBefore = (await targets(cdp)).filter((t) => t.type === "page");
+
     await typeLine(`echo "session=$AGENT_BROWSER_SESSION"; agent-browser open ${url}`);
     const page = await waitFor(async () => (await targets(cdp)).find((t) => t.type === "page" && t.url === url), {
       label: "the fixture's tab",
       timeoutMs: 45_000,
     }).finally(async () => saveResult("desk-agent-browser-screen", { screen: await screen().catch(() => "unreadable") }));
+    const pagesAfter = (await targets(cdp)).filter((t) => t.type === "page");
     const listed = await panes(daemon);
     const panelWindow = listed?.panels[0]?.window;
     const text = await screen();
-    await saveResult("desk-agent-browser", { page: page.url, pageWindow: await windowOf(page.targetId), panelWindow, screen: text });
+    const before = new Map(pagesBefore.map((t) => [t.targetId, t.url]));
+    const opened = await Promise.all(
+      pagesAfter.filter((t) => !before.has(t.targetId)).map(async (t) => ({ url: t.url, window: await windowOf(t.targetId).catch(() => null) })),
+    );
+    await saveResult("desk-agent-browser", { page: page.url, pageWindow: await windowOf(page.targetId), panelWindow, opened, screen: text });
 
     expect(text).toContain(`session=desk-${pane}`);
+    // A tab of its own: the fixture's page is a new one, and every page open before still shows what it showed.
+    expect(before.has(page.targetId)).toBe(false);
+    expect(Object.fromEntries(pagesAfter.filter((t) => before.has(t.targetId)).map((t) => [t.targetId, t.url]))).toEqual(Object.fromEntries(before));
     expect(await windowOf(page.targetId)).toBe(panelWindow);
   });
 
@@ -280,17 +290,28 @@ describe("Desk's walking skeleton in the live container", () => {
       const { cdp, daemon } = desk();
       const before = await panes(daemon);
       if (before === null) throw new Error("the daemon did not answer");
+      const workerBefore = (await targets(cdp)).find((t) => t.type === "service_worker" && t.url === WORKER_URL);
 
-      // Five idle minutes: nothing talks to the worker, and an MV3 worker without a native port ends after 30 s.
+      // Five idle minutes: nothing talks to the worker, and an MV3 worker without a native port ends after 30 s. No
+      // debugger is attached to it either (an attached one would keep it alive too), so its native port is what does.
       await new Promise((resolve) => setTimeout(resolve, IDLE_MS));
       const after = await panes(daemon);
       const worker = (await targets(cdp)).find((t) => t.type === "service_worker" && t.url === WORKER_URL);
       const windows = await new DaemonExtensionBridge(daemon).windows();
-      await saveResult("desk-worker-idle", { before: before.sw, after: after?.sw, worker: worker?.url ?? null, windows });
+      await saveResult("desk-worker-idle", {
+        before: before.sw,
+        after: after?.sw,
+        worker: worker?.url ?? null,
+        attachedBefore: workerBefore?.attached ?? null,
+        attachedAfter: worker?.attached ?? null,
+        windows,
+      });
 
+      expect(workerBefore?.attached).toBe(false);
       expect(before.sw).toEqual({ connected: true, connects: 1 });
       expect(after?.sw).toEqual({ connected: true, connects: 1 });
       expect(worker?.url).toBe(WORKER_URL);
+      expect(worker?.attached).toBe(false);
       expect(windows?.length).toBeGreaterThan(0);
     },
     IDLE_MS + 120_000,

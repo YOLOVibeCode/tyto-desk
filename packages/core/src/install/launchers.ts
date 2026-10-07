@@ -11,15 +11,20 @@ function shQuote(text: string): string {
 /** Variables no Desk process inherits (§0 Safety, §15.1). */
 const UNSET = "-u NODE_OPTIONS -u NODE_PATH -u NODE_REPL_EXTERNAL_MODULE";
 
+/**
+ * The launcher text. DESK_HOME appears only single-quoted (`shQuote`), never in a comment or between double quotes, so
+ * no character of it is shell code (D98); the message goes out through `printf '%s\n'`, which reads no escapes.
+ */
 function launcher(input: { deskHome: string; platform: string }, purpose: string, environment: string, entryArgs: string): string {
   const deskHome = input.deskHome.replace(/\/+$/, "");
   const current = `${deskHome}/app/current`;
   return [
     "#!/bin/sh",
-    `# ${purpose}, written by desk install. It resolves ${current} once and runs that version's Desk Terminal, never`,
-    "# the source tree and never through current, so a process never loads code from two versions (docs/IMPLEMENTATION.md §15.1).",
+    `# ${purpose}, written by desk install. It resolves the app/current of the DESK_HOME below once and runs that`,
+    "# version's Desk Terminal, never the source tree and never through current, so a process never loads code from two",
+    "# versions (docs/IMPLEMENTATION.md §15.1).",
     `version=$(cd -P -- ${shQuote(current)} 2>/dev/null && pwd -P) || {`,
-    `  echo "desk: no current version in ${deskHome.replaceAll('"', "")}/app; run desk install" >&2`,
+    `  printf '%s\\n' ${shQuote(`desk: no current version in ${deskHome}/app; run desk install`)} >&2`,
     "  exit 69",
     "}",
     `exec /usr/bin/env ${UNSET} DESK_HOME=${shQuote(deskHome)}${environment} "$version/${terminalBinary(input.platform)}" "$version/desk.mjs"${entryArgs} "$@"`,

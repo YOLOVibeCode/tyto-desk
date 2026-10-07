@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CdpDeskExtension, CdpPanelOpener, CdpConnection } from "../src/index.ts";
+import { CdpBrowserConnector, CdpConnection, CdpDeskExtension, CdpPanelOpener, openWebSocket } from "../src/index.ts";
 import { FakeCdp } from "./fake-cdp.ts";
 
 const EXTENSION_ID = "nmnljgjkacmplpfllopodplgmpjogdbf";
@@ -88,5 +88,31 @@ describe("the panel opener over CDP", () => {
 
     expect(await new CdpPanelOpener(new CdpConnection(transport)).newWindow()).toBe(true);
     expect(transport.sent).toEqual([{ method: "Target.createTarget", params: { url: "about:blank", newWindow: true } }]);
+  });
+});
+
+describe("the browser connector", () => {
+  it.each([
+    ["on another host", "ws://10.0.0.5:39417/devtools/browser/0f1e2d3c"],
+    ["on localhost by name", "ws://localhost:39417/devtools/browser/0f1e2d3c"],
+    ["over TLS", "wss://127.0.0.1:39417/devtools/browser/0f1e2d3c"],
+    ["for a page rather than the browser", "ws://127.0.0.1:39417/devtools/page/0f1e2d3c"],
+    ["with credentials", "ws://desk@127.0.0.1:39417/devtools/browser/0f1e2d3c"],
+    ["with no port", "ws://127.0.0.1/devtools/browser/0f1e2d3c"],
+  ])("the browser connector refuses a WebSocket URL %s, before it opens anything", async (_label, wsUrl) => {
+    expect(await new CdpBrowserConnector().connect(wsUrl)).toEqual({ ok: false });
+  });
+
+  it.each([9222, 9229, 9400, 9417, 9899])(
+    "the browser connector refuses port %i under Vitest before it opens a WebSocket, so no test reaches the operator's Chrome",
+    async (port) => {
+      await expect(new CdpBrowserConnector().connect(`ws://127.0.0.1:${port}/devtools/browser/0f1e2d3c`)).rejects.toThrow(
+        new RegExp(`reserved port ${port}`),
+      );
+    },
+  );
+
+  it("opening a CDP WebSocket refuses a reserved port under Vitest, whoever asks", () => {
+    expect(() => openWebSocket("ws://127.0.0.1:9417/devtools/browser/0f1e2d3c")).toThrow(/reserved port 9417/);
   });
 });

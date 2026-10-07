@@ -1,4 +1,13 @@
-import type { DaemonConnection, DaemonPeer } from "../ptyd/daemon.ts";
+import type { DaemonMessage } from "../protocol/messages.ts";
+
+/** One client connection, as the daemon writes to it. */
+export interface DaemonPeer {
+  send(message: DaemonMessage): void;
+  close(): void;
+}
+
+/** What the transport tells the daemon about a connection: each line it read, and that it closed. */
+export type DaemonConnection = { receive(line: string): void; closed(): void };
 
 /**
  * The daemon's listener on `run/ptyd.sock` (docs/IMPLEMENTATION.md §3, §7.2): NDJSON lines in, one line per message

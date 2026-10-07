@@ -33,9 +33,12 @@ const info: VersionInfo = {
   compat: {},
 };
 
+/** The staged runtime's build id: the sha256 of its files.sha256. */
+const BUILD = "9f8e7d6c".repeat(8);
+
 function setup(options: { answers?: (boolean | "no-tty")[]; platform?: string; signed?: boolean } = {}) {
   const versions = new MemoryAppVersions();
-  versions.runtimes.set(from, { ok: true, staging, versionJson: JSON.stringify(info), build: "9f8e7d6c".repeat(8) });
+  versions.runtimes.set(from, { ok: true, staging, versionJson: JSON.stringify(info), build: BUILD });
   const signing = new FakeCodeSigning();
   if (options.signed ?? true) signing.valid.add(`${staging}/Desk Terminal.app`);
   const prompter = new ScriptedPrompter(options.answers ?? [true]);
@@ -157,6 +160,7 @@ describe("desk install --from", () => {
   it("installing an installed version renames nothing into place again", async () => {
     const desk = setup();
     desk.versions.installed.push(info.version);
+    desk.versions.builds.set(info.version, BUILD);
 
     await desk.run();
 
@@ -165,10 +169,69 @@ describe("desk install --from", () => {
     expect(desk.versions.used).toEqual([info.version]);
   });
 
+  it("installing an installed version keeps the build and install time installed.json recorded for it", async () => {
+    const desk = setup();
+    desk.versions.installed.push(info.version, "0.3.0");
+    desk.versions.currentVersion = "0.3.0";
+    desk.versions.builds.set(info.version, "a1".repeat(32));
+    const recorded = { channel: "dev", build: "a1".repeat(32), provenance: "dev", commit: info.commit, installedAt: "2026-10-01T08:00:00Z" };
+    desk.files.files.set(`${deskHome}/installed.json`, {
+      text: JSON.stringify({ version: 1, current: "0.3.0", previous: null, versions: { [info.version]: recorded }, files: [] }),
+      mode: 0o600,
+    });
+
+    await desk.run();
+
+    expect(parseInstalled(desk.files.text(`${deskHome}/installed.json`))).toMatchObject({
+      current: info.version,
+      previous: "0.3.0",
+      versions: { [info.version]: recorded },
+    });
+  });
+
+  it("installing an installed version that installed.json does not record records the installed copy's build, not the discarded one's", async () => {
+    const desk = setup();
+    desk.versions.installed.push(info.version);
+    desk.versions.builds.set(info.version, "b2".repeat(32));
+
+    await desk.run();
+
+    expect(parseInstalled(desk.files.text(`${deskHome}/installed.json`))?.versions[info.version]?.build).toBe("b2".repeat(32));
+  });
+
+  it("installing an installed version from another build of it says the installed copy stays as it was", async () => {
+    const desk = setup();
+    desk.versions.installed.push(info.version);
+    desk.versions.builds.set(info.version, "b2".repeat(32));
+
+    expect(await desk.run()).toMatchObject({ ok: true, message: expect.stringContaining("the installed copy stays as it was") });
+  });
+
+  it("install refuses an installed version whose installed copy has no files.sha256, and changes nothing", async () => {
+    const desk = setup();
+    desk.versions.installed.push(info.version);
+
+    expect(await desk.run()).toMatchObject({ ok: false, code: 65, message: expect.stringContaining("damaged") });
+    expect(desk.versions.used).toEqual([]);
+    expect(desk.files.files.has(`${deskHome}/installed.json`)).toBe(false);
+  });
+
+  it("install refuses a damaged installed.json before it asks or switches current, and changes nothing", async () => {
+    const desk = setup();
+    desk.files.files.set(`${deskHome}/installed.json`, { text: "{ not json", mode: 0o600 });
+
+    expect(await desk.run()).toMatchObject({ ok: false, code: 65, message: expect.stringContaining("installed.json is damaged") });
+    expect(desk.prompter.asked).toEqual([]);
+    expect(desk.versions.used).toEqual([]);
+    expect(desk.versions.committed).toEqual([]);
+    expect(desk.files.files.has(`${home}/.local/bin/desk`)).toBe(false);
+  });
+
   it("installing the current version asks nothing and rewrites the launchers", async () => {
     const desk = setup({ answers: [] });
     desk.versions.installed.push(info.version);
     desk.versions.currentVersion = info.version;
+    desk.versions.builds.set(info.version, BUILD);
 
     const result = await desk.run();
 

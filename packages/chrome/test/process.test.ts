@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HttpDevTools, NodeChromeProcess, NodeChromeProfile, NodeNativeHostDir, chromeStartCommand } from "../src/index.ts";
@@ -22,6 +22,13 @@ describe("the installed Chrome", () => {
       file: "/usr/bin/google-chrome-stable",
       args: ["--no-first-run"],
     });
+  });
+
+  it("ChromeProcess refuses to read the version of a Chrome inside the real home under Vitest", async () => {
+    const realHome = process.env.DESK_TEST_REAL_HOME ?? userInfo().homedir;
+    const chrome = new NodeChromeProcess({ app: join(realHome, "Applications", "Google Chrome.app"), platform: "darwin", env: process.env });
+
+    await expect(chrome.version()).rejects.toThrow(/real home directory/);
   });
 
   it("ChromeProcess refuses to start Chrome under Vitest, before it runs anything", async () => {
@@ -97,17 +104,40 @@ describe("the Desk profile", () => {
 
 describe("the DevTools HTTP endpoint", () => {
   it("DevToolsHttp reads the browser and its WebSocket from /json/version", async () => {
+    let wsUrl = "";
     const server = createServer((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ Browser: "Chrome/155.0.8059.40", webSocketDebuggerUrl: "ws://127.0.0.1:1/devtools/browser/x", path: req.url }));
+      res.end(JSON.stringify({ Browser: "Chrome/155.0.8059.40", webSocketDebuggerUrl: wsUrl, path: req.url }));
     });
     await new Promise<void>((resolve) => server.listen({ host: "127.0.0.1", port: 0 }, resolve));
     const { port } = server.address() as AddressInfo;
+    wsUrl = `ws://127.0.0.1:${port}/devtools/browser/0f1e2d3c`;
 
     const version = await new HttpDevTools().version(port);
     server.close();
 
-    expect(version).toEqual({ browser: "Chrome/155.0.8059.40", wsUrl: "ws://127.0.0.1:1/devtools/browser/x" });
+    expect(version).toEqual({ browser: "Chrome/155.0.8059.40", wsUrl });
+  });
+
+  it.each([
+    ["on another port", (port: number) => `ws://127.0.0.1:${port + 1}/devtools/browser/0f1e2d3c`],
+    ["on another host", (port: number) => `ws://10.0.0.5:${port}/devtools/browser/0f1e2d3c`],
+    ["for a page rather than the browser", (port: number) => `ws://127.0.0.1:${port}/devtools/page/0f1e2d3c`],
+    ["over TLS", (port: number) => `wss://127.0.0.1:${port}/devtools/browser/0f1e2d3c`],
+  ])("DevToolsHttp refuses a browser WebSocket URL %s, not the endpoint it asked", async (_label, wsUrlFor) => {
+    let wsUrl = "";
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ Browser: "Chrome/155.0.8059.40", webSocketDebuggerUrl: wsUrl }));
+    });
+    await new Promise<void>((resolve) => server.listen({ host: "127.0.0.1", port: 0 }, resolve));
+    const { port } = server.address() as AddressInfo;
+    wsUrl = wsUrlFor(port);
+
+    const version = await new HttpDevTools().version(port);
+    server.close();
+
+    expect(version).toBeNull();
   });
 
   it("DevToolsHttp reports nothing when nothing answers", async () => {

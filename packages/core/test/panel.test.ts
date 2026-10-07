@@ -114,7 +114,36 @@ describe("the side panel", () => {
 
     expect(view.panes[0]?.screen).toContain("[the shell exited: press Enter for a new one]");
     expect(connector.last().posted.filter((m) => (m as { type: string }).type === "in")).toEqual([]);
+    // The same pane again: the daemon starts its new shell there, so exited shells never pile up as panes.
+    expect(connector.last().posted.at(-1)).toEqual({ type: "open", id: "o2", pane: PANE, cols: 100, rows: 30 });
+    expect(view.panes.map((p) => p.id)).toEqual([PANE]);
+  });
+
+  it.each([
+    ["E_SPAWN", "The shell could not start: press Enter to try again"],
+    ["E_LIMIT", "Desk's terminal daemon has no room for another pane: press Enter to try again"],
+  ])("the panel shows %s for its pane in the banner, and Enter tries again", (code, text) => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello());
+
+    connector.last().deliver({ type: "error", id: "o1", pane: "p_0000000001", code, message: "fixed text" });
+    const shown = view.bannerText;
+    view.pane().type("\r");
+
+    expect(shown).toBe(text);
+    expect(view.bannerText).toBeNull();
     expect(connector.last().posted.at(-1)).toEqual({ type: "open", id: "o2", pane: "p_0000000001", cols: 100, rows: 30 });
+  });
+
+  it("the panel ignores a pane error about another pane", () => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello([{ id: PANE, alive: true }]));
+
+    connector.last().deliver({ type: "error", pane: "p_m9x1d4f6hz", code: "E_SPAWN", message: "fixed text" });
+
+    expect(view.bannerText).toBeNull();
   });
 
   it("the panel shows a notice from the daemon in its banner", () => {

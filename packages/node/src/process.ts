@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomInt, randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import type { Clock, DetachedSpawner, LoginShell, ProcessInfo, Random } from "@desk/core";
+import { runArgv } from "./run.ts";
 
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
 
@@ -19,8 +20,26 @@ export class NodeDetachedSpawner implements DetachedSpawner {
   }
 }
 
-/** Whether a pid exists; it signals nothing (signal 0 only checks). */
+/** `ps`'s elapsed time, `[[dd-]hh:]mm:ss`, in seconds; `null` for anything else. */
+function elapsedSeconds(text: string): number | null {
+  const match = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(text);
+  if (match === null) return null;
+  const [, days = "0", hours = "0", minutes = "0", seconds = "0"] = match;
+  return ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds);
+}
+
+/**
+ * Facts about processes. `alive` signals nothing (signal 0 only checks). `startedAt` runs `ps -o etime= -p <pid>` (argv,
+ * the C locale, 3 s; never an environment-reading flag), whose elapsed time is in whole seconds, the same on macOS and
+ * procps.
+ */
 export class NodeProcessInfo implements ProcessInfo {
+  private readonly ps: string;
+
+  constructor(options: { ps?: string } = {}) {
+    this.ps = options.ps ?? "/bin/ps";
+  }
+
   async alive(pid: number): Promise<boolean> {
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try {
@@ -29,6 +48,19 @@ export class NodeProcessInfo implements ProcessInfo {
     } catch (err) {
       return err instanceof Error && "code" in err && err.code === "EPERM";
     }
+  }
+
+  async startedAt(pid: number): Promise<number | null> {
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    const asked = Date.now();
+    const result = await runArgv(this.ps, ["-o", "etime=", "-p", String(pid)], {
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      timeoutMs: 3_000,
+      maxBytes: 4_096,
+    });
+    if (result.code !== 0) return null;
+    const elapsed = elapsedSeconds(result.stdout.trim());
+    return elapsed === null ? null : asked - elapsed * 1_000;
   }
 }
 

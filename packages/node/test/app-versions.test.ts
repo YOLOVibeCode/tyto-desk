@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatFilesSha256 } from "../../core/src/index.ts";
-import { NodeAppVersions } from "../src/index.ts";
+import { NodeAppVersions, copyRuntime } from "../src/index.ts";
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -130,6 +130,37 @@ describe("NodeAppVersions", () => {
 
   it("current is null before any install", async () => {
     expect(await new NodeAppVersions(await deskHome()).current()).toBeNull();
+  });
+
+  it("an installed version's build is the sha256 of its files.sha256, and one without that file has none", async () => {
+    const home = await deskHome();
+    const versions = new NodeAppVersions(home);
+    const from = await runtime();
+    const staged = await versions.stage(from);
+    if (!staged.ok) throw new Error("stage failed");
+    await versions.commit(staged.staging, "0.3.0");
+    await mkdir(join(home, "app", "0.2.0"), { mode: 0o700 });
+
+    expect(await versions.build("0.3.0")).toBe(sha(await readFile(join(from, "files.sha256"), "utf8")));
+    expect(await versions.build("0.2.0")).toBeNull();
+    expect(await versions.build("0.9.9")).toBeNull();
+  });
+
+  it("stage refuses a runtime whose files.sha256 changes while it is copied, so the list installed is the list verified", async () => {
+    const home = await deskHome();
+    const from = await runtime();
+    const listed = await readFile(join(from, "files.sha256"), "utf8");
+    // Another writer rewrites the list between stage's read and its copy: the same entries, other text.
+    const versions = new NodeAppVersions(home, {
+      copy: async (source, staging) => {
+        const copied = await copyRuntime(source, staging);
+        await writeFile(join(staging, "files.sha256"), `${listed}\n`);
+        return copied;
+      },
+    });
+
+    expect(await versions.stage(from)).toEqual({ ok: false, reason: "mismatch" });
+    expect((await readdir(join(home, "app"))).filter((name) => name.startsWith(".staging-"))).toEqual([]);
   });
 
   it("a staged runtime is a copy: changing the source afterwards changes nothing installed", async () => {

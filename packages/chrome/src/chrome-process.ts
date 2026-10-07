@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { guiAllowed, type ChromeProcess, type ChromeStart } from "@desk/core";
-import { NodeDetachedSpawner, runArgv } from "@desk/node";
+import { NodeDetachedSpawner, assertPathAllowed, runArgv } from "@desk/node";
 
 /** What Chrome's process gets from Desk's: enough to find its display, home and locale. Nothing else is inherited. */
 const CHROME_ENV = [
@@ -55,6 +55,7 @@ export class NodeChromeProcess implements ChromeProcess {
   }
 
   async version(): Promise<string | null> {
+    await assertPathAllowed(this.app);
     if (this.platform === "darwin") {
       const plist = await readFile(join(this.app, "Contents", "Info.plist"), "utf8").catch(() => null);
       const match = plist === null ? null : /<key>CFBundleShortVersionString<\/key>\s*<string>([0-9.]+)<\/string>/.exec(plist);

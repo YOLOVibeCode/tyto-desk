@@ -1,4 +1,5 @@
 import type { Clock } from "../ports/clock.ts";
+import type { DaemonConnection, DaemonPeer } from "../ports/message-server.ts";
 import type { Pty, PtyExit, PtySpawner } from "../ports/pty-spawner.ts";
 import {
   PROTOCOL_MAX,
@@ -33,15 +34,6 @@ export type DaemonPorts = {
   /** Called once, after a shutdown was accepted and every running shell got SIGHUP. */
   onShutdown(mode: "stop" | "restart"): void;
 };
-
-/** One client connection, as the daemon writes to it. */
-export interface DaemonPeer {
-  send(message: DaemonMessage): void;
-  close(): void;
-}
-
-/** What the transport tells the daemon about a connection: each line it read, and that it closed. */
-export type DaemonConnection = { receive(line: string): void; closed(): void };
 
 /** The panes Desk keeps at most (§7.2). */
 const PANES_MAX = 64;
@@ -99,6 +91,11 @@ export class Daemon {
       receive: (line) => this.receive(client, line),
       closed: () => this.disconnect(client),
     };
+  }
+
+  /** Ends the daemon as a `shutdown {mode: "stop"}` does; its process calls this on SIGTERM and SIGHUP (D97). */
+  stop(): void {
+    this.shutdown("stop");
   }
 
   private send(client: Client, message: DaemonMessage): void {
@@ -216,9 +213,13 @@ export class Daemon {
       this.attached(existing, client);
       return;
     }
-    if (existing === undefined && this.panes.size >= PANES_MAX) {
-      this.fail(client, "E_LIMIT", { id: message.id, pane: message.pane });
-      return;
+    if (existing === undefined) {
+      // An exited pane no panel owns stays listed until the next open; a new one takes its place (§7.3).
+      for (const [id, pane] of this.panes) if (!pane.alive && !pane.starting && pane.owner === null) this.panes.delete(id);
+      if (this.panes.size >= PANES_MAX) {
+        this.fail(client, "E_LIMIT", { id: message.id, pane: message.pane });
+        return;
+      }
     }
     const pane: Pane = { id: message.pane, pty: null, owner: client, alive: false, starting: true, cols: message.cols, rows: message.rows };
     this.panes.set(pane.id, pane);

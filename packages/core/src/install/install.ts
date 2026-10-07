@@ -9,7 +9,7 @@ import type { NativeHostDir } from "../ports/native-host-dir.ts";
 import type { Prompter } from "../ports/prompter.ts";
 import type { TextFiles } from "../ports/text-files.ts";
 import { parseVersionInfo } from "../version/version-info.ts";
-import { nextInstalled, parseInstalled, serializeInstalled } from "./installed.ts";
+import { nextInstalled, parseInstalled, serializeInstalled, type InstalledVersion } from "./installed.ts";
 import { deskLauncher, hostLauncher } from "./launchers.ts";
 
 export type InstallPorts = {
@@ -41,13 +41,19 @@ const INSTALL_LOCK_MS = 10_000;
 const LAUNCHER = 0o700;
 const PRIVATE = 0o600;
 
+/** Whether installed.json's entry for a version is one (installed.json validates only its own keys, §4.3). */
+function isRecordedVersion(value: unknown): value is InstalledVersion {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && typeof (value as { build?: unknown }).build === "string";
+}
+
 /**
  * `desk install --from <dir>`, the version steps (docs/IMPLEMENTATION.md §15.1, §23.5 rules 1–4; slice 1c). Under
- * `run/install.lock`: the runtime is copied into a staging directory and verified (files.sha256, a readable
- * version.json, and on macOS `codesign --verify --strict` on Desk Terminal) before it is renamed into `app/<version>`;
- * an installed version is not copied again. `current` switches only after the operator confirms on a TTY; then
- * installed.json records it, and the launchers and the Desk host manifest are written. Nothing here starts Chrome.
- * Retention (keep three) is slice D2's: 1c removes no version.
+ * `run/install.lock`: a damaged installed.json stops it before anything changes; the runtime is copied into a staging
+ * directory and verified (files.sha256, a readable version.json, and on macOS `codesign --verify --strict` on Desk
+ * Terminal) before it is renamed into `app/<version>`. Installing an installed version changes nothing of it (D98): its
+ * files and what installed.json recorded for it stay, and another build of it is discarded. `current` switches only
+ * after the operator confirms on a TTY; then installed.json records it, and the launchers and the Desk host manifest are
+ * written. Nothing here starts Chrome. Retention (keep three) is slice D2's: 1c removes no version.
  */
 export async function installVersion(ports: InstallPorts, input: InstallInput): Promise<InstallResult> {
   const lock = await pollUntil(ports.clock, INSTALL_LOCK_MS, 100, async () => {
@@ -56,6 +62,13 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
   });
   if (lock === null) return { ok: false, code: 75, message: "another desk install is running; run it again once it is done" };
   try {
+    const installedPath = `${input.deskHome}/installed.json`;
+    const previousText = await ports.files.read(installedPath);
+    const previous = previousText === null ? null : parseInstalled(previousText);
+    if (previousText !== null && previous === null) {
+      return { ok: false, code: 65, message: `${installedPath} is damaged; move it aside and run desk install again; nothing was installed` };
+    }
+
     const staged = await ports.versions.stage(input.from);
     if (!staged.ok) {
       return { ok: false, code: 65, message: `the runtime at ${input.from} does not match its files.sha256 (${staged.reason}); nothing was installed` };
@@ -67,8 +80,22 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
       const what = info === null ? "its version.json is damaged" : "Desk Terminal's signature does not verify";
       return { ok: false, code: 65, message: `the runtime at ${input.from} is refused: ${what}; nothing was installed` };
     }
-    if ((await ports.versions.list()).includes(info.version)) await ports.versions.discard(staged.staging);
-    else await ports.versions.commit(staged.staging, info.version);
+    const alreadyInstalled = (await ports.versions.list()).includes(info.version);
+    let build = staged.build;
+    if (alreadyInstalled) {
+      await ports.versions.discard(staged.staging);
+      const installedBuild = await ports.versions.build(info.version);
+      if (installedBuild === null) {
+        return {
+          ok: false,
+          code: 65,
+          message: `Desk ${info.version} is installed, but its copy in ${input.deskHome}/app/${info.version} is damaged (no files.sha256); nothing changed`,
+        };
+      }
+      build = installedBuild;
+    } else {
+      await ports.versions.commit(staged.staging, info.version);
+    }
 
     const before = await ports.versions.current();
     const alreadyCurrent = before === info.version;
@@ -83,13 +110,12 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
       await ports.versions.use(info.version);
     }
 
-    const installedPath = `${input.deskHome}/installed.json`;
-    const previousText = await ports.files.read(installedPath);
-    const previous = previousText === null ? null : parseInstalled(previousText);
-    if (previousText !== null && previous === null) {
-      return { ok: false, code: 65, message: `${installedPath} is damaged; move it aside and run desk install again` };
-    }
-    const entry = { version: info.version, channel: info.channel, build: staged.build, provenance: input.provenance, commit: info.commit, installedAt: input.now };
+    // An installed version keeps what installed.json recorded when its files were installed.
+    const recorded: unknown = alreadyInstalled ? previous?.versions[info.version] : undefined;
+    const entry =
+      !isRecordedVersion(recorded)
+        ? { version: info.version, channel: info.channel, build, provenance: input.provenance, commit: info.commit, installedAt: input.now }
+        : { ...recorded, version: info.version };
     // Without an installed.json yet, the version current named before the switch is still the previous one.
     const base = previous ?? { version: 1 as const, current: before, previous: null, versions: {}, files: [] };
     await ports.files.write(installedPath, serializeInstalled(nextInstalled(base, entry, true)), PRIVATE);
@@ -99,10 +125,11 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
     await ports.files.write(nativeHostLauncher(input.deskHome), hostLauncher(launchers), LAUNCHER);
     const manifest = nativeHostManifest(input.deskHome);
     if ((await ports.hosts.read(NATIVE_HOST_NAME)) !== manifest) await ports.hosts.write(NATIVE_HOST_NAME, manifest);
+    const kept = build === staged.build ? "" : `; ${input.from} is another build of it, and the installed copy stays as it was`;
     return {
       ok: true,
       version: info.version,
-      message: alreadyCurrent ? `${info.version} is installed and current; run desk` : `Installed ${info.version}; run desk`,
+      message: alreadyCurrent ? `${info.version} is installed and current${kept}; run desk` : `Installed ${info.version}${kept}; run desk`,
     };
   } finally {
     await lock.release();

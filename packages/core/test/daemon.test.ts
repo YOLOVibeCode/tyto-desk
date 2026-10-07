@@ -203,6 +203,40 @@ describe("the terminal daemon", () => {
     expect(spawner.spawned).toHaveLength(2);
   });
 
+  it("exited panes no panel owns are dropped when a new pane opens, so shells that exit never fill the daemon's 64 panes", async () => {
+    const { spawner, client } = setup();
+    for (let i = 0; i < 64; i += 1) {
+      const panel = await client("panel", { window: 7 });
+      panel.send({ type: "open", id: `r${i}`, pane: `p_${String(i).padStart(10, "0")}`, cols: 100, rows: 30 });
+      await settle();
+      spawner.pty(i).end({ code: 0, signal: null });
+      panel.hangUp();
+    }
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r64", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    panel.send({ type: "list", id: "l1" });
+
+    expect(spawner.spawned).toHaveLength(65);
+    expect(panel.sent).toContainEqual(expect.objectContaining({ type: "snapshot", pane: PANE }));
+    expect(panel.last()).toMatchObject({ type: "panes", panes: [{ id: PANE, alive: true, owned: true }] });
+  });
+
+  it("a pane whose shell exited stays listed as exited until the next open", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    spawner.pty().end({ code: 0, signal: null });
+    panel.hangUp();
+    const cli = await client("cli");
+
+    cli.send({ type: "list", id: "l1" });
+
+    expect(cli.last()).toMatchObject({ type: "panes", panes: [{ id: PANE, alive: false, owned: false }] });
+  });
+
   it("a shell that cannot start gets E_SPAWN", async () => {
     const { spawner, client } = setup();
     spawner.failing = true;
@@ -363,6 +397,20 @@ describe("the terminal daemon", () => {
 
     expect(spawner.pty(0).signals).toEqual(["SIGHUP"]);
     expect(spawner.pty(1).signals).toEqual([]);
+    expect(shutdowns).toEqual(["stop"]);
+  });
+
+  it("stop, from the daemon's SIGTERM or SIGHUP, ends it as shutdown does: SIGHUP to every running shell, every client closed", async () => {
+    const { daemon, spawner, shutdowns, client } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    daemon.stop();
+    daemon.stop();
+
+    expect(spawner.pty().signals).toEqual(["SIGHUP"]);
+    expect(panel.closed).toBe(true);
     expect(shutdowns).toEqual(["stop"]);
   });
 

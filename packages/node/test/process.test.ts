@@ -5,6 +5,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, SystemClock } from "../src/index.ts";
+import { fakeExecutable } from "../../../test/fixtures/fake-exec.ts";
 
 /** The file's text once it exists, polled every 20 ms for at most `budgetMs`. */
 async function waitForFile(path: string, budgetMs: number): Promise<string> {
@@ -46,6 +47,37 @@ describe("process adapters", () => {
 
     expect(await new NodeProcessInfo().alive(process.pid)).toBe(true);
     expect(await new NodeProcessInfo().alive(child.pid ?? 0)).toBe(false);
+  });
+
+  it("process info reads when a process started from ps's elapsed time, through argv and a plain environment", async () => {
+    const ps = await fakeExecutable("ps", [{ match: ["-o", "etime=", "-p", "4242"], stdout: "  1-02:03:04\n" }]);
+    const before = Date.now();
+
+    const started = await new NodeProcessInfo({ ps: ps.path }).startedAt(4242);
+
+    const elapsedMs = ((26 * 60 + 3) * 60 + 4) * 1000;
+    expect(started).toBeGreaterThanOrEqual(before - elapsedMs - 1_000);
+    expect(started).toBeLessThanOrEqual(Date.now() - elapsedMs);
+    expect((await ps.calls()).map((call) => call.argv)).toEqual([["-o", "etime=", "-p", "4242"]]);
+    expect((await ps.calls()).map((call) => call.env.PATH)).toEqual(["/usr/bin:/bin"]);
+    expect((await ps.calls()).map((call) => call.env.LC_ALL)).toEqual(["C"]);
+  });
+
+  it.each([
+    ["ps lists no such process", { exit: 1 }],
+    ["ps prints no elapsed time", { stdout: "\n" }],
+    ["ps prints something else", { stdout: "ELAPSED\n" }],
+  ])("process info has no start time when %s", async (_label, answer) => {
+    const ps = await fakeExecutable("ps", [{ match: ["-o", "etime="], ...answer }]);
+
+    expect(await new NodeProcessInfo({ ps: ps.path }).startedAt(4242)).toBeNull();
+  });
+
+  it("process info's start time for this process is when it started, within a second or two", async () => {
+    const started = await new NodeProcessInfo().startedAt(process.pid);
+
+    expect(started).not.toBeNull();
+    expect(Math.abs((started ?? 0) - (Date.now() - process.uptime() * 1000))).toBeLessThan(2_000);
   });
 
   it("the login shell is the account's passwd shell", async () => {

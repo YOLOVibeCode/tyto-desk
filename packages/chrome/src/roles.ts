@@ -1,5 +1,7 @@
 import type { BrowserConnector, BrowserSession, DeskExtension, PanelOpener } from "@desk/core";
+import { assertPortAllowed } from "@desk/node";
 import { CdpConnection, openWebSocket } from "./cdp.ts";
+import { browserEndpointPort } from "./endpoint.ts";
 
 const LOAD_UNPACKED_MS = 10_000;
 
@@ -76,10 +78,15 @@ export class CdpPanelOpener implements PanelOpener {
   }
 }
 
-/** Connects to the Desk Chrome's browser WebSocket and hands out the role adapters over that one session. */
+/**
+ * Connects to the Desk Chrome's browser WebSocket and hands out the role adapters over that one session. It takes only
+ * Chrome's browser endpoint on 127.0.0.1, and under Vitest the guard refuses a reserved port before any connection.
+ */
 export class CdpBrowserConnector implements BrowserConnector {
   async connect(wsUrl: string): Promise<{ ok: true; session: BrowserSession } | { ok: false }> {
-    if (!/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//.test(wsUrl)) return { ok: false };
+    const port = browserEndpointPort(wsUrl);
+    if (port === null) return { ok: false };
+    assertPortAllowed(port);
     const transport = await openWebSocket(wsUrl);
     if (transport === null) return { ok: false };
     const cdp = new CdpConnection(transport);

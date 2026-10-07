@@ -28,10 +28,14 @@ export async function fileSha256(path: string): Promise<string> {
 }
 
 /**
- * Copies `from` into `to` as plain files and directories, keeping only the execute bits of each file's mode; anything
- * else (a symbolic link, a device) makes the copy fail. Returns the copied files' paths, `/`-separated.
+ * Copies a runtime `from` into `to` as plain files and directories, keeping only the execute bits of each file's mode;
+ * anything else (a symbolic link, a device) makes the copy fail (null). Returns the copied files' paths, `/`-separated.
  */
-async function copyTree(from: string, to: string, rel = ""): Promise<string[] | null> {
+export async function copyRuntime(from: string, to: string): Promise<string[] | null> {
+  return copyTree(from, to, "");
+}
+
+async function copyTree(from: string, to: string, rel: string): Promise<string[] | null> {
   const copied: string[] = [];
   for (const entry of await readdir(join(from, rel), { withFileTypes: true })) {
     const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
@@ -59,9 +63,12 @@ async function copyTree(from: string, to: string, rel = ""): Promise<string[] | 
  */
 export class NodeAppVersions implements AppVersions {
   private readonly appDir: string;
+  private readonly copy: (from: string, to: string) => Promise<string[] | null>;
 
-  constructor(deskHome: string) {
+  /** `copy` copies a runtime into a staging directory (`copyRuntime`); a test gives one that also changes the source. */
+  constructor(deskHome: string, options: { copy?: (from: string, to: string) => Promise<string[] | null> } = {}) {
     this.appDir = join(deskHome, "app");
+    this.copy = options.copy ?? copyRuntime;
   }
 
   async list(): Promise<readonly string[]> {
@@ -88,8 +95,20 @@ export class NodeAppVersions implements AppVersions {
     }
   }
 
+  async build(version: string): Promise<string | null> {
+    const list = join(this.versionDir(version), FILES_SHA256);
+    await assertPathAllowed(list);
+    try {
+      return createHash("sha256").update(await readFile(list, "utf8")).digest("hex");
+    } catch (err) {
+      if (isMissing(err)) return null;
+      throw err;
+    }
+  }
+
   async stage(from: string): Promise<StageResult> {
     await assertPathAllowed(this.appDir);
+    await assertPathAllowed(from);
     let listText: string;
     let versionJson: string;
     try {
@@ -110,13 +129,15 @@ export class NodeAppVersions implements AppVersions {
     const staging = join(this.appDir, `.staging-${randomId()}`);
     await mkdir(staging, { mode: 0o700 });
     try {
-      const copied = await copyTree(from, staging);
+      const copied = await this.copy(from, staging);
       const files = copied?.filter((path) => path !== FILES_SHA256) ?? null;
       if (files === null || files.length !== listed.size) throw new MismatchError();
       for (const path of files) {
         const digest = listed.get(path);
         if (digest === undefined || digest !== (await fileSha256(join(staging, ...path.split("/"))))) throw new MismatchError();
       }
+      // The copy's own list and version.json must be the ones read and checked: a source changed meanwhile is refused.
+      if ((await readFile(join(staging, FILES_SHA256), "utf8").catch(() => null)) !== listText) throw new MismatchError();
       if ((await readFile(join(staging, "version.json"), "utf8")) !== versionJson) throw new MismatchError();
     } catch (err) {
       await rm(staging, { recursive: true, force: true });

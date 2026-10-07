@@ -1,12 +1,29 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, realpath, rename, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { deskLauncher, hostLauncher, terminalBinary } from "../packages/core/src/index.ts";
+import { linkSharedExecutable } from "./fixtures/fake-exec.ts";
 
 const run = promisify(execFile);
+
+/** A launcher read by /bin/sh, as its #!/bin/sh line has the kernel do (one test below runs one through the kernel). */
+const runLauncher = (launcher: string, args: string[]) => run("/bin/sh", [launcher, ...args], { env: ENV });
+
+/**
+ * A Desk Terminal stub that prints the version it belongs to (from its own path), its argv, and the environment it got.
+ * Every one is the same file, hard-linked (fixtures/fake-exec.ts), so macOS checks it once per run.
+ */
+const TERMINAL_STUB = [
+  "#!/bin/sh",
+  'v=\${0%"/Desk Terminal.app/"*}',
+  'v=\${v%/node/desk-node}',
+  `printf '%s\\n' "\${v##*/}" "$@"`,
+  `printf 'NODE_OPTIONS=%s DESK_HOME=%s DESK_ALLOW_GUI=%s\\n' "\${NODE_OPTIONS-unset}" "\${DESK_HOME-unset}" "\${DESK_ALLOW_GUI-unset}"`,
+  "",
+].join("\n");
 
 /**
  * A DESK_HOME with two installed versions whose Desk Terminal is a stub that prints the argv and the environment it got,
@@ -17,11 +34,7 @@ async function installedVersions(platform: string) {
   for (const version of ["0.3.0", "0.3.1"]) {
     const terminal = join(deskHome, "app", version, terminalBinary(platform));
     await mkdir(join(terminal, ".."), { recursive: true });
-    await writeFile(
-      terminal,
-      `#!/bin/sh\nprintf '%s\\n' "${version}" "$@"\nprintf 'NODE_OPTIONS=%s DESK_HOME=%s DESK_ALLOW_GUI=%s\\n' "\${NODE_OPTIONS-unset}" "\${DESK_HOME-unset}" "\${DESK_ALLOW_GUI-unset}"\n`,
-    );
-    await chmod(terminal, 0o755);
+    await linkSharedExecutable("desk-terminal", TERMINAL_STUB, terminal);
   }
   await symlink("0.3.0", join(deskHome, "app", "current"));
   const launchers = { desk: join(deskHome, "launch-desk"), host: join(deskHome, "launch-host") };
@@ -38,7 +51,7 @@ describe("the launchers", () => {
     async (platform) => {
       const { deskHome, launchers } = await installedVersions(platform);
 
-      const { stdout } = await run(launchers.desk, ["--version"], { env: ENV });
+      const { stdout } = await runLauncher(launchers.desk, ["--version"]);
 
       expect(stdout.split("\n")).toEqual([
         "0.3.0",
@@ -53,7 +66,7 @@ describe("the launchers", () => {
   it("the host launcher runs that version's nmhost entry with Chrome's arguments, and without the GUI", async () => {
     const { deskHome, launchers } = await installedVersions("darwin");
 
-    const { stdout } = await run(launchers.host, ["chrome-extension://nmnljgjkacmplpfllopodplgmpjogdbf/"], { env: ENV });
+    const { stdout } = await runLauncher(launchers.host, ["chrome-extension://nmnljgjkacmplpfllopodplgmpjogdbf/"]);
 
     expect(stdout.split("\n")).toEqual([
       "0.3.0",
@@ -67,18 +80,18 @@ describe("the launchers", () => {
 
   it("a launcher runs the version current names when it starts, never a path through current", async () => {
     const { deskHome, launchers } = await installedVersions("linux");
-    const first = await run(launchers.desk, [], { env: ENV });
+    const first = await runLauncher(launchers.desk, []);
     await symlink("0.3.1", join(deskHome, "app", ".current-next"));
     await rename(join(deskHome, "app", ".current-next"), join(deskHome, "app", "current"));
 
-    const second = await run(launchers.desk, [], { env: ENV });
+    const second = await runLauncher(launchers.desk, []);
 
     expect(first.stdout.split("\n")[1]).toBe(join(deskHome, "app", "0.3.0", "desk.mjs"));
     expect(second.stdout.split("\n")[1]).toBe(join(deskHome, "app", "0.3.1", "desk.mjs"));
     expect(`${first.stdout}${second.stdout}`).not.toContain("/current/");
   });
 
-  it("a launcher with no current version says so and exits 69", async () => {
+  it("a launcher with no current version says so and exits 69 (run through the kernel, as its #!/bin/sh line says)", async () => {
     const deskHome = join(await mkdtemp(join(tmpdir(), "launchers-")), ".desk");
     const launcher = join(await mkdtemp(join(tmpdir(), "bin-")), "desk");
     await writeFile(launcher, deskLauncher({ deskHome, platform: "linux" }), { mode: 0o700 });
@@ -86,5 +99,22 @@ describe("the launchers", () => {
     const failed = await run(launcher, [], { env: ENV }).catch((err: unknown) => err as { code: number; stderr: string });
 
     expect(failed).toMatchObject({ code: 69, stderr: expect.stringContaining("run desk install") });
+  });
+
+  it.each([
+    ["a command substitution", "h$(echo INJECTED-BY-DESK_HOME)"],
+    ["backticks", "h`echo INJECTED-BY-DESK_HOME`"],
+    ["a parameter expansion", "h${PATH}"],
+    ["a newline that would end the comment", "h\necho INJECTED-BY-DESK_HOME >&2; exit 3\n#"],
+    ["a double quote", 'h"q'],
+    ["a backslash escape", "h\\tq"],
+  ])("a launcher's DESK_HOME is data, never shell code (%s)", async (_label, name) => {
+    const deskHome = join(await mkdtemp(join(tmpdir(), "launchers-")), name);
+    const launcher = join(await mkdtemp(join(tmpdir(), "bin-")), "desk");
+    await writeFile(launcher, deskLauncher({ deskHome, platform: "linux" }), { mode: 0o700 });
+
+    const failed = await runLauncher(launcher, []).catch((err: unknown) => err as { code: number; stderr: string });
+
+    expect(failed).toMatchObject({ code: 69, stderr: `desk: no current version in ${deskHome}/app; run desk install\n` });
   });
 });
