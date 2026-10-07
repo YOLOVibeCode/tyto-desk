@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { daemonEnvironment, launch, terminalBinary } from "@desk/core";
 import { CdpBrowserConnector, HttpDevTools, NodeChromeProcess, NodeChromeProfile, NodeNativeHostDir } from "@desk/chrome";
@@ -6,6 +7,7 @@ import {
   FileConfigStore,
   NodeDetachedSpawner,
   NodeInstanceLock,
+  NodeListenerInfo,
   NodePortProbe,
   NodeProcessInfo,
   NodeProcessSignals,
@@ -39,6 +41,7 @@ export async function launchCommand(input: {
         hosts: new NodeNativeHostDir(config.chrome.userDataDir),
       }),
       processes: new NodeProcessInfo(),
+      listeners: new NodeListenerInfo(),
       devTools: new HttpDevTools(),
       browser: new CdpBrowserConnector(),
       daemon,
@@ -51,6 +54,7 @@ export async function launchCommand(input: {
       home: input.home,
       deskHome: input.deskHome,
       platform: input.platform,
+      host: hostname(),
       version: input.version,
       appDir: input.appDir,
       watchCommand: {

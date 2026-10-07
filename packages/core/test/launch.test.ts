@@ -22,6 +22,7 @@ import {
   FakeDevToolsHttp,
   FakeExtensionBridge,
   FakeInstanceLock,
+  FakeListenerInfo,
   FakePanelOpener,
   FakePortProbe,
   FakeProcessInfo,
@@ -48,6 +49,9 @@ const template = {
 };
 const config = newDeskConfig({ home, platform: "darwin", chromePort: 9417, gatewayPort: 9583 });
 const watchCommand = { file: `${appDir}/Desk Terminal.app/Contents/MacOS/Desk Terminal`, args: [`${appDir}/desk.mjs`, "watch"], env: { HOME: home, DESK_HOME: deskHome } };
+
+const HOST = "alex-mac";
+const EXE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 const win = (id: number, change: Partial<DeskWindow> = {}): DeskWindow => ({ id, focused: false, lastFocused: false, panelOpen: false, ...change });
 
@@ -83,6 +87,8 @@ function setup(
   const hosts = new MemoryNativeHostDir();
   const profile = new FakeChromeProfile({ preferencesExist: options.preferencesExist ?? false });
   const processes = new FakeProcessInfo();
+  const listeners = new FakeListenerInfo();
+  const probe = new FakePortProbe();
   const lock = new FakeInstanceLock();
   const spawner = new FakeDetachedSpawner();
   const signals = new FakeProcessSignals(log);
@@ -91,9 +97,18 @@ function setup(
   for (const [id, tab] of options.tabs ?? [[1, "tab-1"]]) panels.tabs.set(id, tab);
   const tabWindow = new Map([...panels.tabs].map(([id, tab]) => [tab, id]));
 
+  // A Chrome that starts takes the profile's SingletonLock and listens on the port its arguments name.
   chrome.onStart = () => {
     devTools.answering = true;
     devTools.silentProbes = 3;
+    const args = chrome.starts.at(-1) ?? [];
+    const port = Number(args.find((arg) => arg.startsWith("--remote-debugging-port="))?.split("=")[1]);
+    const line = [EXE, ...args].join(" ");
+    profile.lock = { host: HOST, pid: 5100 };
+    processes.live.add(5100);
+    processes.args.set(5100, line);
+    listeners.listeners.set(port, 5100);
+    listeners.images.set(5100, { exe: EXE, args: line });
   };
   let loadedAtList = -1;
   daemon.onRequest = (request, lists) => {
@@ -114,6 +129,8 @@ function setup(
     const id = tabWindow.get(tab);
     if (id === undefined) return;
     daemon.panels.push(id);
+    const shown = bridge.windowList?.find((w) => w.id === id);
+    if (shown !== undefined) shown.panelOpen = true;
     log.push(`panel hello in window ${id}`);
   };
 
@@ -122,11 +139,12 @@ function setup(
       {
         lock,
         config: store,
-        probe: new FakePortProbe(),
+        probe,
         random: new SeqRandom([1]),
         clock,
         chromeFor: () => ({ chrome, profile, hosts }),
         processes,
+        listeners,
         devTools,
         browser,
         daemon,
@@ -135,9 +153,9 @@ function setup(
         spawner,
         signals,
       },
-      { home, deskHome, platform: "darwin", version, appDir, watchCommand },
+      { home, deskHome, platform: "darwin", host: HOST, version, appDir, watchCommand },
     );
-  return { log, clock, chrome, devTools, extension, panels, settings, browser, daemon, bridge, files, hosts, profile, processes, lock, spawner, signals, store, run };
+  return { log, clock, chrome, devTools, extension, panels, settings, browser, daemon, bridge, files, hosts, profile, processes, listeners, probe, lock, spawner, signals, store, run };
 }
 
 describe("desk, a fresh launch", () => {
@@ -341,31 +359,12 @@ describe("desk, a fresh launch", () => {
     expect(desk.chrome.starts).toEqual([]);
   });
 
-  it("launch exits 75 without starting Chrome while the Desk Chrome's singleton is alive (reuse comes in slice 3b)", async () => {
-    const desk = setup();
-    desk.profile.lock = { host: "alex-mac", pid: 4242 };
-    desk.processes.live.add(4242);
-
-    const result = await desk.run();
-
-    expect(result).toMatchObject({ ok: false, code: 75 });
-    expect(desk.chrome.starts).toEqual([]);
-  });
-
   it("launch starts Chrome when the singleton it finds names a dead process", async () => {
     const desk = setup();
     desk.profile.lock = { host: "alex-mac", pid: 4242 };
 
     expect(await desk.run()).toMatchObject({ ok: true });
     expect(desk.chrome.starts).toHaveLength(1);
-  });
-
-  it("launch exits 75 without starting Chrome when something already answers on the Desk port", async () => {
-    const desk = setup();
-    desk.devTools.answering = true;
-
-    expect(await desk.run()).toMatchObject({ ok: false, code: 75, message: expect.stringContaining("port 9417") });
-    expect(desk.chrome.starts).toEqual([]);
   });
 
   it("launch holds run/launch.lock and releases it", async () => {
@@ -377,7 +376,7 @@ describe("desk, a fresh launch", () => {
     expect(desk.lock.released).toEqual(["launch"]);
   });
 
-  it("a second desk waits up to 10 s for the first one's lock, then exits 75 (reuse comes in slice 3b)", async () => {
+  it("a second desk waits up to 10 s for the first one's lock, then exits 75 without starting Chrome", async () => {
     const desk = setup();
     desk.lock.heldBy.set("launch", 777);
 
@@ -553,5 +552,181 @@ describe("desk watch at launch (§6.1 step 13)", () => {
     expect(desk.signals.terminated).toEqual([5151]);
     expect(desk.spawner.started).toEqual([]);
     expect(result).toEqual({ ok: true, message: expect.stringMatching(/desk watch did not start/) });
+  });
+});
+
+describe("desk, reuse and classification (slice 3b, §6.1 step 4, §6.2)", () => {
+  /** A Desk Chrome that one `desk` already started, and whose watch holds its lock. */
+  async function running(options: Parameters<typeof setup>[0] = {}) {
+    const desk = setup(options);
+    desk.spawner.onStart = () => desk.lock.holders.set("watch", { pid: 6200, build: version });
+    expect(await desk.run()).toMatchObject({ ok: true });
+    desk.log.length = 0;
+    return desk;
+  }
+
+  it("reuse connects to the running Desk Chrome without starting, seeding or configuring it", async () => {
+    const desk = await running();
+
+    const result = await desk.run();
+
+    expect(result).toEqual({ ok: true, message: expect.stringMatching(/^Desk ready \(port 9417, guarded 9583, Chrome 155\.0\.8059\.40\) in \d+\.\d s$/) });
+    expect(desk.chrome.starts).toHaveLength(1);
+    expect(desk.profile.seeded).toHaveLength(1);
+    expect(desk.browser.connected).toHaveLength(2);
+    expect(desk.log).not.toContain("extension.load");
+    expect(desk.log.filter((line) => line.startsWith("settings."))).toEqual([]);
+  });
+
+  it("reuse focuses the window that already shows the panel", async () => {
+    const desk = await running({ windows: [win(1, { lastFocused: true }), win(2)], tabs: [[1, "tab-1"], [2, "tab-2"]] });
+    desk.bridge.windowList = [win(1), win(2, { lastFocused: true, focused: true, panelOpen: true })];
+    const opened = desk.panels.opened.length;
+
+    await desk.run();
+
+    expect(desk.bridge.focused).toEqual([2]);
+    expect(desk.panels.opened).toHaveLength(opened);
+  });
+
+  it("reuse wakes a service worker that did not connect with the toolbar action", async () => {
+    const desk = await running();
+    desk.daemon.swConnected = false;
+    desk.panels.onOpen = () => {
+      desk.daemon.swConnected = true;
+    };
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.panels.opened.at(-1)).toEqual({ extensionId: keyId, tab: "tab-1" });
+  });
+
+  it("reuse loads the extension again when Chrome has another version of it", async () => {
+    const desk = await running();
+    desk.extension.installed.set(keyId, "0.3.0.4");
+
+    await desk.run();
+
+    expect(desk.log).toContain("extension.load");
+  });
+
+  it("two desk runs never trigger the panel twice", async () => {
+    const desk = setup();
+    desk.spawner.onStart = () => desk.lock.holders.set("watch", { pid: 6200, build: version });
+
+    const results = await Promise.all([desk.run(), desk.run()]);
+
+    expect(results).toMatchObject([{ ok: true }, { ok: true }]);
+    expect(desk.chrome.starts).toHaveLength(1);
+    expect(desk.panels.opened).toHaveLength(1);
+    expect(desk.bridge.focused).toEqual([1]);
+  });
+
+  it("launch exits 75 naming the port when another program listens on it while the Desk Chrome runs", async () => {
+    const desk = await running();
+    desk.listeners.listeners.set(9417, 7777);
+    desk.listeners.images.set(7777, { exe: "/usr/local/bin/socat", args: "socat TCP-LISTEN:9417" });
+
+    const result = await desk.run();
+
+    expect(result).toEqual({
+      ok: false,
+      code: 75,
+      message: "port 9417 is held by another program while the Desk Chrome runs; quit the Desk Chrome (Cmd+Q) and run desk",
+    });
+    expect(desk.browser.connected).toHaveLength(1);
+  });
+
+  it("a busy port while the Desk Chrome is down moves Chrome to a new raw port and keeps the guarded port", async () => {
+    const desk = setup();
+    desk.probe.busy.add(9417);
+
+    const result = await desk.run();
+    const saved = await desk.store.load();
+
+    expect(saved?.chrome.port).not.toBe(9417);
+    expect(saved?.gateway.port).toBe(9583);
+    expect(desk.chrome.starts[0]).toContain(`--remote-debugging-port=${saved?.chrome.port}`);
+    expect(result).toEqual({
+      ok: true,
+      message: expect.stringContaining(`port 9417 was in use, so the Desk Chrome now uses port ${saved?.chrome.port}; agents keep the guarded port 9583`),
+    });
+  });
+
+  it("moving the raw port replaces desk watch, so its guarded endpoint follows Chrome", async () => {
+    const desk = setup();
+    desk.probe.busy.add(9417);
+    desk.lock.holders.set("watch", { pid: 5151, build: version });
+    desk.signals.onTerminate = () => desk.lock.holders.delete("watch");
+
+    await desk.run();
+
+    expect(desk.signals.terminated).toEqual([5151]);
+    expect(desk.spawner.started).toEqual([watchCommand]);
+  });
+
+  it("desk waits up to 10 s for a quitting Desk Chrome before launching", async () => {
+    const desk = setup();
+    desk.profile.lock = { host: HOST, pid: 4242 };
+    desk.processes.live.add(4242);
+    desk.processes.args.set(4242, `${EXE} --user-data-dir=${config.chrome.userDataDir}`);
+    const alive = desk.processes.alive.bind(desk.processes);
+    let asked = 0;
+    desk.processes.alive = async (pid) => {
+      asked += 1;
+      if (asked === 5) desk.processes.live.delete(4242);
+      return alive(pid);
+    };
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.chrome.starts).toHaveLength(1);
+    expect(desk.clock.sleeps.length).toBeGreaterThan(0);
+  });
+
+  it("desk exits 75 when the Desk Chrome stays up without its debugging port for 10 s", async () => {
+    const desk = setup();
+    desk.profile.lock = { host: HOST, pid: 4242 };
+    desk.processes.live.add(4242);
+    desk.processes.args.set(4242, `${EXE} --user-data-dir=${config.chrome.userDataDir}`);
+
+    const result = await desk.run();
+
+    expect(result).toEqual({ ok: false, code: 75, message: "the Desk Chrome is running without its debugging port; quit it with Cmd+Q" });
+    expect(desk.clock.sleeps.reduce((sum, ms) => sum + ms, 0)).toBeGreaterThanOrEqual(10_000);
+    expect(desk.chrome.starts).toEqual([]);
+  });
+
+  it("a live pid the system gave to another process does not count as the Desk Chrome", async () => {
+    const desk = setup();
+    desk.profile.lock = { host: HOST, pid: 4242 };
+    desk.processes.live.add(4242);
+    desk.processes.args.set(4242, "/usr/sbin/cupsd -l");
+
+    expect(await desk.run()).toMatchObject({ ok: true });
+    expect(desk.chrome.starts).toHaveLength(1);
+  });
+
+  it("a dead singleton lock naming another host is removed when no process uses the profile", async () => {
+    const desk = setup();
+    desk.profile.lock = { host: "old-name.local", pid: 4242 };
+
+    await desk.run();
+
+    expect(desk.profile.cleared).toBe(1);
+    expect(desk.log.indexOf("chrome.start")).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a dead singleton lock naming another host stays while some process uses the profile", async () => {
+    const desk = setup();
+    desk.profile.lock = { host: "old-name.local", pid: 4242 };
+    desk.processes.live.add(8080);
+    desk.processes.args.set(8080, `/opt/helper --user-data-dir=${config.chrome.userDataDir}`);
+
+    await desk.run();
+
+    expect(desk.profile.cleared).toBe(0);
   });
 });

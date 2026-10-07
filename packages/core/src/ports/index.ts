@@ -20,6 +20,7 @@ export type { HostChannel } from "./host-channel.ts";
 export type { HostConnector } from "./host-connector.ts";
 export type { InstanceLock } from "./instance-lock.ts";
 export type { LayoutStore } from "./layout-store.ts";
+export type { ListenerInfo } from "./listener-info.ts";
 export type { LogSink } from "./log-sink.ts";
 export type { LoginShell } from "./login-shell.ts";
 export type { DaemonConnection, DaemonPeer, MessageServer } from "./message-server.ts";

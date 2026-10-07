@@ -4,6 +4,7 @@ import { parseVersionInfo, versionLine, type Prompter, type VersionInfo } from "
 import { ConfigFileError, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
 import { cdpCommand } from "./cdp.ts";
+import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
 import { TtyPrompter } from "./prompter.ts";
@@ -32,6 +33,7 @@ const USAGE = [
   "       desk tab current|mine      the tab you are looking at, or this pane's agent tab (made in the background)",
   "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
+  "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -115,6 +117,13 @@ export async function main(input: MainInput): Promise<number> {
         process.once("SIGHUP", () => resolve());
       });
       return await watchCommand({ deskHome, version: version.info.version, until });
+    }
+    if (command === "config") {
+      if (rest.length !== 1 || rest[0] !== "new-port") return usage();
+      const result = await newPortCommand({ env: input.env, platform: input.platform, deskHome, version: version.info.version, appDir: input.runtimeDir });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
     }
     if (command === "cdp") {
       const flags = new Set(rest);

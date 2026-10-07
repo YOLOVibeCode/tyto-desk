@@ -4,6 +4,9 @@ import type { ProcessInfo } from "../ports/process-info.ts";
 export class FakeProcessInfo implements ProcessInfo {
   readonly live: Set<number>;
   readonly started = new Map<number, number>();
+  /** Each live process's argument line; `argsUnknown` makes the list unreadable. */
+  readonly args = new Map<number, string>();
+  argsUnknown = false;
 
   constructor(live: Iterable<number> = []) {
     this.live = new Set(live);
@@ -15,5 +18,10 @@ export class FakeProcessInfo implements ProcessInfo {
 
   async startedAt(pid: number): Promise<number | null> {
     return this.live.has(pid) ? (this.started.get(pid) ?? null) : null;
+  }
+
+  async withArgument(argument: string): Promise<number[] | null> {
+    if (this.argsUnknown) return null;
+    return [...this.args].filter(([pid, line]) => this.live.has(pid) && ` ${line} `.includes(` ${argument} `)).map(([pid]) => pid);
   }
 }

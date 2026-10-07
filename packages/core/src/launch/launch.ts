@@ -1,4 +1,5 @@
 import { chromeArgs, chromeDefaultDirs } from "../chrome/args.ts";
+import { allocateDeskPort } from "../config/allocate.ts";
 import { loadOrCreateConfig } from "../config/load.ts";
 import type { DeskConfig } from "../config/schema.ts";
 import type { BrowserConnector, BrowserSession } from "../ports/browser-connector.ts";
@@ -11,6 +12,7 @@ import type { DetachedSpawner } from "../ports/detached-spawner.ts";
 import type { DevToolsHttp } from "../ports/dev-tools-http.ts";
 import type { ExtensionBridge } from "../ports/extension-bridge.ts";
 import type { InstanceLock } from "../ports/instance-lock.ts";
+import type { ListenerInfo } from "../ports/listener-info.ts";
 import type { NativeHostDir } from "../ports/native-host-dir.ts";
 import type { PortProbe } from "../ports/port-probe.ts";
 import type { ProcessInfo } from "../ports/process-info.ts";
@@ -18,10 +20,12 @@ import type { ProcessSignals } from "../ports/process-signals.ts";
 import type { Random } from "../ports/random.ts";
 import type { TextFiles } from "../ports/text-files.ts";
 import type { DaemonCommand } from "../nmhost/host.ts";
+import { classifyLaunch, listenerIsDesk, singletonState, staleLockToClear, type LaunchDecision } from "./classify.ts";
 import { prepareFiles } from "./files.ts";
 import { ensurePanel } from "./panel.ts";
 import { pollUntil } from "./poll.ts";
 import { applyChromeSettings } from "./settings.ts";
+import { ensureWatch } from "./watch-start.ts";
 
 /** The Desk Chrome's process, profile and host directory, which the config (loaded under the lock) names. */
 export type ChromePorts = { chrome: ChromeProcess; profile: ChromeProfile; hosts: NativeHostDir };
@@ -34,6 +38,7 @@ export type LaunchPorts = {
   clock: Clock;
   chromeFor(config: DeskConfig): ChromePorts;
   processes: ProcessInfo;
+  listeners: ListenerInfo;
   devTools: DevToolsHttp;
   browser: BrowserConnector;
   daemon: DaemonClient;
@@ -48,6 +53,8 @@ export type LaunchInput = {
   /** `~/.desk`, or the DESK_HOME the launcher names. */
   deskHome: string;
   platform: string;
+  /** This machine's host name, as Chrome writes it into SingletonLock. */
+  host: string;
   /** The current version, resolved once by the launcher: its version.json `version` and its directory under app/. */
   version: string;
   appDir: string;
@@ -67,8 +74,8 @@ const LAUNCH_LOCK_MS = 10_000;
 const JSON_VERSION_MS = 20_000;
 const POLL_MS = 100;
 const WORKER_MS = 5_000;
-/** §6.6: how long an older `desk watch` gets to release its lock after SIGTERM. */
-const WATCH_LOCK_MS = 10_000;
+/** §6.1 step 4: how long a Desk Chrome whose port is silent (it is quitting) gets to exit. */
+const QUITTING_MS = 10_000;
 
 /** What the launch says when `desk watch` did not start (§6.1 step 13). */
 export const WATCH_WARNING =
@@ -85,14 +92,16 @@ function major(version: string): number | null {
 }
 
 /**
- * `desk` on a fresh launch (docs/IMPLEMENTATION.md §6.1 steps 1–3 and 5–14; slices 1c, 3a and 4a). It holds
- * `run/launch.lock`, loads or creates the config, checks Chrome's version, and launches only when no Desk Chrome is
- * running (a live singleton, or anything answering on the Desk port, exits 75: reuse is slice 3b). Then it writes the
- * launch files, seeds the first run, starts Chrome with `chromeArgs`, waits for `/json/version`, loads the extension
- * unless Chrome already has the rendered version, waits for the service worker to reach the daemon (waking it with the
- * toolbar action after 5 s), applies Chrome's settings (background mode off on the first run; §5), and opens the panel
- * in the last-focused window, waiting for that panel's hello. Then it makes sure the current version's `desk watch`
- * serves the guarded endpoint, replacing one of another version without touching the daemon.
+ * `desk` (docs/IMPLEMENTATION.md §6.1, §6.2; slices 1c, 3a, 3b and 4a). It holds `run/launch.lock`, loads or creates
+ * the config, checks Chrome's version, and classifies the Desk Chrome it finds (step 4): it reuses a running one whose
+ * listener it can verify, waits for one that is quitting, moves Chrome to a new raw port when another program holds the
+ * port, and fails closed on anything it cannot verify. Then it writes the launch files, and on a launch seeds the first
+ * run, starts Chrome with `chromeArgs` and waits for `/json/version`. Both paths load the extension unless Chrome
+ * already has the rendered version, wait for the service worker to reach the daemon (waking it with the toolbar action
+ * after 5 s), and show the panel: focusing a window that shows it, else opening it in the last-focused window and
+ * waiting for that panel's hello. A launch also applies Chrome's settings (background mode off on the first run; §5).
+ * Then it makes sure the current version's `desk watch` serves the guarded endpoint, replacing one of another version,
+ * or any after a port move, without touching the daemon.
  */
 export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<LaunchResult> {
   const startedAt = ports.clock.now();
@@ -116,7 +125,7 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       if (loaded.code === "no-free-ports") return fail(75, "no two ports from 9400 to 9899 are free for the Desk Chrome");
       return fail(65, `Desk cannot make a config here (${loaded.code})`);
     }
-    const config = loaded.config;
+    let config = loaded.config;
     const { chrome: installed, profile, hosts } = ports.chromeFor(config);
     const chromeVersion = await installed.version();
     const chromeMajor = chromeVersion === null ? null : major(chromeVersion);
@@ -125,8 +134,24 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       return fail(69, `Google Chrome ${chromeVersion} is older than ${config.chrome.minMajor}; update Chrome and run desk again`);
     }
 
-    const running = await deskChromeRunning(ports, profile, config);
-    if (running !== null) return running;
+    const appRoot = input.platform === "darwin" ? config.chrome.app : parentDir(await ports.files.realPath(config.chrome.app));
+    let found = await findDeskChrome(ports, profile, config, input.host, appRoot);
+    if (found.decision === "wait") {
+      const quit = await pollUntil(ports.clock, QUITTING_MS, POLL_MS, async () => ((await deskSingletonAlive(ports, profile, config)) ? null : true));
+      if (quit !== null) found = await findDeskChrome(ports, profile, config, input.host, appRoot);
+      if (found.decision === "wait") return fail(75, "the Desk Chrome is running without its debugging port; quit it with Cmd+Q");
+    }
+    if (found.decision === "foreign") {
+      return fail(75, `port ${config.chrome.port} is held by another program while the Desk Chrome runs; quit the Desk Chrome (Cmd+Q) and run desk`);
+    }
+    let moved: string | null = null;
+    if (found.decision === "move-port") {
+      const port = await allocateDeskPort(ports.probe, ports.random, [config.chrome.port, config.gateway.port]);
+      if (port === null) return fail(75, `port ${config.chrome.port} is in use and no other port from 9400 to 9899 is free for the Desk Chrome`);
+      moved = `port ${config.chrome.port} was in use, so the Desk Chrome now uses port ${port}; agents keep the guarded port ${config.gateway.port}`;
+      config = { ...config, chrome: { ...config.chrome, port } };
+      await ports.config.save(config);
+    }
 
     const prepared = await prepareFiles({
       files: ports.files,
@@ -139,21 +164,28 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
     });
     if (!prepared.ok) return fail(70, `the installed version's extension is damaged (${input.appDir}); run desk install`);
 
-    const firstRun = await profile.seedFirstRun(FIRST_RUN_PREFS);
-    const args = chromeArgs({
-      chrome: config.chrome,
-      userDataDirReal: await ports.files.realPath(config.chrome.userDataDir),
-      chromeDefaultDirsReal: await Promise.all(chromeDefaultDirs(input.home, input.platform).map((dir) => ports.files.realPath(dir))),
-    });
-    if (!args.ok) return fail(65, `config.json's Chrome settings are refused (${args.reason}: ${args.refused})`);
-    const started = await installed.start(args.args);
-    if (!started.ok) {
-      return fail(70, started.reason === "gui-refused" ? "Desk may not open windows here (DESK_NO_GUI, or not the desk launcher)" : "Chrome did not start");
+    let wsUrl: string;
+    let firstRun = false;
+    if (found.decision === "reuse") {
+      wsUrl = found.wsUrl;
+    } else {
+      if (found.clearStale) await profile.clearStaleSingleton();
+      firstRun = await profile.seedFirstRun(FIRST_RUN_PREFS);
+      const args = chromeArgs({
+        chrome: config.chrome,
+        userDataDirReal: await ports.files.realPath(config.chrome.userDataDir),
+        chromeDefaultDirsReal: await Promise.all(chromeDefaultDirs(input.home, input.platform).map((dir) => ports.files.realPath(dir))),
+      });
+      if (!args.ok) return fail(65, `config.json's Chrome settings are refused (${args.reason}: ${args.refused})`);
+      const started = await installed.start(args.args);
+      if (!started.ok) {
+        return fail(70, started.reason === "gui-refused" ? "Desk may not open windows here (DESK_NO_GUI, or not the desk launcher)" : "Chrome did not start");
+      }
+      const version = await pollUntil(ports.clock, JSON_VERSION_MS, POLL_MS, () => ports.devTools.version(config.chrome.port));
+      if (version === null) return fail(70, `Chrome did not answer on port ${config.chrome.port} within 20 s`);
+      wsUrl = version.wsUrl;
     }
-
-    const version = await pollUntil(ports.clock, JSON_VERSION_MS, POLL_MS, () => ports.devTools.version(config.chrome.port));
-    if (version === null) return fail(70, `Chrome did not answer on port ${config.chrome.port} within 20 s`);
-    const connected = await ports.browser.connect(version.wsUrl);
+    const connected = await ports.browser.connect(wsUrl);
     if (!connected.ok) return fail(70, `Chrome answered on port ${config.chrome.port} but its browser WebSocket did not`);
     session = connected.session;
 
@@ -176,15 +208,16 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       return fail(70, "the Desk extension's service worker did not reach the terminal daemon; run desk doctor");
     }
 
-    const settingsWarning = await applyChromeSettings(session.settings, { firstRun, setContinuePref: config.chrome.setContinuePref });
+    const settingsWarning =
+      found.decision === "reuse" ? null : await applyChromeSettings(session.settings, { firstRun, setContinuePref: config.chrome.setContinuePref });
 
     const panel = await ensurePanel({ bridge: ports.bridge, panels: session.panels, daemon: ports.daemon, clock: ports.clock, extensionId: expectedId });
     if (!panel.ok) return fail(70, panel.message);
 
     const seconds = ((ports.clock.now() - startedAt) / 1000).toFixed(1);
     const ready = `Desk ready (port ${config.chrome.port}, guarded ${config.gateway.port}, Chrome ${chromeVersion}) in ${seconds} s`;
-    const watching = await ensureWatch(ports, input);
-    const notes = [panel.createdWindow ? "Cmd+Shift+T reopens the window you closed" : null, settingsWarning, watching ? null : WATCH_WARNING];
+    const watching = await ensureWatch(ports, { command: input.watchCommand, version: input.version, replace: moved !== null });
+    const notes = [moved, panel.createdWindow ? "Cmd+Shift+T reopens the window you closed" : null, settingsWarning, watching ? null : WATCH_WARNING];
     return { ok: true, message: [ready, ...notes.filter((note): note is string => note !== null)].join(". ") };
   } finally {
     session?.close();
@@ -192,19 +225,48 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
   }
 }
 
+type Found = { decision: Exclude<LaunchDecision, "reuse">; clearStale: boolean } | { decision: "reuse"; wsUrl: string };
+
+/** The parent directory of an absolute path (`/opt/google/chrome` for `/opt/google/chrome/google-chrome`). */
+function parentDir(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const cut = trimmed.lastIndexOf("/");
+  return cut <= 0 ? "/" : trimmed.slice(0, cut);
+}
+
+/** The pids that use the Desk profile, from their `--user-data-dir` argument; `null` when unknown. */
+function profileUsers(ports: LaunchPorts, config: DeskConfig): Promise<number[] | null> {
+  return ports.processes.withArgument(`--user-data-dir=${config.chrome.userDataDir}`);
+}
+
+/** Whether the profile's SingletonLock names a live process that uses the Desk profile. */
+async function deskSingletonAlive(ports: LaunchPorts, profile: ChromeProfile, config: DeskConfig): Promise<boolean> {
+  const lock = await profile.singleton();
+  if (lock === null) return false;
+  const alive = await ports.processes.alive(lock.pid);
+  return singletonState({ lock, alive, users: alive ? await profileUsers(ports, config) : [] }) === "alive";
+}
+
 /**
- * Slice 1c's classification: a live Desk singleton, or anything already answering on the Desk port, means a Chrome
- * Desk did not start now; reusing it (or moving to a free port) is slice 3b, so this launch stops without starting one.
+ * §6.1 step 4: the facts `classifyLaunch` decides from. The listener is looked up only for a live singleton whose port
+ * answers, and the port is probed only when no live singleton holds the profile.
  */
-async function deskChromeRunning(ports: LaunchPorts, profile: ChromeProfile, config: DeskConfig): Promise<LaunchFailure | null> {
-  const singleton = await profile.singleton();
-  if (singleton !== null && (await ports.processes.alive(singleton.pid))) {
-    return fail(75, `the Desk Chrome is already running (pid ${singleton.pid}); quit it with Cmd+Q, then run desk`);
+async function findDeskChrome(ports: LaunchPorts, profile: ChromeProfile, config: DeskConfig, host: string, appRoot: string): Promise<Found> {
+  const lock = await profile.singleton();
+  const alive = lock !== null && (await ports.processes.alive(lock.pid));
+  const users = lock === null ? [] : await profileUsers(ports, config);
+  const state = singletonState({ lock, alive, users });
+  const version = await ports.devTools.version(config.chrome.port);
+  let listener: "desk" | "other" | "unverifiable" = "unverifiable";
+  if (state === "alive" && version !== null && lock !== null) {
+    const listenerPid = await ports.listeners.listenerPid(config.chrome.port);
+    const image = listenerPid === null ? null : await ports.listeners.image(listenerPid);
+    listener = listenerIsDesk({ singletonPid: lock.pid, listenerPid, image, appRoot, userDataDir: config.chrome.userDataDir });
   }
-  if ((await ports.devTools.version(config.chrome.port)) !== null) {
-    return fail(75, `port ${config.chrome.port} is held by another program; quit it, then run desk`);
-  }
-  return null;
+  const busy = state === "alive" ? version !== null : version !== null || !(await ports.probe.isFree(config.chrome.port));
+  const decision = classifyLaunch({ singleton: state, answers: version !== null, busy, listener });
+  if (decision === "reuse" && version !== null) return { decision, wsUrl: version.wsUrl };
+  return { decision: decision === "reuse" ? "foreign" : decision, clearStale: staleLockToClear({ lock, host, state, users }) };
 }
 
 /** Whether the daemon reports a connected service worker. */
@@ -229,21 +291,4 @@ async function workerReady(ports: LaunchPorts, session: BrowserSession, extensio
   const tab = await session.panels.anyTabTarget();
   if (tab !== null) await session.panels.open(extensionId, tab);
   return (await waitForWorker()) !== null;
-}
-
-/**
- * §6.1 step 13: a live `desk watch` of this version is left running; one of another version gets SIGTERM, which closes
- * its guarded endpoint and releases `run/watch.lock`, and up to 10 s to do so; then the current version's watch starts
- * detached. The daemon and its shells are never touched. `false` when no watch of this version could be started.
- */
-async function ensureWatch(ports: LaunchPorts, input: LaunchInput): Promise<boolean> {
-  const holder = await ports.lock.holder("watch");
-  if (holder !== null && holder.build === input.version) return true;
-  if (holder !== null) {
-    await ports.signals.terminate(holder.pid);
-    const freed = await pollUntil(ports.clock, WATCH_LOCK_MS, POLL_MS, async () => ((await ports.lock.holder("watch")) === null ? true : null));
-    if (freed === null) return false;
-  }
-  const command = input.watchCommand;
-  return (await ports.spawner.spawn(command.file, command.args, command.env)) !== null;
 }

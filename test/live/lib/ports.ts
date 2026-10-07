@@ -13,4 +13,5 @@ export const LIVE_PORTS = {
   gateway: 9467,
   focus: 9477,
   survive: 9497,
+  reuse: 9517,
 } as const;

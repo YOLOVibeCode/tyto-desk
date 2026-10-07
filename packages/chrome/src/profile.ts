@@ -1,4 +1,4 @@
-import { mkdir, open, readlink } from "node:fs/promises";
+import { mkdir, open, readlink, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChromeProfile, NativeHostDir } from "@desk/core";
 import { assertPathAllowed, readIfExists, writePrivate } from "@desk/node";
@@ -28,6 +28,15 @@ export class NodeChromeProfile implements ChromeProfile {
     const match = /^(.+)-(\d+)$/.exec(target);
     if (match === null || match[1] === undefined) return null;
     return { host: match[1], pid: Number(match[2]) };
+  }
+
+  async clearStaleSingleton(): Promise<void> {
+    for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
+      const path = join(this.userDataDir, name);
+      await assertPathAllowed(path);
+      // A symlink each (Chrome's ProcessSingleton); rm removes the link, never what it points at.
+      await rm(path, { force: true });
+    }
   }
 
   async localStatePref(path: string): Promise<unknown> {
