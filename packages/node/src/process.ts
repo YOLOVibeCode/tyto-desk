@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomInt, randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
-import type { Clock, DetachedSpawner, LoginShell, ProcessInfo, Random } from "@desk/core";
+import type { Clock, DetachedSpawner, LoginShell, ProcessInfo, ProcessSignals, Random } from "@desk/core";
 import { runArgv } from "./run.ts";
 
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
@@ -17,6 +17,23 @@ export class NodeDetachedSpawner implements DetachedSpawner {
         resolve(child.pid ?? null);
       });
     });
+  }
+}
+
+/**
+ * SIGTERM to another Desk process (`desk watch`, §6.3, §6.4). It refuses pid 1, its own pid, and anything but a positive
+ * integer, and reports a process that is already gone. Desk never signals Chrome: it quits through `Browser.close`.
+ */
+export class NodeProcessSignals implements ProcessSignals {
+  async terminate(pid: number): Promise<boolean> {
+    if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) return false;
+    try {
+      process.kill(pid, "SIGTERM");
+      return true;
+    } catch (err) {
+      if (err instanceof Error && "code" in err && (err.code === "ESRCH" || err.code === "EPERM")) return false;
+      throw err;
+    }
   }
 }
 

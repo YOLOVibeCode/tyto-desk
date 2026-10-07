@@ -4,7 +4,7 @@ export { ConfigFileError, FileConfigStore } from "./config-store.ts";
 export { readIfExists, writeAtomic, writePrivate } from "./files.ts";
 export { NodeInstanceLock, type InstanceLockOptions } from "./instance-lock.ts";
 export { NodePortProbe } from "./port-probe.ts";
-export { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, SystemClock } from "./process.ts";
+export { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, NodeProcessSignals, SystemClock } from "./process.ts";
 export { runArgv, type RunResult } from "./run.ts";
 export {
   TestIsolationError,

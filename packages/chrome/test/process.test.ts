@@ -89,6 +89,22 @@ describe("the Desk profile", () => {
     expect((await stat(join(profile, "Default", "Preferences"))).mode & 0o777).toBe(0o600);
   });
 
+  it("ChromeProfile reads a pref from Local State by its dotted path", async () => {
+    const profile = await mkdtemp(join(tmpdir(), "profile-"));
+    await writeFile(join(profile, "Local State"), JSON.stringify({ browser: { confirm_to_quit: false, enabled_labs_experiments: [] } }));
+
+    expect(await new NodeChromeProfile(profile).localStatePref("browser.confirm_to_quit")).toBe(false);
+    expect(await new NodeChromeProfile(profile).localStatePref("browser.missing")).toBeUndefined();
+  });
+
+  it("ChromeProfile reads no Local State pref when the file is missing or not JSON", async () => {
+    const profile = await mkdtemp(join(tmpdir(), "profile-"));
+    expect(await new NodeChromeProfile(profile).localStatePref("browser.confirm_to_quit")).toBeUndefined();
+
+    await writeFile(join(profile, "Local State"), "{not json");
+    expect(await new NodeChromeProfile(profile).localStatePref("browser.confirm_to_quit")).toBeUndefined();
+  });
+
   it("NativeHostDir writes a 0600 manifest into the profile's NativeMessagingHosts and reads it back", async () => {
     const profile = await mkdtemp(join(tmpdir(), "profile-"));
     const hosts = new NodeNativeHostDir(profile);

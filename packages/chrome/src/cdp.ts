@@ -22,8 +22,8 @@ export const CDP_COMMAND_MS = 5_000;
 
 /**
  * One CDP session on the browser target (docs/IMPLEMENTATION.md §2, packages/chrome): commands with ids and budgets,
- * answers matched by id. Events are ignored: slice 1c's role adapters only ask. Desk never attaches to its own
- * extension targets.
+ * answers matched by id, on the browser session or a target's flattened session. Events are ignored: the role adapters
+ * only ask. Desk never attaches to its own extension targets.
  */
 export class CdpConnection {
   private readonly transport: CdpTransport;
@@ -37,7 +37,8 @@ export class CdpConnection {
     transport.onClose(() => this.end());
   }
 
-  send(method: string, params: Record<string, unknown> = {}, timeoutMs = CDP_COMMAND_MS): Promise<CdpResult> {
+  /** Sends a command on the browser session, or on a target's flattened session when `sessionId` names one. */
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = CDP_COMMAND_MS, sessionId?: string): Promise<CdpResult> {
     if (this.closed) return Promise.resolve({ ok: false, reason: "closed" });
     this.nextId += 1;
     const id = this.nextId;
@@ -47,7 +48,7 @@ export class CdpConnection {
         resolve({ ok: false, reason: "timeout" });
       }, timeoutMs);
       this.pending.set(id, { resolve, timer });
-      this.transport.send(JSON.stringify({ id, method, params }));
+      this.transport.send(JSON.stringify(sessionId === undefined ? { id, method, params } : { id, method, params, sessionId }));
     });
   }
 
