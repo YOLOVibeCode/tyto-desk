@@ -1,3 +1,11 @@
+/**
+ * Whether the focus guard runs for `gateway.focusGuard` (§12, D3). `auto` turns it on: slice 4b's live measurement found
+ * that agents' commands take the user's tab without it (D104).
+ */
+export function focusGuardOn(mode: "auto" | "on" | "off"): boolean {
+  return mode !== "off";
+}
+
 /** A target as Chrome describes it in `Target.*` answers and events: only the fields the policy reads. */
 export type TargetFacts = { targetId: string; url: string };
 
@@ -33,8 +41,14 @@ export class HiddenTargets {
   }
 }
 
-/** What one message turns into: messages for Chrome and messages for the client. */
-export type GatewayStep = { toChrome: string[]; toClient: string[] };
+/**
+ * A focus command the guard holds until it knows the active tab: `command` goes to Chrome when `targetId` is the active
+ * tab of the last-focused window, else the client gets `answer`, an empty result (§12's focus guard).
+ */
+export type FocusCheck = { targetId: string | null; command: string; answer: string };
+
+/** What one message turns into: messages for Chrome and for the client, or a focus command to check first. */
+export type GatewayStep = { toChrome: string[]; toClient: string[]; focus?: FocusCheck };
 
 /** Methods the guarded endpoint never forwards, whatever their parameters (§12). */
 const REFUSED = new Set(["Browser.close", "Browser.crash", "Browser.crashGpuProcess", "Extensions.loadUnpacked", "Extensions.uninstall"]);
@@ -74,17 +88,30 @@ function facts(value: unknown): TargetFacts | null {
 export class GatewayConnection {
   private readonly extensionId: string;
   private readonly hidden: HiddenTargets;
-  /** The method of each command still waiting for its answer, by session and id. */
-  private readonly pending = new Map<string, string>();
+  /** Each command still waiting for its answer, by session and id: its method and the target it named. */
+  private readonly pending = new Map<string, { method: string; targetId: string | null }>();
+  /** The target of each session the client holds, from its attaches and auto-attaches, for `Page.bringToFront`. */
+  private readonly sessionTargets = new Map<string, string>();
+  private readonly focusGuard: boolean;
+  /** A plain screenshot the guard serves from a screencast frame, by session: the client's request id. */
+  private readonly captures = new Map<string, { id: unknown }>();
+  /** Sessions where the client runs a screencast of its own, whose frames are its own. */
+  private readonly clientScreencasts = new Set<string>();
   /** Sessions of Desk targets that an auto-attach opened: nothing on them reaches the client. */
   private readonly hiddenSessions = new Set<string>();
   /** Ids of the gateway's own commands, whose answers are dropped. */
   private readonly ownIds = new Set<number>();
   private nextOwnId = FIRST_OWN_ID;
 
-  constructor(input: { extensionId: string; hidden: HiddenTargets }) {
+  constructor(input: { extensionId: string; hidden: HiddenTargets; focusGuard?: boolean }) {
     this.extensionId = input.extensionId;
     this.hidden = input.hidden;
+    this.focusGuard = input.focusGuard ?? false;
+  }
+
+  /** The focus guard's decision once the active tab is known (`null`: the worker did not say, so no tab is active). */
+  focusAnswer(check: FocusCheck, activeTab: string | null): GatewayStep {
+    return check.targetId !== null && check.targetId === activeTab ? { toChrome: [check.command], toClient: [] } : { toChrome: [], toClient: [check.answer] };
   }
 
   fromClient(text: string): GatewayStep {
@@ -97,8 +124,41 @@ export class GatewayConnection {
       answer.error = { code: -32000, message: `Desk's guarded endpoint refuses ${message.method} here; desk cdp --raw is the browser's own port` };
       return { toChrome: [], toClient: [JSON.stringify(answer)] };
     }
-    if (typeof message.id === "number") this.pending.set(this.key(message.sessionId, message.id), message.method);
-    return { toChrome: [text], toClient: [] };
+    if (this.focusGuard && (message.method === "Target.activateTarget" || message.method === "Page.bringToFront")) {
+      const sessionId = typeof message.sessionId === "string" ? message.sessionId : null;
+      const targetId =
+        message.method === "Target.activateTarget"
+          ? typeof params.targetId === "string"
+            ? params.targetId
+            : null
+          : sessionId === null
+            ? null
+            : (this.sessionTargets.get(sessionId) ?? null);
+      const answer = JSON.stringify(sessionId === null ? { id: message.id, result: {} } : { id: message.id, sessionId, result: {} });
+      return { toChrome: [], toClient: [], focus: { targetId, command: text, answer } };
+    }
+    let forwarded = text;
+    const sessionId = typeof message.sessionId === "string" ? message.sessionId : null;
+    if (this.focusGuard && sessionId !== null && message.method === "Page.startScreencast") this.clientScreencasts.add(sessionId);
+    if (this.focusGuard && sessionId !== null && message.method === "Page.stopScreencast") this.clientScreencasts.delete(sessionId);
+    if (this.focusGuard && sessionId !== null && message.method === "Page.captureScreenshot" && !this.clientScreencasts.has(sessionId)) {
+      const format = params.format ?? "png";
+      const plain = params.clip === undefined && params.captureBeyondViewport !== true && (format === "png" || format === "jpeg") && !this.captures.has(sessionId);
+      if (plain) {
+        // Chrome paints no frame for a background tab's screenshot, but a screencast's first frame comes at once.
+        this.captures.set(sessionId, { id: message.id });
+        const quality = typeof params.quality === "number" ? { quality: params.quality } : {};
+        return { toChrome: [this.own("Page.startScreencast", { format, ...quality, everyNthFrame: 1 }, sessionId)], toClient: [] };
+      }
+      if (params.fromSurface === undefined) forwarded = JSON.stringify({ ...message, params: { ...params, fromSurface: false } });
+    }
+    if (this.focusGuard && message.method === "Target.createTarget" && params.newWindow !== true && params.background !== true) {
+      forwarded = JSON.stringify({ ...message, params: { ...params, background: true } });
+    }
+    if (typeof message.id === "number") {
+      this.pending.set(this.key(message.sessionId, message.id), { method: message.method, targetId: typeof params.targetId === "string" ? params.targetId : null });
+    }
+    return { toChrome: [forwarded], toClient: [] };
   }
 
   fromChrome(text: string): GatewayStep {
@@ -116,11 +176,23 @@ export class GatewayConnection {
         this.hiddenSessions.add(params.sessionId);
         return { toChrome: this.resumeAndDetach(params.sessionId, message.sessionId), toClient: [] };
       }
+      if (target !== null && typeof params.sessionId === "string") {
+        this.sessionTargets.set(params.sessionId, target.targetId);
+        return { toChrome: this.emulateFocus(params.sessionId), toClient: [text] };
+      }
       return { toChrome: [], toClient: [text] };
     }
     if (message.method === "Target.detachedFromTarget") {
       if (typeof params.sessionId === "string" && this.hiddenSessions.delete(params.sessionId)) return { toChrome: [], toClient: [] };
+      if (typeof params.sessionId === "string") this.sessionTargets.delete(params.sessionId);
       return { toChrome: [], toClient: this.hidden.isHidden(params.targetId) ? [] : [text] };
+    }
+    if (this.focusGuard && message.method === "Page.screencastFrame" && typeof message.sessionId === "string" && !this.clientScreencasts.has(message.sessionId)) {
+      const capture = this.captures.get(message.sessionId);
+      if (capture === undefined) return { toChrome: [], toClient: [] };
+      this.captures.delete(message.sessionId);
+      const toChrome = [this.own("Page.screencastFrameAck", { sessionId: params.sessionId }, message.sessionId), this.own("Page.stopScreencast", {}, message.sessionId)];
+      return { toChrome, toClient: [JSON.stringify({ id: capture.id, sessionId: message.sessionId, result: { data: params.data } })] };
     }
     if (TARGET_EVENTS.has(message.method)) {
       const target = facts(params.targetInfo);
@@ -145,10 +217,14 @@ export class GatewayConnection {
     const id = message.id as number;
     if (this.ownIds.delete(id)) return { toChrome: [], toClient: [] };
     const key = this.key(message.sessionId, id);
-    const method = this.pending.get(key);
+    const command = this.pending.get(key);
     this.pending.delete(key);
-    if (method !== "Target.getTargets") return { toChrome: [], toClient: [text] };
     const result = record(message.result);
+    if (command?.method === "Target.attachToTarget" && command.targetId !== null && typeof result.sessionId === "string") {
+      this.sessionTargets.set(result.sessionId, command.targetId);
+      return { toChrome: this.emulateFocus(result.sessionId), toClient: [text] };
+    }
+    if (command?.method !== "Target.getTargets") return { toChrome: [], toClient: [text] };
     const infos = Array.isArray(result.targetInfos) ? result.targetInfos : [];
     for (const info of infos) {
       const target = facts(info);
@@ -160,13 +236,24 @@ export class GatewayConnection {
 
   /** Lets an auto-attached Desk target run and detaches from it, on the session the attach arrived on. */
   private resumeAndDetach(sessionId: string, parent: unknown): string[] {
-    const resume = this.ownId();
-    const detach = this.ownId();
-    const onParent = typeof parent === "string" ? { sessionId: parent } : {};
     return [
-      JSON.stringify({ id: resume, method: "Runtime.runIfWaitingForDebugger", params: {}, sessionId }),
-      JSON.stringify({ id: detach, method: "Target.detachFromTarget", params: { sessionId }, ...onParent }),
+      this.own("Runtime.runIfWaitingForDebugger", {}, sessionId),
+      this.own("Target.detachFromTarget", { sessionId }, typeof parent === "string" ? parent : null),
     ];
+  }
+
+  /**
+   * With the guard on, a page the agent works in keeps believing it has focus while it sits behind your tab, so Chrome
+   * delivers the agent's input to it (slice 4b's measurement, D104). A non-page session answers with an error, dropped.
+   */
+  private emulateFocus(sessionId: string): string[] {
+    return this.focusGuard ? [this.own("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId)] : [];
+  }
+
+  /** One of the gateway's own commands to Chrome, whose answer is dropped. */
+  private own(method: string, params: Record<string, unknown>, sessionId: string | null): string {
+    const id = this.ownId();
+    return JSON.stringify(sessionId === null ? { id, method, params } : { id, method, params, sessionId });
   }
 
   private ownId(): number {

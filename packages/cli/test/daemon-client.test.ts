@@ -91,6 +91,31 @@ describe("the CLI's daemon client", () => {
     await server.close();
   });
 
+  it("the extension bridge asks the worker for the active tab's target and the pane's agent tab through the daemon", async () => {
+    const { path, server } = await daemonAt();
+    const stop = await worker(path, "0123456789ABCDEF0123456789ABCDEF");
+    const client = new UnixDaemonClient(path, "0.3.0");
+    for (let i = 0; i < 100; i += 1) {
+      const opened = await client.open("cli");
+      const listed = opened.ok ? await opened.session.request({ type: "list" }) : null;
+      if (opened.ok) opened.session.close();
+      if (listed?.type === "panes" && listed.sw.connected) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+
+    expect(await new DaemonExtensionBridge(client, "watch").tabCurrent()).toBe("0123456789ABCDEF0123456789ABCDEF");
+    expect(await new DaemonExtensionBridge(client).tabMine("p_k2m9q3x7ab")).toBe("0123456789ABCDEF0123456789ABCDEF");
+    stop();
+    await server.close();
+  });
+
+  it("the extension bridge names no tab when no worker answers", async () => {
+    const { path, server } = await daemonAt();
+
+    expect(await new DaemonExtensionBridge(new UnixDaemonClient(path, "0.3.0")).tabCurrent()).toBeNull();
+    await server.close();
+  });
+
   it("the extension bridge reports no windows when no worker answers", async () => {
     const { path, server } = await daemonAt();
 

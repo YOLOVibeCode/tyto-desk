@@ -19,9 +19,9 @@ const parent = { HOME: home, USER: "alex", SHELL: "/bin/zsh", LANG: "en_US.UTF-8
 describe("the agent-browser config", () => {
   const file = agentBrowserConfig({ config, deskHome });
 
-  it("the agent-browser config points cdp at the Desk port, saves nothing, pins its tab and names Desk's policy", () => {
+  it("the agent-browser config points cdp at the guarded endpoint with restoreSave never, pinTab, contentBoundaries, idleTimeout 15m and Desk's policy", () => {
     expect(file).toEqual({
-      cdp: "http://127.0.0.1:9417",
+      cdp: "http://127.0.0.1:9583",
       restoreSave: "never",
       pinTab: true,
       contentBoundaries: true,

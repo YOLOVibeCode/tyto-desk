@@ -1,3 +1,4 @@
+export { FakeAgentTabs } from "./fake-agent-tabs.ts";
 export { FakeBrowserConnector } from "./fake-browser-connector.ts";
 export { FakeBrowserLifecycle } from "./fake-browser-lifecycle.ts";
 export { FakeChromeProcess } from "./fake-chrome-process.ts";
@@ -21,6 +22,7 @@ export { FakePortProbe } from "./fake-port-probe.ts";
 export { FakeProcessInfo } from "./fake-process-info.ts";
 export { FakeProcessSignals } from "./fake-process-signals.ts";
 export { FakeSidePanelApi } from "./fake-side-panel-api.ts";
+export { FakeTabTargets } from "./fake-tab-targets.ts";
 export { FakeTerminalPane, FakeTerminalView } from "./fake-terminal-view.ts";
 export { FakePty, FakePtySpawner } from "./fake-pty-spawner.ts";
 export { FakeTmux } from "./fake-tmux.ts";

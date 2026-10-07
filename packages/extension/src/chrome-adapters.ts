@@ -1,5 +1,6 @@
 import {
   NATIVE_HOST_NAME,
+  type AgentTabs,
   type Clock,
   type ExtensionWindow,
   type ExtensionWindows,
@@ -7,6 +8,7 @@ import {
   type HostConnector,
   type Random,
   type SidePanelApi,
+  type TabTargets,
 } from "@desk/core";
 
 /** `chrome.runtime.connectNative` to the Desk host (§9 `HostConnector`). */
@@ -61,6 +63,49 @@ export class ChromeWindows implements ExtensionWindows {
       () => true,
       () => false,
     );
+  }
+}
+
+/**
+ * Which target a tab is (§11 `TabTargets`): `chrome.tabs` for the active tab, `chrome.debugger.getTargets` for its
+ * target, which lists targets and attaches to none. Never throws: an unanswered call means no tab.
+ */
+export class ChromeTabTargets implements TabTargets {
+  async activeTabTarget(windowId: number): Promise<string | null> {
+    const [tab] = await chrome.tabs.query({ active: true, windowId }).catch(() => []);
+    return typeof tab?.id === "number" ? this.targetOfTab(tab.id) : null;
+  }
+
+  async targetOfTab(tabId: number): Promise<string | null> {
+    const targets = await chrome.debugger.getTargets().catch(() => []);
+    return targets.find((target) => target.tabId === tabId && target.type === "page")?.id ?? null;
+  }
+}
+
+/**
+ * Each pane's agent tab (§11 `AgentTabs`): a tab in a group titled with the pane's id, created in the background so it
+ * never takes the tab you are looking at. Never throws: Chrome refusing means no tab.
+ */
+export class ChromeAgentTabs implements AgentTabs {
+  async find(group: string): Promise<number | null> {
+    const groups = (await chrome.tabGroups.query({ title: group }).catch(() => [])).filter((entry) => entry.title === group);
+    for (const entry of groups) {
+      const [tab] = await chrome.tabs.query({ groupId: entry.id }).catch(() => []);
+      if (typeof tab?.id === "number") return tab.id;
+    }
+    return null;
+  }
+
+  async create(group: string, windowId: number): Promise<number | null> {
+    try {
+      const tab = await chrome.tabs.create({ windowId, active: false, url: "about:blank" });
+      if (typeof tab.id !== "number") return null;
+      const groupId = await chrome.tabs.group({ tabIds: [tab.id], createProperties: { windowId } });
+      await chrome.tabGroups.update(groupId, { title: group, collapsed: false });
+      return tab.id;
+    } catch {
+      return null;
+    }
   }
 }
 

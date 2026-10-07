@@ -8,4 +8,8 @@ export type DeskWindow = { id: number; focused: boolean; lastFocused: boolean; p
 export interface ExtensionBridge {
   windows(): Promise<readonly DeskWindow[] | null>;
   focusWindow(id: number): Promise<boolean>;
+  /** The target id of the active tab in the last-focused Desk window (`desk tab current`, the focus guard). */
+  tabCurrent(): Promise<string | null>;
+  /** The target id of the pane's agent tab, in a tab group named after the pane, created in the background when missing. */
+  tabMine(pane: string): Promise<string | null>;
 }

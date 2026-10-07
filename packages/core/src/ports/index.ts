@@ -1,3 +1,4 @@
+export type { AgentTabs } from "./agent-tabs.ts";
 export type { AppVersions, StageResult } from "./app-versions.ts";
 export type { BrowserConnector, BrowserSession } from "./browser-connector.ts";
 export type { BrowserLifecycle } from "./browser-lifecycle.ts";
@@ -29,6 +30,7 @@ export type { Consent, Prompter } from "./prompter.ts";
 export type { Pty, PtyExit, PtySpawnOptions, PtySpawner } from "./pty-spawner.ts";
 export type { Random } from "./random.ts";
 export type { SidePanelApi } from "./side-panel-api.ts";
+export type { TabTargets } from "./tab-targets.ts";
 export type { TerminalPane, TerminalSize, TerminalView } from "./terminal-view.ts";
 export type { TextFiles } from "./text-files.ts";
 export type { Tmux } from "./tmux.ts";
