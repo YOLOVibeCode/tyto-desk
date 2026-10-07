@@ -54,10 +54,21 @@ export async function trustedDir(dir: string, uid: number | null): Promise<boole
  * reaches all of it but the PTY. It refuses to start (1) unless `~/.desk` and `run/` are directories owned by this user,
  * with no group or other bits and not symbolic links; sets umask 077; takes `run/ptyd.lock` (a live daemon holds it:
  * this one exits 0); then serves `run/ptyd.sock` until a `shutdown`, or SIGTERM or SIGHUP, which end it the same way:
- * SIGHUP to its shells, the socket closed, the lock released, exit 0. Each pane's shell is planned at its spawn.
+ * SIGHUP to its shells, the socket closed, the lock released, exit 0. A signal that arrives while it is still starting
+ * (the socket can accept connections before its listen finishes) stops it once it listens. Each pane's shell is planned
+ * at its spawn.
  */
 export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
   const { deskHome, env, version } = input;
+  // Listening for SIGTERM and SIGHUP from the first line: a stop that comes during start-up is never lost.
+  let listening: Daemon | null = null;
+  let stopAsked = false;
+  const stop = () => {
+    if (listening !== null) listening.stop();
+    else stopAsked = true;
+  };
+  input.signals.once("SIGTERM", stop);
+  input.signals.once("SIGHUP", stop);
   const run = join(deskHome, "run");
   await assertPathAllowed(run);
   if (!(await trustedDir(deskHome, input.uid))) return 1;
@@ -68,6 +79,10 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
   input.umask(0o077);
   const lock = await (input.lock ?? new NodeInstanceLock(run, { build: version, protocol: [PROTOCOL_MIN, PROTOCOL_MAX] })).acquire("ptyd");
   if (!lock.ok) return 0;
+  if (stopAsked) {
+    await lock.release();
+    return 0;
+  }
 
   const home = env.HOME ?? userInfo().homedir;
   const files = new NodeTextFiles();
@@ -106,7 +121,7 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
     await lock.release();
     return 1;
   }
-  input.signals.once("SIGTERM", () => daemon.stop());
-  input.signals.once("SIGHUP", () => daemon.stop());
+  listening = daemon;
+  if (stopAsked) daemon.stop();
   return done;
 }
