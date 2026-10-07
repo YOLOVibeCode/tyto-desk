@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PanelController } from "../src/index.ts";
-import { FakeClock, FakeHostConnector, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
+import { FakeClock, FakeHostConnector, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 
@@ -8,6 +8,7 @@ function setup(options: { focusOnLoad?: boolean } = {}) {
   const connector = new FakeHostConnector();
   const view = new FakeTerminalView({ cols: 100, rows: 30 });
   const clock = new FakeClock();
+  const visibility = new FakePageVisibility();
   const panel = new PanelController({
     connector,
     view,
@@ -16,8 +17,9 @@ function setup(options: { focusOnLoad?: boolean } = {}) {
     build: "0.3.0",
     windowId: 7,
     focusOnLoad: options.focusOnLoad ?? true,
+    visibility,
   });
-  return { connector, view, clock, panel };
+  return { connector, view, clock, visibility, panel };
 }
 
 const hello = (panes: { id: string; alive: boolean }[] = []) => ({ type: "hello", v: 1, build: "0.3.0", panes, notices: [] });
@@ -162,7 +164,7 @@ describe("the side panel", () => {
 
     connector.last().deliver({ type: "detached", pane: PANE, reason: "taken" });
 
-    expect(view.bannerText).toBe("Open in another window");
+    expect(view.bannerText).toBe("This terminal is open in another window");
   });
 
   it("the panel reconnects with backoff from 100 ms to 2 s after the host disconnects, and attaches the same pane", async () => {
@@ -308,5 +310,91 @@ describe("the panel's states (docs/IMPLEMENTATION.md §9's panel-state table)", 
     connector.last().deliver(message);
 
     expect(view.bannerText).toBe(text);
+  });
+});
+
+describe("the panel's terminal I/O (slice 2b)", () => {
+  function attached() {
+    const desk = setup();
+    desk.panel.start();
+    desk.connector.last().deliver(hello([{ id: PANE, alive: true }]));
+    desk.connector.last().deliver({ type: "snapshot", pane: PANE, part: 0, last: true, cols: 100, rows: 30, data: "" });
+    return desk;
+  }
+
+  it("the panel acknowledges every 5,000 characters its terminal has written", () => {
+    const { connector } = attached();
+
+    connector.last().deliver({ type: "out", pane: PANE, data: "x".repeat(3_000) });
+    const before = connector.last().posted.filter((m) => (m as { type: string }).type === "ack");
+    connector.last().deliver({ type: "out", pane: PANE, data: "y".repeat(3_000) });
+
+    expect(before).toEqual([]);
+    expect(connector.last().posted.filter((m) => (m as { type: string }).type === "ack")).toEqual([{ type: "ack", pane: PANE, n: 6_000 }]);
+  });
+
+  it("a paste containing ESC[201~ reaches the PTY without the escape and inside one bracketed paste", async () => {
+    const { view } = attached();
+
+    view.pane().userPastes("echo ok\u001b[201~; rm -rf ~");
+    await Promise.resolve();
+
+    expect(view.pane().pastes).toEqual(["echo ok[201~; rm -rf ~"]);
+    expect(view.questions).toEqual([]);
+  });
+
+  it("a multi-line paste without bracketed paste mode asks first", async () => {
+    const { view } = attached();
+    view.pane().bracketed = false;
+    view.answers.push(false, true);
+
+    view.pane().userPastes("one\ntwo");
+    await Promise.resolve();
+    await Promise.resolve();
+    view.pane().userPastes("three\nfour\nfive");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(view.questions).toEqual(["Paste 2 lines?", "Paste 3 lines?"]);
+    expect(view.pane().pastes).toEqual(["three\nfour\nfive"]);
+  });
+
+  it("the panel tells the daemon when it is hidden, and opens its pane again when it is shown", () => {
+    const { connector, visibility } = attached();
+
+    visibility.change("hidden");
+    visibility.change("visible");
+
+    expect(connector.last().posted.slice(-3)).toEqual([
+      { type: "visibility", state: "hidden" },
+      { type: "visibility", state: "visible" },
+      { type: "open", id: "o2", pane: PANE, cols: 100, rows: 30 },
+    ]);
+  });
+
+  it("exit reports the code and signal, and closeOnExit removes the pane", () => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver({ ...hello([{ id: PANE, alive: true }]), closeOnExit: true });
+
+    connector.last().deliver({ type: "exit", pane: PANE, code: 0, signal: null });
+
+    expect(connector.last().posted.slice(-2)).toEqual([
+      { type: "close", id: "c1", pane: PANE },
+      { type: "open", id: "o2", pane: "p_0000000001", cols: 100, rows: 30 },
+    ]);
+    expect(view.pane().id).toBe("p_0000000001");
+  });
+
+  it("a panel whose pane another window took offers to bring it back", () => {
+    const { connector, view } = attached();
+
+    connector.last().deliver({ type: "detached", pane: PANE, reason: "taken" });
+    const offered = { text: view.bannerText, label: view.bannerAction?.label };
+    view.bannerAction?.run();
+
+    expect(offered).toEqual({ text: "This terminal is open in another window", label: "Bring it here" });
+    expect(view.bannerText).toBeNull();
+    expect(connector.last().posted.at(-1)).toEqual({ type: "open", id: "o2", pane: PANE, cols: 100, rows: 30 });
   });
 });

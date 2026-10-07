@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "desk-ptyd, the terminal daemon: the Unix-socket message server, the PTY adapter over @lydell/node-pty, and the daemon's process entry.",
+  "description": "desk-ptyd, the terminal daemon: the Unix-socket message server, the PTY adapter over @lydell/node-pty, the panes' mirrors (@xterm/headless), and the daemon's process entry.",
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
@@ -12,6 +12,8 @@
   "dependencies": {
     "@desk/core": "0.1.0",
     "@desk/node": "0.1.0",
-    "@lydell/node-pty": "1.2.0-beta.15"
+    "@lydell/node-pty": "1.2.0-beta.15",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0"
   }
 }

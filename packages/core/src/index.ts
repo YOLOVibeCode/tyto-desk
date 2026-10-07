@@ -86,6 +86,9 @@ export { GatewayConnection, HiddenTargets, focusGuardOn, isDeskUrl, type FocusCh
 export { LAYOUT_BYTES_MAX, LAYOUT_DEPTH_MAX, LAYOUT_VERSION, TABS_MAX, checkLayout, defaultLayout, parseStoredLayout, type Layout, type LayoutNode, type LayoutTab } from "./layout/layout.ts";
 export type { LogEvent } from "./log/events.ts";
 export { SecretRedactor } from "./log/redactor.ts";
+export { EscapeTail } from "./term/escape-tail.ts";
+export { ModeTracker } from "./term/modes.ts";
+export { sanitizePaste } from "./term/paste.ts";
 export { httpGuard, type HttpGuardRequest, type HttpGuardResult } from "./net/http-guard.ts";
 export { DAEMON_START_MS, hostStateFor, startHost, type DaemonCommand, type HostInput, type HostStart } from "./nmhost/host.ts";
 export { PanelController, type PanelPorts } from "./panel/panel-controller.ts";

@@ -5,7 +5,7 @@ import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "@de
 export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
 
 /** What the live suite reads in a test build (docs/IMPLEMENTATION.md §17.3); production builds drop it. */
-type TestHooks = { screen(paneId: string): string; panes(): string[] };
+type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string };
 
 /**
  * The panel's terminals (§10's xterm options, slice 1c's subset): `convertEol` false, the scrollback the mirror keeps,
@@ -32,6 +32,7 @@ export class XtermView implements TerminalView {
           return lines.join("\n").replace(/\n+$/, "");
         },
         panes: () => [...this.terminals.keys()],
+        banner: () => (this.bannerElement.hidden ? "" : (this.bannerElement.textContent ?? "")),
       };
       (globalThis as { deskTest?: TestHooks }).deskTest = hooks;
     }
@@ -56,8 +57,23 @@ export class XtermView implements TerminalView {
     const observer = new ResizeObserver(() => fit.fit());
     observer.observe(element);
     this.terminals.set(paneId, term);
+    const pasteListeners: ((text: string) => void)[] = [];
+    // The panel takes paste and drop before xterm (§10): text is sanitized by the panel; dropped files are ignored.
+    const intercept = (event: ClipboardEvent | DragEvent, text: string | undefined) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (text !== undefined && text !== "") for (const listener of pasteListeners) listener(text);
+    };
+    element.addEventListener("paste", (event) => intercept(event, event.clipboardData?.getData("text/plain")), { capture: true });
+    element.addEventListener("drop", (event) => intercept(event, event.dataTransfer?.getData("text/plain")), { capture: true });
+    element.addEventListener("dragover", (event) => event.preventDefault(), { capture: true });
     return {
-      write: (data) => term.write(data),
+      write: (data, done) => term.write(data, done),
+      paste: (text) => term.paste(text),
+      bracketedPasteMode: () => term.modes.bracketedPasteMode,
+      onPaste: (listener) => {
+        pasteListeners.push(listener);
+      },
       reset: () => term.reset(),
       size: (): TerminalSize => ({ cols: term.cols, rows: term.rows }),
       onInput: (listener) => {
@@ -74,6 +90,29 @@ export class XtermView implements TerminalView {
         element.remove();
       },
     };
+  }
+
+  /** Asks in the banner, with Paste and Cancel buttons; Escape or Cancel is no. */
+  confirm(question: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const answer = (yes: boolean) => {
+        this.bannerElement.hidden = true;
+        this.bannerElement.textContent = "";
+        resolve(yes);
+      };
+      this.bannerElement.textContent = question;
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.textContent = "Paste";
+      yes.addEventListener("click", () => answer(true), { once: true });
+      const no = document.createElement("button");
+      no.type = "button";
+      no.textContent = "Cancel";
+      no.addEventListener("click", () => answer(false), { once: true });
+      this.bannerElement.append(" ", yes, " ", no);
+      this.bannerElement.hidden = false;
+      yes.focus();
+    });
   }
 
   banner(text: string | null, action?: BannerAction): void {

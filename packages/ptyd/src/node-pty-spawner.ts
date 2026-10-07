@@ -27,6 +27,8 @@ export class NodePtySpawner implements PtySpawner {
         write: (data) => child.write(data),
         resize: (cols, rows) => child.resize(cols, rows),
         kill: (signal) => child.kill(signal),
+        pause: () => child.pause(),
+        resume: () => child.resume(),
         onData: (listener) => {
           child.onData(listener);
         },

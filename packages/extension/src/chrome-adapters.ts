@@ -2,6 +2,7 @@ import {
   NATIVE_HOST_NAME,
   type AgentTabs,
   type Clock,
+  type PageVisibility,
   type ExtensionWindow,
   type ExtensionWindows,
   type HostChannel,
@@ -106,6 +107,13 @@ export class ChromeAgentTabs implements AgentTabs {
     } catch {
       return null;
     }
+  }
+}
+
+/** The panel page's `visibilitychange` (§7.3): a panel in a minimized or covered window is hidden. */
+export class DocumentVisibility implements PageVisibility {
+  onChange(listener: (state: "visible" | "hidden") => void): void {
+    document.addEventListener("visibilitychange", () => listener(document.visibilityState === "hidden" ? "hidden" : "visible"));
   }
 }
 

@@ -36,7 +36,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       tini procps lsof xz-utils \
       xvfb xdotool \
-      zsh tmux \
+      zsh tmux vim-tiny \
       fonts-dejavu-core fonts-liberation fonts-noto-mono \
  && rm -rf /var/lib/apt/lists/*
 

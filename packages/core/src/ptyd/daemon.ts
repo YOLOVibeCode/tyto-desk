@@ -2,6 +2,9 @@ import { checkLayout, defaultLayout, type Layout } from "../layout/layout.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { LayoutStore } from "../ports/layout-store.ts";
 import type { LogSink } from "../ports/log-sink.ts";
+import type { MirrorScreen, TerminalMirror } from "../ports/terminal-mirror.ts";
+import { EscapeTail } from "../term/escape-tail.ts";
+import { ModeTracker } from "../term/modes.ts";
 import type { DaemonConnection, DaemonPeer } from "../ports/message-server.ts";
 import type { Pty, PtyExit, PtySpawner } from "../ports/pty-spawner.ts";
 import {
@@ -38,6 +41,12 @@ export type DaemonPorts = {
   onShutdown(mode: "stop" | "restart"): void;
   layouts: LayoutStore;
   log: LogSink;
+  /** Each pane's headless terminal (§7.3). */
+  mirror: TerminalMirror;
+  /** Lines of scrollback a mirror keeps (`terminal.scrollback`). */
+  scrollback: number;
+  /** `terminal.closeOnExit`, which panels learn in `hello`. */
+  closeOnExit?: boolean;
 };
 
 /** The panes Desk keeps at most (§7.2). */
@@ -45,6 +54,13 @@ const PANES_MAX = 64;
 
 /** How long the daemon waits for the service worker to answer an extension call (§6.6). */
 const EXT_CALL_MS = 2_000;
+
+/** §7.3's output and flow-control numbers (VS Code's). */
+const QUIET_MS = 4;
+const COALESCE_MAX = 65_536;
+const PAUSE_ABOVE = 100_000;
+const RESUME_BELOW = 5_000;
+const STUCK_MS = 10_000;
 
 /** What each client kind may send after hello (§7.2's table). */
 const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
@@ -54,7 +70,7 @@ const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
   watch: ["list", "alert", "ext.call", "gateway.state"],
 };
 
-type Client = { peer: DaemonPeer; kind: ClientKind | null; window: number | null; stale: boolean };
+type Client = { peer: DaemonPeer; kind: ClientKind | null; window: number | null; stale: boolean; hidden: boolean };
 
 type Pane = {
   id: string;
@@ -64,6 +80,21 @@ type Pane = {
   starting: boolean;
   cols: number;
   rows: number;
+  /** The pane's mirror, its unfinished escape sequence, and the modes serialize does not write. */
+  screen: MirrorScreen | null;
+  tail: EscapeTail;
+  modes: ModeTracker;
+  /** Output that arrived while a client attaches: it reaches the mirror and the owner after the snapshot. */
+  held: string[] | null;
+  /** Output coalesced for the owner, when the last went out, and whether a send is scheduled (§7.3). */
+  buffer: string;
+  lastOut: number;
+  flushScheduled: boolean;
+  /** Characters sent to the owner and not yet acknowledged; the PTY pauses above 100,000. */
+  unacked: number;
+  paused: boolean;
+  /** Bumps whenever the pane resumes or changes owner, so an older stuck check does nothing. */
+  flowEpoch: number;
 };
 
 /** An extension call on its way: who asked, under which id, and the worker it went to. */
@@ -72,7 +103,7 @@ type PendingCall = { caller: Client; id: string; sw: Client };
 /**
  * The terminal daemon's state machine (docs/IMPLEMENTATION.md §7): clients and what they may send, panes and their one
  * owner each, input to the owner's shell and output to the owner only, and the extension calls it relays between the
- * launcher and the service worker. Slice 1c keeps no mirror: a re-attached pane starts from an empty snapshot. It never
+ * launcher and the service worker. Each pane has a mirror, so a re-attached pane starts from its screen (§7.3). It never
  * throws on input; a message it cannot read gets E_PROTO.
  */
 export class Daemon {
@@ -95,7 +126,7 @@ export class Daemon {
   }
 
   connect(peer: DaemonPeer): DaemonConnection {
-    const client: Client = { peer, kind: null, window: null, stale: false };
+    const client: Client = { peer, kind: null, window: null, stale: false, hidden: false };
     this.clients.add(client);
     return {
       receive: (line) => this.receive(client, line),
@@ -166,6 +197,7 @@ export class Daemon {
         pane.cols = message.cols;
         pane.rows = message.rows;
         pty.resize(message.cols, message.rows);
+        pane.screen?.resize(message.cols, message.rows);
         return;
       }
       case "list":
@@ -191,9 +223,17 @@ export class Daemon {
         if (pane !== undefined && pane.owner === client) pane.owner = null;
         return;
       }
-      case "ack":
+      case "ack": {
+        const pane = this.panes.get(message.pane);
+        if (pane === undefined || pane.owner !== client) return;
+        pane.unacked = Math.max(0, pane.unacked - message.n);
+        if (pane.paused && pane.unacked < RESUME_BELOW) this.resume(pane);
+        return;
+      }
       case "visibility":
-        // Flow control and hidden owners are slice 2b's (§7.3).
+        // A hidden owner gets no output and never pauses its panes; on visible the panel opens its panes again.
+        client.hidden = message.state === "hidden";
+        if (client.hidden) for (const pane of this.panes.values()) if (pane.owner === client) this.resetFlow(pane);
         return;
       case "alert":
         this.broadcast({ type: "alert", kind: message.kind });
@@ -234,6 +274,7 @@ export class Daemon {
       build: this.ports.build,
       panes: [...this.panes.values()].map((pane) => ({ id: pane.id, alive: pane.alive })),
       notices: [],
+      ...(kind === "panel" && this.ports.closeOnExit !== undefined ? { closeOnExit: this.ports.closeOnExit } : {}),
     });
   }
 
@@ -251,21 +292,47 @@ export class Daemon {
     const existing = this.panes.get(message.pane);
     if (existing !== undefined && (existing.alive || existing.starting)) {
       this.take(existing, client);
-      existing.cols = message.cols;
-      existing.rows = message.rows;
-      existing.pty?.resize(message.cols, message.rows);
-      this.attached(existing, client);
+      if (existing.cols !== message.cols || existing.rows !== message.rows) {
+        // A plain shell re-attached at its own size gets no SIGWINCH: zsh would print a stray prompt.
+        existing.cols = message.cols;
+        existing.rows = message.rows;
+        existing.pty?.resize(message.cols, message.rows);
+        existing.screen?.resize(message.cols, message.rows);
+      }
+      if (!existing.starting) await this.attached(existing, client);
       return;
     }
     if (existing === undefined) {
       // An exited pane no panel owns stays listed until the next open; a new one takes its place (§7.3).
-      for (const [id, pane] of this.panes) if (!pane.alive && !pane.starting && pane.owner === null) this.panes.delete(id);
+      for (const [id, pane] of this.panes) {
+        if (pane.alive || pane.starting || pane.owner !== null) continue;
+        pane.screen?.dispose();
+        this.panes.delete(id);
+      }
       if (this.panes.size >= PANES_MAX) {
         this.fail(client, "E_LIMIT", { id: message.id, pane: message.pane });
         return;
       }
     }
-    const pane: Pane = { id: message.pane, pty: null, owner: client, alive: false, starting: true, cols: message.cols, rows: message.rows };
+    const pane: Pane = {
+      id: message.pane,
+      pty: null,
+      owner: client,
+      alive: false,
+      starting: true,
+      cols: message.cols,
+      rows: message.rows,
+      screen: null,
+      tail: new EscapeTail(),
+      modes: new ModeTracker(),
+      held: null,
+      buffer: "",
+      lastOut: Number.NEGATIVE_INFINITY,
+      flushScheduled: false,
+      unacked: 0,
+      paused: false,
+      flowEpoch: 0,
+    };
     this.panes.set(pane.id, pane);
     let shell: PaneShell;
     try {
@@ -285,30 +352,121 @@ export class Daemon {
     }
     pane.pty = started.pty;
     pane.alive = true;
+    pane.screen = this.ports.mirror.create(pane.cols, pane.rows, this.ports.scrollback);
     started.pty.onData((data) => this.output(pane, data));
     started.pty.onExit((exit) => this.exited(pane, exit));
     if (shell.notice !== null && pane.owner !== null) this.send(pane.owner, { type: "notice", kind: shell.notice });
-    if (pane.owner !== null) this.attached(pane, pane.owner);
+    if (pane.owner !== null) await this.attached(pane, pane.owner);
   }
 
-  /** Makes `client` the pane's owner; a previous owner learns it was taken. */
+  /** Makes `client` the pane's owner; a previous owner learns it was taken. Flow control starts over. */
   private take(pane: Pane, client: Client): void {
     const previous = pane.owner;
     pane.owner = client;
+    this.resetFlow(pane);
     if (previous !== null && previous !== client) this.send(previous, { type: "detached", pane: pane.id, reason: "taken" });
   }
 
-  /** The new owner's snapshot: empty until slice 2b's mirror, so the panel starts from a reset screen. */
-  private attached(pane: Pane, client: Client): void {
-    this.send(client, { type: "snapshot", pane: pane.id, part: 0, last: true, cols: pane.cols, rows: pane.rows, data: "" });
+  /**
+   * §7.3's attach: output is held while the mirror catches up; the snapshot is the serialized screen, then the modes
+   * serialize does not write, then the unfinished escape sequence, so the panel's parser ends where the mirror's does;
+   * a program in the alternate screen is made to redraw; then the held output follows, exactly once.
+   */
+  private async attached(pane: Pane, client: Client): Promise<void> {
+    const screen = pane.screen;
+    if (screen === null) return;
+    pane.held ??= [];
+    await screen.flush();
+    const snapshot = screen.snapshot();
+    const data = snapshot.data + pane.modes.replay() + pane.tail.tail();
+    const parts = splitForWire(data, WIRE_DATA_MAX).filter((part, index) => part !== "" || index === 0);
+    parts.forEach((part, index) => {
+      this.send(client, { type: "snapshot", pane: pane.id, part: index, last: index === parts.length - 1, cols: pane.cols, rows: pane.rows, data: part });
+    });
+    if (snapshot.altScreen && pane.pty !== null) {
+      pane.pty.resize(pane.cols, pane.rows - 1);
+      pane.pty.resize(pane.cols, pane.rows);
+    }
+    const held = pane.held;
+    pane.held = null;
+    for (const chunk of held) this.process(pane, chunk);
   }
 
   private output(pane: Pane, data: string): void {
-    const owner = pane.owner;
-    if (owner === null) return;
-    for (const part of splitForWire(data, WIRE_DATA_MAX)) {
-      if (part !== "") this.send(owner, { type: "out", pane: pane.id, data: part });
+    if (pane.held !== null) {
+      pane.held.push(data);
+      return;
     }
+    this.process(pane, data);
+  }
+
+  /** Shell output into the mirror and toward the owner. */
+  private process(pane: Pane, data: string): void {
+    void pane.screen?.write(data);
+    pane.tail.feed(data);
+    pane.modes.feed(data);
+    const owner = pane.owner;
+    if (owner === null || owner.hidden) return;
+    const now = this.ports.clock.now();
+    if (pane.buffer === "" && !pane.flushScheduled && now - pane.lastOut >= QUIET_MS) {
+      this.deliver(pane, data);
+      return;
+    }
+    pane.buffer += data;
+    while (pane.buffer.length >= COALESCE_MAX) {
+      this.deliver(pane, pane.buffer.slice(0, COALESCE_MAX));
+      pane.buffer = pane.buffer.slice(COALESCE_MAX);
+    }
+    if (!pane.flushScheduled && pane.buffer !== "") {
+      pane.flushScheduled = true;
+      void this.ports.clock.sleep(QUIET_MS).then(() => {
+        pane.flushScheduled = false;
+        const buffered = pane.buffer;
+        pane.buffer = "";
+        if (buffered !== "") this.deliver(pane, buffered);
+      });
+    }
+  }
+
+  /** Sends output to the owner in messages of at most 65,536 characters, counting it for flow control. */
+  private deliver(pane: Pane, data: string): void {
+    const owner = pane.owner;
+    if (owner === null || owner.hidden) return;
+    pane.lastOut = this.ports.clock.now();
+    for (let start = 0; start < data.length; start += COALESCE_MAX) {
+      for (const part of splitForWire(data.slice(start, start + COALESCE_MAX), WIRE_DATA_MAX)) {
+        if (part !== "") this.send(owner, { type: "out", pane: pane.id, data: part });
+      }
+    }
+    pane.unacked += data.length;
+    if (!pane.paused && pane.unacked > PAUSE_ABOVE) this.pause(pane);
+  }
+
+  private pause(pane: Pane): void {
+    pane.paused = true;
+    pane.pty?.pause();
+    const epoch = pane.flowEpoch;
+    const owner = pane.owner;
+    void this.ports.clock.sleep(STUCK_MS).then(() => {
+      if (!pane.paused || pane.flowEpoch !== epoch || pane.owner !== owner || owner === null) return;
+      // An owner that has not caught up in 10 s is stuck: it is detached, and the pane runs on.
+      pane.owner = null;
+      this.send(owner, { type: "detached", pane: pane.id, reason: "stuck" });
+      this.resetFlow(pane);
+    });
+  }
+
+  private resume(pane: Pane): void {
+    pane.paused = false;
+    pane.flowEpoch += 1;
+    pane.pty?.resume();
+  }
+
+  /** Forgets what the owner has not acknowledged, and resumes a paused PTY. */
+  private resetFlow(pane: Pane): void {
+    pane.unacked = 0;
+    if (pane.paused) this.resume(pane);
+    else pane.flowEpoch += 1;
   }
 
   private exited(pane: Pane, exit: PtyExit): void {
@@ -377,6 +535,7 @@ export class Daemon {
     }
     this.panes.delete(paneId);
     if (pane.alive) pane.pty?.kill("SIGHUP");
+    pane.screen?.dispose();
     this.send(client, { type: "closed", pane: paneId });
   }
 

@@ -6,6 +6,7 @@ export class FakePty implements Pty {
   readonly written: string[] = [];
   readonly sizes: [number, number][] = [];
   readonly signals: string[] = [];
+  paused = false;
   private readonly dataListeners: ((data: string) => void)[] = [];
   private readonly exitListeners: ((exit: PtyExit) => void)[] = [];
 
@@ -23,6 +24,14 @@ export class FakePty implements Pty {
 
   kill(signal: "SIGHUP" | "SIGKILL"): void {
     this.signals.push(signal);
+  }
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  resume(): void {
+    this.paused = false;
   }
 
   onData(listener: (data: string) => void): void {

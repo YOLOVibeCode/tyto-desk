@@ -7,6 +7,9 @@ export interface Pty {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal: "SIGHUP" | "SIGKILL"): void;
+  /** Stops reading the PTY (flow control, §7.3), until `resume`. */
+  pause(): void;
+  resume(): void;
   onData(listener: (data: string) => void): void;
   onExit(listener: (exit: PtyExit) => void): void;
 }

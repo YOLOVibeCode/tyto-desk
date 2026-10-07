@@ -5,6 +5,7 @@ import { userInfo } from "node:os";
 import { Daemon, PROTOCOL_MAX, PROTOCOL_MIN, planPaneShell, type InstanceLock, type LogSink, type PtySpawner } from "@desk/core";
 import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed } from "@desk/node";
 import { NodeLayoutStore } from "./layout-store.ts";
+import { NodeTerminalMirror } from "./terminal-mirror.ts";
 import { UnixMessageServer } from "./message-server.ts";
 
 /** Where tmux usually is, when the config names none (§7.4). */
@@ -90,6 +91,8 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
   const home = env.HOME ?? userInfo().homedir;
   const files = new NodeTextFiles();
   const store = new FileConfigStore(deskHome);
+  // The terminal settings the daemon starts with; a pane's shell re-reads the config at its spawn.
+  const startConfig = await store.load().catch(() => null);
   const server = new UnixMessageServer(join(run, "ptyd.sock"));
   let stopped: (code: number) => void = () => undefined;
   const done = new Promise<number>((resolve) => {
@@ -112,6 +115,9 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
       return planPaneShell({ pane, config, deskHome, home, parent: env, version, tmux, files, loginShell: new NodeLoginShell() });
     },
     layouts: new NodeLayoutStore(deskHome),
+    mirror: new NodeTerminalMirror(),
+    scrollback: startConfig?.terminal.scrollback ?? 5_000,
+    closeOnExit: startConfig?.terminal.closeOnExit ?? true,
     log: input.log ?? new FileLogSink(join(deskHome, "logs", "ptyd.log")),
     onShutdown: () => {
       void server.close().then(async () => {
