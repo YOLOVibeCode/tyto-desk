@@ -10,6 +10,10 @@ export default defineConfig({
     include: ["packages/*/test/**/*.test.ts", "test/**/*.test.ts"],
     exclude: ["**/node_modules/**", "packages/*/test/live/**", "test/live/**"],
     environment: "node",
+    // Tests that start processes or scan the whole repository take 1–3 s each, and up to 5.4 s on a Mac whose load
+    // average sits above 20 (2026-10-07), past Vitest's default 5 s. 15 s still stops a hung test long before the suite
+    // would notice, and the whole suite stays well under SPEC §8's 30 s.
+    testTimeout: 15_000,
     globalSetup: ["test/setup/global-setup.ts"],
     reporters: ["default"],
   },

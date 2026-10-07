@@ -75,6 +75,16 @@ describe("desk-ptyd, the process", () => {
     expect(await answers(daemon.socket)).toBe(false);
   });
 
+  it.each(["SIGTERM", "SIGHUP"])("a %s that arrives while the daemon is still starting stops it once it listens", async (signal) => {
+    const daemon = serve(await freshDeskHome());
+
+    daemon.signals.emit(signal);
+
+    expect(await daemon.exit).toBe(0);
+    expect(await exists(daemon.lockFile)).toBe(false);
+    expect(await answers(daemon.socket)).toBe(false);
+  });
+
   it("the daemon's lock records its pid, its build, the protocol range and when it started (§7.1)", async () => {
     const daemon = serve(await freshDeskHome());
     await until(() => answers(daemon.socket));
