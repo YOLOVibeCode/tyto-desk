@@ -1,6 +1,8 @@
 export { FakeBrowserConnector } from "./fake-browser-connector.ts";
+export { FakeBrowserLifecycle } from "./fake-browser-lifecycle.ts";
 export { FakeChromeProcess } from "./fake-chrome-process.ts";
 export { FakeChromeProfile } from "./fake-chrome-profile.ts";
+export { FakeChromeSettings } from "./fake-chrome-settings.ts";
 export { FakeClock } from "./fake-clock.ts";
 export { FakeCodeSigning } from "./fake-code-signing.ts";
 export { FakeDaemonClient } from "./fake-daemon-client.ts";
@@ -16,6 +18,7 @@ export { FakeLoginShell } from "./fake-login-shell.ts";
 export { FakePanelOpener } from "./fake-panel-opener.ts";
 export { FakePortProbe } from "./fake-port-probe.ts";
 export { FakeProcessInfo } from "./fake-process-info.ts";
+export { FakeProcessSignals } from "./fake-process-signals.ts";
 export { FakeSidePanelApi } from "./fake-side-panel-api.ts";
 export { FakeTerminalPane, FakeTerminalView } from "./fake-terminal-view.ts";
 export { FakePty, FakePtySpawner } from "./fake-pty-spawner.ts";

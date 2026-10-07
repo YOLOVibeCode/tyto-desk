@@ -1,6 +1,6 @@
 import type { CdpTransport } from "../src/index.ts";
 
-type Handler = (params: Record<string, unknown>) => unknown;
+type Handler = (params: Record<string, unknown>, sessionId?: string) => unknown;
 
 /**
  * An in-memory CDP browser endpoint (docs/IMPLEMENTATION.md §3: the CDP role adapters are tested against one). Each
@@ -8,7 +8,7 @@ type Handler = (params: Record<string, unknown>) => unknown;
  * never answers. Every command is recorded.
  */
 export class FakeCdp implements CdpTransport {
-  readonly sent: { method: string; params: Record<string, unknown> }[] = [];
+  readonly sent: { method: string; params: Record<string, unknown>; sessionId?: string }[] = [];
   readonly handlers = new Map<string, Handler>();
   private listener: (text: string) => void = () => undefined;
   private closeListener: () => void = () => undefined;
@@ -20,14 +20,14 @@ export class FakeCdp implements CdpTransport {
   }
 
   send(text: string): void {
-    const message = JSON.parse(text) as { id: number; method: string; params?: Record<string, unknown> };
+    const message = JSON.parse(text) as { id: number; method: string; params?: Record<string, unknown>; sessionId?: string };
     const params = message.params ?? {};
-    this.sent.push({ method: message.method, params });
+    this.sent.push(message.sessionId === undefined ? { method: message.method, params } : { method: message.method, params, sessionId: message.sessionId });
     const handler = this.handlers.get(message.method);
     if (handler === undefined) return;
     queueMicrotask(() => {
       try {
-        const result = handler(params);
+        const result = handler(params, message.sessionId);
         this.listener(JSON.stringify({ id: message.id, result }));
       } catch (err) {
         this.listener(JSON.stringify({ id: message.id, error: { code: -32000, message: err instanceof Error ? err.message : String(err) } }));

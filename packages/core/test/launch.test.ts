@@ -7,12 +7,14 @@ import {
   launch,
   newDeskConfig,
   parseRenderState,
+  type DeskConfig,
   type DeskWindow,
 } from "../src/index.ts";
 import {
   FakeBrowserConnector,
   FakeChromeProcess,
   FakeChromeProfile,
+  FakeChromeSettings,
   FakeClock,
   FakeDaemonClient,
   FakeDeskExtension,
@@ -50,14 +52,24 @@ const win = (id: number, change: Partial<DeskWindow> = {}): DeskWindow => ({ id,
  * A Desk Chrome the test plays: it answers /json/version once started, its worker reaches the daemon a few polls after
  * the extension loads, and the toolbar action opens the panel in the tab's window, whose panel then says hello.
  */
-function setup(options: { windows?: DeskWindow[]; tabs?: [number, string][]; workerAfterLists?: number } = {}) {
+function setup(
+  options: {
+    windows?: DeskWindow[];
+    tabs?: [number, string][];
+    workerAfterLists?: number;
+    config?: DeskConfig;
+    settings?: Partial<Record<"background_mode.enabled" | "session.restore_on_startup", unknown>>;
+    preferencesExist?: boolean;
+  } = {},
+) {
   const log: string[] = [];
   const clock = new FakeClock({ auto: true });
   const chrome = new FakeChromeProcess("155.0.8059.40", log);
   const devTools = new FakeDevToolsHttp({ log });
   const extension = new FakeDeskExtension({ loadAs: keyId, log });
   const panels = new FakePanelOpener(log);
-  const browser = new FakeBrowserConnector(extension, panels, log);
+  const settings = new FakeChromeSettings(options.settings ?? {}, log);
+  const browser = new FakeBrowserConnector(extension, panels, log, { settings });
   const daemon = new FakeDaemonClient({ reachable: false, log });
   const bridge = new FakeExtensionBridge(options.windows ?? [win(1, { focused: true, lastFocused: true })]);
   const files = new MemoryTextFiles({
@@ -66,10 +78,10 @@ function setup(options: { windows?: DeskWindow[]; tabs?: [number, string][]; wor
     [`${appDir}/extension/panel.html`]: "<!doctype html>",
   });
   const hosts = new MemoryNativeHostDir();
-  const profile = new FakeChromeProfile();
+  const profile = new FakeChromeProfile({ preferencesExist: options.preferencesExist ?? false });
   const processes = new FakeProcessInfo();
   const lock = new FakeInstanceLock();
-  const store = new MemoryConfigStore(config);
+  const store = new MemoryConfigStore(options.config ?? config);
   for (const [id, tab] of options.tabs ?? [[1, "tab-1"]]) panels.tabs.set(id, tab);
   const tabWindow = new Map([...panels.tabs].map(([id, tab]) => [tab, id]));
 
@@ -117,7 +129,7 @@ function setup(options: { windows?: DeskWindow[]; tabs?: [number, string][]; wor
       },
       { home, deskHome, platform: "darwin", version, appDir },
     );
-  return { log, clock, chrome, devTools, extension, panels, browser, daemon, bridge, files, hosts, profile, processes, lock, store, run };
+  return { log, clock, chrome, devTools, extension, panels, settings, browser, daemon, bridge, files, hosts, profile, processes, lock, store, run };
 }
 
 describe("desk, a fresh launch", () => {
@@ -369,5 +381,99 @@ describe("desk, a fresh launch", () => {
     expect(result).toMatchObject({ ok: false, code: 70 });
     expect(desk.clock.sleeps.reduce((sum, ms) => sum + ms, 0)).toBeGreaterThanOrEqual(20_000);
     expect(desk.browser.connected).toEqual([]);
+  });
+});
+
+describe("desk, Chrome's settings at launch", () => {
+  it("first run turns background mode off where Chrome has the pref and reads it back", async () => {
+    const desk = setup({ settings: { "background_mode.enabled": true } });
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.settings.calls).toEqual(["get background_mode.enabled", "set background_mode.enabled false", "get background_mode.enabled"]);
+    expect(desk.settings.prefs.get("background_mode.enabled")).toBe(false);
+  });
+
+  it("first run writes nothing when this Chrome has no background mode pref", async () => {
+    const desk = setup();
+
+    const result = await desk.run();
+
+    expect(result).toEqual({ ok: true, message: expect.stringMatching(/^Desk ready .* in \d+\.\d s$/) });
+    expect(desk.settings.calls).toEqual(["get background_mode.enabled"]);
+  });
+
+  it("a later launch leaves background mode alone", async () => {
+    const desk = setup({ settings: { "background_mode.enabled": true }, preferencesExist: true });
+
+    await desk.run();
+
+    expect(desk.settings.calls).toEqual([]);
+    expect(desk.settings.prefs.get("background_mode.enabled")).toBe(true);
+  });
+
+  it.each([
+    ["Chrome keeps it on", { ignoreWrites: true }],
+    ["Chrome's settings page cannot be reached", { unavailable: true }],
+  ])("first run says how to turn background mode off when %s", async (_, failure) => {
+    const desk = setup({ settings: { "background_mode.enabled": true } });
+    Object.assign(desk.settings, failure);
+
+    const result = await desk.run();
+
+    expect(result).toEqual({
+      ok: true,
+      message: expect.stringMatching(
+        /in \d+\.\d s\. Chrome's background mode may still be on: turn off "Continue running background apps when Google Chrome is closed" in Settings > System, so the Desk Chrome does not keep running with its port open after Cmd\+Q$/,
+      ),
+    });
+  });
+
+  it("launch never writes session.restore_on_startup unless setContinuePref is on", async () => {
+    const desk = setup({ settings: { "session.restore_on_startup": 5 } });
+
+    await desk.run();
+
+    expect(desk.settings.calls.filter((call) => call.includes("session.restore_on_startup"))).toEqual([]);
+    expect(desk.settings.prefs.get("session.restore_on_startup")).toBe(5);
+  });
+
+  it("launch sets session.restore_on_startup to 1 when setContinuePref is on", async () => {
+    const desk = setup({
+      config: { ...config, chrome: { ...config.chrome, setContinuePref: true } },
+      settings: { "session.restore_on_startup": 5 },
+      preferencesExist: true,
+    });
+
+    await desk.run();
+
+    expect(desk.settings.calls).toEqual(["get session.restore_on_startup", "set session.restore_on_startup 1"]);
+    expect(desk.settings.prefs.get("session.restore_on_startup")).toBe(1);
+  });
+
+  it("launch leaves session.restore_on_startup alone when it is already 1", async () => {
+    const desk = setup({
+      config: { ...config, chrome: { ...config.chrome, setContinuePref: true } },
+      settings: { "session.restore_on_startup": 1 },
+      preferencesExist: true,
+    });
+
+    await desk.run();
+
+    expect(desk.settings.calls).toEqual(["get session.restore_on_startup"]);
+  });
+
+  it("launch writes Chrome's settings after the service worker reaches the daemon and before it opens the panel", async () => {
+    const desk = setup({ settings: { "background_mode.enabled": true } });
+
+    await desk.run();
+    const workerUp = desk.log.indexOf("daemon.list sw=true");
+    const written = desk.log.indexOf("settings.set background_mode.enabled");
+    const opened = desk.log.findIndex((entry) => entry.startsWith("panels.open"));
+
+    expect(workerUp).toBeGreaterThan(-1);
+    expect(written).toBeGreaterThan(workerUp);
+    expect(opened).toBeGreaterThan(written);
   });
 });

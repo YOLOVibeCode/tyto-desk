@@ -9,4 +9,5 @@ export const LIVE_PORTS = {
   extension: 9427,
   agentBrowser: 9437,
   desk: 9447,
+  persistence: 9457,
 } as const;

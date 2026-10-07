@@ -9,14 +9,14 @@ import { UnixMessageServer } from "@desk/ptyd";
 import { DaemonExtensionBridge, UnixDaemonClient } from "../src/index.ts";
 
 /** A daemon (core's, with a fake PTY) behind a real Unix socket in a short temp directory. */
-async function daemonAt() {
+async function daemonAt(onShutdown: (mode: "stop" | "restart") => void = () => undefined) {
   const path = join(await mkdtemp(join(tmpdir(), "dc-")), "ptyd.sock");
   const daemon = new Daemon({
     spawner: new FakePtySpawner(),
     clock: new FakeClock(),
     build: "0.3.0",
     shellFor: async (): Promise<PaneShell> => ({ file: "/bin/zsh", args: ["-l"], cwd: "/", env: {}, notice: null }),
-    onShutdown: () => undefined,
+    onShutdown,
   });
   const server = new UnixMessageServer(path);
   await server.listen((peer) => daemon.connect(peer));
@@ -50,6 +50,20 @@ describe("the CLI's daemon client", () => {
     opened.session.close();
 
     expect(reply).toMatchObject({ type: "panes", panes: [], panels: [], sw: { connected: false, connects: 0 } });
+    await server.close();
+  });
+
+  it("the daemon client sends shutdown without waiting for an answer", async () => {
+    const stopped: string[] = [];
+    const { path, server } = await daemonAt((mode) => stopped.push(mode));
+
+    const opened = await new UnixDaemonClient(path, "0.3.0").open("cli");
+    if (!opened.ok) throw new Error(`no session: ${opened.reason}`);
+    await opened.session.notify({ type: "shutdown", mode: "stop" });
+    opened.session.close();
+    for (let i = 0; i < 100 && stopped.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(stopped).toEqual(["stop"]);
     await server.close();
   });
 

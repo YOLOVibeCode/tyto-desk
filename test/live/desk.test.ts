@@ -1,32 +1,19 @@
-import { spawn as spawnProcess } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawn as spawnPty } from "@lydell/node-pty";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DESK_COMPAT, DESK_EXTENSION_ID, TMUX_DESK_LINE, newDeskConfig, serializeDeskConfig, type Panes } from "../../packages/core/src/index.ts";
+import { DESK_EXTENSION_ID, type Panes } from "../../packages/core/src/index.ts";
 import { DaemonExtensionBridge, UnixDaemonClient } from "../../packages/cli/src/index.ts";
-import { NodeCodeSigning } from "../../packages/node/src/index.ts";
-import { readNodeRuntime } from "../../scripts/delivery/lib/node-runtime.mjs";
-import { packRuntime } from "../../scripts/lib/pack.mjs";
 import { Cdp, attach, evaluate, targets, waitFor, type TargetInfo } from "./lib/cdp.ts";
 import { browserVersion } from "./lib/chrome.ts";
+import { installDesk, type Run } from "./lib/desk-run.ts";
 import { startFixtureServer, type FixtureServer } from "./lib/fixture-server.ts";
 import { LIVE_PORTS } from "./lib/ports.ts";
 import { saveResult, saveScreenshot } from "./lib/results.ts";
 
-const repo = fileURLToPath(new URL("../..", import.meta.url));
-const FIXTURES = fileURLToPath(new URL("./fixtures/desk-home", import.meta.url));
 const PORT = LIVE_PORTS.desk;
 const PANEL_URL = `chrome-extension://${DESK_EXTENSION_ID}/panel.html`;
 const WORKER_URL = `chrome-extension://${DESK_EXTENSION_ID}/sw.js`;
-/** Every launch's window inside the 1440×900 Xvfb screen, as the other live files use: the user's extraArgs. */
-const WINDOW = ["--window-size=1400,860", "--window-position=0,0"];
 const IDLE_MS = 5 * 60_000;
-
-type Run = { code: number | null; stdout: string; stderr: string; ms: number };
 
 /** What beforeAll set up; each test reads it through `desk()`, which fails clearly when the setup did not finish. */
 type Desk = {
@@ -47,34 +34,6 @@ let fixture: FixtureServer | undefined;
 function desk(): Desk {
   if (started === undefined) throw new Error("Desk did not start (see the beforeAll failure)");
   return started;
-}
-
-/** The environment a person's terminal gives the desk launcher: home, display, locale; nothing from Vitest. */
-function userEnv(home: string): NodeJS.ProcessEnv {
-  return {
-    HOME: home,
-    USER: "lab",
-    LOGNAME: "lab",
-    PATH: "/usr/local/bin:/usr/bin:/bin",
-    DISPLAY: process.env.DISPLAY ?? ":99",
-    LANG: "C.UTF-8",
-    TMPDIR: tmpdir(),
-    DESK_IN_CONTAINER: "1",
-  };
-}
-
-/** Runs a program to its exit with an explicit environment and a budget. */
-function runProgram(file: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<Run> {
-  const begun = Date.now();
-  return new Promise((resolve) => {
-    const child = spawnProcess(file, args, { env, stdio: ["ignore", "pipe", "pipe"], signal: AbortSignal.timeout(timeoutMs) });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-    child.once("error", () => resolve({ code: null, stdout, stderr, ms: Date.now() - begun }));
-    child.once("close", (code) => resolve({ code, stdout, stderr, ms: Date.now() - begun }));
-  });
 }
 
 /** The daemon's pane list, through a client of kind cli on its socket. */
@@ -116,60 +75,11 @@ async function windowOf(targetId: string): Promise<number> {
 
 describe("Desk's walking skeleton in the live container", () => {
   beforeAll(async () => {
-    const home = await mkdtemp(join(tmpdir(), "desk-home-"));
-    const deskHome = join(home, ".desk");
-    await copyFile(join(FIXTURES, "zprofile"), join(home, ".zprofile"));
-    await copyFile(join(FIXTURES, "zshrc"), join(home, ".zshrc"));
-    // Desk's tmux line, as desk install adds it with consent (slice 4b): the agent-variable gate lets panes carry them.
-    await writeFile(join(home, ".tmux.conf"), `${TMUX_DESK_LINE}\n`);
-    const config = newDeskConfig({ home, platform: "linux", chromePort: PORT, gatewayPort: PORT + 1 });
-    await mkdir(deskHome, { recursive: true, mode: 0o700 });
-    await writeFile(join(deskHome, "config.json"), serializeDeskConfig({ ...config, chrome: { ...config.chrome, extraArgs: WINDOW } }), { mode: 0o600 });
-
-    const out = await mkdtemp(join(tmpdir(), "desk-dist-"));
-    const packed = await packRuntime({
-      root: repo,
-      out,
-      version: {
-        version: "0.0.1-dev.live+0000000",
-        channel: "dev",
-        branch: "live",
-        commit: "0".repeat(40),
-        dirty: false,
-        builtAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
-        node: "26.10.0",
-        compat: DESK_COMPAT,
-      },
-      platform: "linux",
-      arch: process.arch,
-      node: process.execPath,
-      runtime: await readNodeRuntime(repo),
-      signing: new NodeCodeSigning("/nonexistent/codesign"),
-      tarball: false,
-      testHooks: true,
-    });
-    if (!packed.ok) throw new Error(`pack failed: ${packed.reason}`);
-
-    // The packed runtime's own desk install, which asks on its terminal: the test answers through a PTY.
-    const installer = spawnPty(join(packed.dir, "node", "desk-node"), [join(packed.dir, "desk.mjs"), "install", "--from", packed.dir], {
-      name: "xterm-256color",
-      cols: 120,
-      rows: 30,
-      cwd: home,
-      env: { HOME: home, DESK_HOME: deskHome, PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", TMPDIR: tmpdir() },
-    });
-    let installed = "";
-    installer.onData((data) => (installed += data));
-    const installExit = new Promise<number>((resolve) => installer.onExit((exit) => resolve(exit.exitCode)));
-    await waitFor(() => installed.includes("[y/N]"), { label: "desk install's question", timeoutMs: 30_000 });
-    installer.write("y\r");
-    const installCode = await installExit;
-    await saveResult("desk-install", { code: installCode, output: installed.replace(/\r/g, "") });
-    if (installCode !== 0) throw new Error(`desk install exited ${installCode}`);
+    const { home, deskHome, desk: runDesk } = await installDesk({ port: PORT, resultTag: "desk" });
 
     // Cold launch: no Chrome, a fresh profile, the installed launcher, as the operator runs desk.
     const launchedAt = Date.now();
-    const launch = await runProgram(join(home, ".local", "bin", "desk"), [], userEnv(home), 90_000);
+    const launch = await runDesk();
     await saveResult("desk-launch-output", launch);
     if (launch.code !== 0) throw new Error(`desk exited ${launch.code}: ${launch.stderr.trim()}`);
 

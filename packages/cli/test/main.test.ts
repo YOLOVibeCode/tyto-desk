@@ -65,10 +65,22 @@ describe("the desk command", () => {
     expect(err).toMatch(/version\.json is missing or damaged/);
   });
 
-  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"]])("desk %s is a usage error (64)", async (...argv) => {
+  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"]])("desk %s is a usage error (64)", async (...argv) => {
     const { code, err } = await desk(argv);
 
     expect(code).toBe(64);
     expect(err).toMatch(/^usage: desk/m);
+  });
+
+  it("desk quit says the Desk Chrome is not running when Desk has no config yet", async () => {
+    expect(await desk(["quit"])).toEqual({ code: 0, out: "The Desk Chrome is not running.\n", err: "" });
+  });
+
+  it("desk quit --all refuses without an interactive terminal (64)", async () => {
+    expect(await desk(["quit", "--all"])).toEqual({
+      code: 64,
+      out: "",
+      err: "desk: desk quit --all needs an interactive terminal to ask you first\n",
+    });
   });
 });

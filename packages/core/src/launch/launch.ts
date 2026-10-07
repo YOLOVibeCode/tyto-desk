@@ -18,6 +18,7 @@ import type { TextFiles } from "../ports/text-files.ts";
 import { prepareFiles } from "./files.ts";
 import { ensurePanel } from "./panel.ts";
 import { pollUntil } from "./poll.ts";
+import { applyChromeSettings } from "./settings.ts";
 
 /** The Desk Chrome's process, profile and host directory, which the config (loaded under the lock) names. */
 export type ChromePorts = { chrome: ChromeProcess; profile: ChromeProfile; hosts: NativeHostDir };
@@ -71,12 +72,13 @@ function major(version: string): number | null {
 }
 
 /**
- * `desk` on a fresh launch (docs/IMPLEMENTATION.md §6.1 steps 1–3, 5–10, 12 and 14; slice 1c). It holds
+ * `desk` on a fresh launch (docs/IMPLEMENTATION.md §6.1 steps 1–3, 5–12 and 14; slices 1c and 3a). It holds
  * `run/launch.lock`, loads or creates the config, checks Chrome's version, and launches only when no Desk Chrome is
  * running (a live singleton, or anything answering on the Desk port, exits 75: reuse is slice 3b). Then it writes the
  * launch files, seeds the first run, starts Chrome with `chromeArgs`, waits for `/json/version`, loads the extension
  * unless Chrome already has the rendered version, waits for the service worker to reach the daemon (waking it with the
- * toolbar action after 5 s), and opens the panel in the last-focused window, waiting for that panel's hello.
+ * toolbar action after 5 s), applies Chrome's settings (background mode off on the first run; §5), and opens the panel
+ * in the last-focused window, waiting for that panel's hello.
  */
 export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<LaunchResult> {
   const startedAt = ports.clock.now();
@@ -123,7 +125,7 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
     });
     if (!prepared.ok) return fail(70, `the installed version's extension is damaged (${input.appDir}); run desk install`);
 
-    await profile.seedFirstRun(FIRST_RUN_PREFS);
+    const firstRun = await profile.seedFirstRun(FIRST_RUN_PREFS);
     const args = chromeArgs({
       chrome: config.chrome,
       userDataDirReal: await ports.files.realPath(config.chrome.userDataDir),
@@ -160,12 +162,15 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       return fail(70, "the Desk extension's service worker did not reach the terminal daemon; run desk doctor");
     }
 
+    const settingsWarning = await applyChromeSettings(session.settings, { firstRun, setContinuePref: config.chrome.setContinuePref });
+
     const panel = await ensurePanel({ bridge: ports.bridge, panels: session.panels, daemon: ports.daemon, clock: ports.clock, extensionId: expectedId });
     if (!panel.ok) return fail(70, panel.message);
 
     const seconds = ((ports.clock.now() - startedAt) / 1000).toFixed(1);
     const ready = `Desk ready (port ${config.chrome.port}, guarded ${config.gateway.port}, Chrome ${chromeVersion}) in ${seconds} s`;
-    return { ok: true, message: panel.createdWindow ? `${ready}. Cmd+Shift+T reopens the window you closed` : ready };
+    const message = panel.createdWindow ? `${ready}. Cmd+Shift+T reopens the window you closed` : ready;
+    return { ok: true, message: settingsWarning === null ? message : `${message}. ${settingsWarning}` };
   } finally {
     session?.close();
     await lock.release();

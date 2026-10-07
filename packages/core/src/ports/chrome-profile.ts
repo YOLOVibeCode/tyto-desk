@@ -2,6 +2,8 @@
 export interface ChromeProfile {
   /** `SingletonLock`'s `<host>-<pid>`, or `null` when there is none. */
   singleton(): Promise<{ host: string; pid: number } | null>;
+  /** The value at a dotted path in `Local State` (`browser.confirm_to_quit`); `undefined` when it or the file is missing. */
+  localStatePref(path: string): Promise<unknown>;
   /** Writes the first-run prefs as `Default/Preferences`; `false`, writing nothing, when that file exists. */
   seedFirstRun(prefs: Readonly<Record<string, unknown>>): Promise<boolean>;
 }

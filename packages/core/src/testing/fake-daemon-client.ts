@@ -1,4 +1,4 @@
-import type { DaemonClient, DaemonOpen, DaemonRequest } from "../ports/daemon-client.ts";
+import type { DaemonClient, DaemonNotice, DaemonOpen, DaemonRequest } from "../ports/daemon-client.ts";
 import type { DaemonMessage } from "../protocol/messages.ts";
 
 /**
@@ -11,6 +11,7 @@ export class FakeDaemonClient implements DaemonClient {
   swConnects = 0;
   panels: number[] = [];
   readonly requests: DaemonRequest[] = [];
+  readonly notices: DaemonNotice[] = [];
   extAnswer: (request: DaemonRequest) => DaemonMessage = () => ({ type: "error", code: "E_NOEXT", message: "the Desk extension is not connected" });
   /** Runs before each request is answered, with how many lists were asked so far: the test's daemon acts here. */
   onRequest: (request: DaemonRequest, lists: number) => void = () => undefined;
@@ -42,6 +43,10 @@ export class FakeDaemonClient implements DaemonClient {
             };
           }
           return this.extAnswer(message);
+        },
+        notify: async (message) => {
+          this.notices.push(message);
+          this.log.push(`daemon.${message.type} ${message.mode}`);
         },
         close: () => undefined,
       },

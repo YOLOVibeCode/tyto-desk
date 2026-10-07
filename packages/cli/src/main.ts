@@ -6,6 +6,7 @@ import { runHost } from "@desk/nmhost";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
 import { TtyPrompter } from "./prompter.ts";
+import { quitCommand } from "./quit.ts";
 
 export type MainInput = {
   argv: readonly string[];
@@ -22,6 +23,7 @@ export type MainInput = {
 const USAGE = [
   "usage: desk                       start the Desk Chrome with the terminal panel",
   "       desk --version [--json]    this version, its channel, commit and build time",
+  "       desk quit [--all]          close the Desk Chrome; --all also stops the terminal daemon and desk watch",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -79,6 +81,19 @@ export async function main(input: MainInput): Promise<number> {
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "quit") {
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--all")) return usage();
+      const result = await quitCommand({
+        deskHome,
+        version: version.info.version,
+        all: rest[0] === "--all",
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      await result.finish?.();
       return result.code;
     }
     if (command === undefined) {

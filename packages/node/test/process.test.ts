@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, SystemClock } from "../src/index.ts";
+import { CryptoRandom, NodeDetachedSpawner, NodeLoginShell, NodeProcessInfo, NodeProcessSignals, SystemClock } from "../src/index.ts";
 import { fakeExecutable } from "../../../test/fixtures/fake-exec.ts";
 
 /** The file's text once it exists, polled every 20 ms for at most `budgetMs`. */
@@ -78,6 +78,30 @@ describe("process adapters", () => {
 
     expect(started).not.toBeNull();
     expect(Math.abs((started ?? 0) - (Date.now() - process.uptime() * 1000))).toBeLessThan(2_000);
+  });
+
+  it("process signals end a process with SIGTERM", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    await once(child, "spawn");
+    const exited = once(child, "exit");
+
+    expect(await new NodeProcessSignals().terminate(child.pid ?? -1)).toBe(true);
+    expect((await exited)[1]).toBe("SIGTERM");
+  });
+
+  it.each([
+    ["pid 1", () => 1],
+    ["its own pid", () => process.pid],
+    ["a pid that is not a positive integer", () => 0],
+  ])("process signals refuse %s and send nothing", async (_, pid) => {
+    expect(await new NodeProcessSignals().terminate(pid())).toBe(false);
+  });
+
+  it("process signals report a process that is already gone", async () => {
+    const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    await once(child, "exit");
+
+    expect(await new NodeProcessSignals().terminate(child.pid ?? -1)).toBe(false);
   });
 
   it("the login shell is the account's passwd shell", async () => {

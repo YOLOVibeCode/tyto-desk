@@ -7,7 +7,7 @@ function errorCode(err: unknown): string | undefined {
   return err instanceof Error && "code" in err && typeof err.code === "string" ? err.code : undefined;
 }
 
-/** The Desk profile's SingletonLock and its first-run seed (docs/IMPLEMENTATION.md §3, §5). */
+/** The Desk profile's SingletonLock, its Local State, and its first-run seed (docs/IMPLEMENTATION.md §3, §5). */
 export class NodeChromeProfile implements ChromeProfile {
   private readonly userDataDir: string;
 
@@ -28,6 +28,24 @@ export class NodeChromeProfile implements ChromeProfile {
     const match = /^(.+)-(\d+)$/.exec(target);
     if (match === null || match[1] === undefined) return null;
     return { host: match[1], pid: Number(match[2]) };
+  }
+
+  async localStatePref(path: string): Promise<unknown> {
+    const file = join(this.userDataDir, "Local State");
+    await assertPathAllowed(file);
+    const text = await readIfExists(file);
+    if (text === null) return undefined;
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+    for (const key of path.split(".")) {
+      if (typeof value !== "object" || value === null || !Object.hasOwn(value, key)) return undefined;
+      value = (value as Record<string, unknown>)[key];
+    }
+    return value;
   }
 
   async seedFirstRun(prefs: Readonly<Record<string, unknown>>): Promise<boolean> {

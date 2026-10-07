@@ -7,6 +7,7 @@ import {
   parseDaemonMessage,
   type DaemonClient,
   type DaemonMessage,
+  type DaemonNotice,
   type DaemonOpen,
   type DaemonRequest,
 } from "@desk/core";
@@ -126,6 +127,15 @@ export class UnixDaemonClient implements DaemonClient {
               resolve(reply);
             });
             send({ ...message, id });
+          }),
+        notify: (message: DaemonNotice) =>
+          new Promise<void>((resolve) => {
+            const line = encodeNdjsonLine(encoder.encode(JSON.stringify(message)));
+            if (socket.destroyed || !line.ok) {
+              resolve();
+              return;
+            }
+            socket.write(line.line, () => resolve());
           }),
         close: () => {
           socket.end();

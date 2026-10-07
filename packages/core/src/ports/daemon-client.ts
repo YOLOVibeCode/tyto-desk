@@ -3,10 +3,15 @@ import type { DaemonMessage, ExtOp } from "../protocol/messages.ts";
 /** A request the CLI and `desk watch` make of the daemon; the adapter gives it an id and matches the reply. */
 export type DaemonRequest = { type: "list" } | { type: "ext.call"; op: ExtOp; args?: unknown };
 
+/** A message the daemon acts on without a reply: `shutdown` ends the daemon, and with it the connection. */
+export type DaemonNotice = { type: "shutdown"; mode: "stop" | "restart" };
+
 /** An open connection to the daemon, after hello. */
 export type DaemonSession = {
   /** The daemon's reply (or its error), or `null` when the connection ended or the reply did not come in time. */
   request(message: DaemonRequest): Promise<DaemonMessage | null>;
+  /** Sends the notice and resolves once it is written, never waiting for an answer. */
+  notify(message: DaemonNotice): Promise<void>;
   close(): void;
 };
 

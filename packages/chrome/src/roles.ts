@@ -1,7 +1,8 @@
-import type { BrowserConnector, BrowserSession, DeskExtension, PanelOpener } from "@desk/core";
+import type { BrowserConnector, BrowserLifecycle, BrowserSession, DeskExtension, PanelOpener } from "@desk/core";
 import { assertPortAllowed } from "@desk/node";
 import { CdpConnection, openWebSocket } from "./cdp.ts";
 import { browserEndpointPort } from "./endpoint.ts";
+import { CdpChromeSettings } from "./settings.ts";
 
 const LOAD_UNPACKED_MS = 10_000;
 
@@ -78,6 +79,20 @@ export class CdpPanelOpener implements PanelOpener {
   }
 }
 
+/** Ends the Desk Chrome with `Browser.close` (§6.3), never a signal; Chrome may drop the connection before it answers. */
+export class CdpBrowserLifecycle implements BrowserLifecycle {
+  private readonly cdp: CdpConnection;
+
+  constructor(cdp: CdpConnection) {
+    this.cdp = cdp;
+  }
+
+  async close(): Promise<boolean> {
+    const answer = await this.cdp.send("Browser.close");
+    return answer.ok || answer.reason === "closed";
+  }
+}
+
 /**
  * Connects to the Desk Chrome's browser WebSocket and hands out the role adapters over that one session. It takes only
  * Chrome's browser endpoint on 127.0.0.1, and under Vitest the guard refuses a reserved port before any connection.
@@ -90,6 +105,15 @@ export class CdpBrowserConnector implements BrowserConnector {
     const transport = await openWebSocket(wsUrl);
     if (transport === null) return { ok: false };
     const cdp = new CdpConnection(transport);
-    return { ok: true, session: { extension: new CdpDeskExtension(cdp), panels: new CdpPanelOpener(cdp), close: () => cdp.close() } };
+    return {
+      ok: true,
+      session: {
+        extension: new CdpDeskExtension(cdp),
+        panels: new CdpPanelOpener(cdp),
+        settings: new CdpChromeSettings(cdp),
+        lifecycle: new CdpBrowserLifecycle(cdp),
+        close: () => cdp.close(),
+      },
+    };
   }
 }
