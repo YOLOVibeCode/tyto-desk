@@ -49,6 +49,8 @@ const POLL_MS = 100;
 const PANEL_SETTLE_MS = 1_000;
 /** How long a crashed panel's host connection gets to leave the daemon's list. */
 const CRASH_SETTLE_MS = 5_000;
+/** How often the watch checks that the extension's service worker is connected. */
+const HEALTH_MS = 2_000;
 /** How long an automatically opened panel gets to say hello before the watch gives the keyboard back once more. */
 const PANEL_HELLO_MS = 5_000;
 
@@ -118,6 +120,9 @@ export class ChromeWatch {
   /** The windows whose panel the daemon lists, refreshed after the panels change. */
   private panelWindows = new Set<number>();
   private panelEpoch = 0;
+  /** While Chrome's return or an extension recovery runs, the health check waits. */
+  private returning = false;
+  private recovering = false;
 
   constructor(ports: WatchPorts, input: WatchInput) {
     this.ports = ports;
@@ -127,6 +132,7 @@ export class ChromeWatch {
   start(): void {
     void this.follow().catch((err: unknown) => this.warn(err));
     void this.idle().catch((err: unknown) => this.warn(err));
+    void this.health().catch((err: unknown) => this.warn(err));
   }
 
   stop(): void {
@@ -158,7 +164,12 @@ export class ChromeWatch {
         continue;
       }
       const id = browserIdOf(version.wsUrl);
-      if (browserId !== null && id !== browserId) await this.returned(version.wsUrl, panelWasOpen);
+      if (browserId !== null && id !== browserId) {
+        this.returning = true;
+        await this.returned(version.wsUrl, panelWasOpen).finally(() => {
+          this.returning = false;
+        });
+      }
       const panels = new PanelPresence();
       const followed = await this.ports.targets.follow(version.wsUrl, (event) => this.event(event, panels));
       if (followed === null) {
@@ -194,7 +205,7 @@ export class ChromeWatch {
         void this.notify({ type: "alert", kind: "terminal-attached" });
         return;
       case "panel-crashed":
-        void this.reopenCrashed(new Set(this.panelWindows)).catch((err: unknown) => this.warn(err));
+        void this.recover(new Set(this.panelWindows), "panel-crashed").catch((err: unknown) => this.warn(err));
         return;
       default: {
         const never: never = event;
@@ -356,48 +367,85 @@ export class ChromeWatch {
   }
 
   /**
-   * A crashed panel is closed by Chrome, and CDP names no window for a side panel: the window is the one whose panel the
-   * daemon listed before the crash (or still lists as it arrives) and no longer lists once the crashed panel's
-   * connection is gone. When none can be named, the last-focused window gets the panel if no window shows one. A panel
-   * crash takes the extension's renderer, and with it the service worker, which nothing restarts: the extension is
-   * loaded again first, so the worker can make the reopened panel `focus=0`.
+   * The extension's renderer died (a panel crashed, which takes the service worker with it, or the worker is gone for two
+   * health checks while Chrome runs) and nothing restarts it. Under `run/launch.lock`, so a `desk` that reloads the
+   * extension finishes first: the extension is loaded again when the worker is gone, and a panel is reopened, without
+   * focus, in each window whose panel the daemon listed before and lists no more (CDP names no window for a side panel),
+   * unless the window shows one now. A crashed panel whose window nobody can name goes to the last-focused window when
+   * no window shows a panel.
    */
-  private async reopenCrashed(known: ReadonlySet<number>): Promise<void> {
-    const before = new Set([...known, ...((await this.listedPanelWindows()) ?? [])]);
-    let crashed =
-      (await pollUntil(this.ports.clock, CRASH_SETTLE_MS, POLL_MS * 2, async () => {
-        const after = await this.listedPanelWindows();
-        const lost = after === null ? [] : [...before].filter((windowId) => !after.has(windowId));
-        return lost.length > 0 ? lost : null;
-      })) ?? [];
-    const wsUrl = this.wsUrl;
-    if (wsUrl === null) return;
-    const connected = await this.ports.browser.connect(wsUrl);
-    if (!connected.ok) return;
+  private async recover(known: ReadonlySet<number>, reason: "panel-crashed" | "worker-gone"): Promise<void> {
+    if (this.recovering) return;
+    this.recovering = true;
     try {
-      let extension: "loaded" | "kept" | "refused" = "kept";
-      let worker = await this.workerConnected();
-      if (!worker) {
-        extension = await this.ensureExtension(connected.session, true);
-        worker = (await pollUntil(this.ports.clock, WORKER_MS, POLL_MS, async () => ((await this.workerConnected()) ? true : null))) !== null;
-      }
-      this.ports.log.write({ event: "panel-crashed", windows: before.size, lost: crashed.length, extension });
-      if (!worker) {
-        this.ports.log.write({ event: "panel-not-reopened", step: "no-focus-guard" });
-        return;
-      }
-      if (crashed.length === 0) {
+      const before = new Set([...known, ...((await this.listedPanelWindows()) ?? [])]);
+      const lock = await pollUntil(this.ports.clock, LAUNCH_LOCK_MS, POLL_MS, async () => {
+        const attempt = await this.ports.lock.acquire("launch");
+        return attempt.ok ? attempt : null;
+      });
+      if (lock === null) return;
+      let session: BrowserSession | null = null;
+      try {
+        const wsUrl = this.wsUrl;
+        if (wsUrl === null) return;
+        const connected = await this.ports.browser.connect(wsUrl);
+        if (!connected.ok) return;
+        session = connected.session;
+        let extension: "loaded" | "kept" | "refused" = "kept";
+        let worker = await this.workerConnected();
+        if (!worker) {
+          extension = await this.ensureExtension(session, true);
+          worker = (await pollUntil(this.ports.clock, WORKER_MS, POLL_MS, async () => ((await this.workerConnected()) ? true : null))) !== null;
+        }
+        // A crashed panel's own connection leaves the daemon a moment after the crash.
+        let lost =
+          (await pollUntil(this.ports.clock, reason === "panel-crashed" && extension === "kept" ? CRASH_SETTLE_MS : 0, POLL_MS * 2, async () => {
+            const after = await this.listedPanelWindows();
+            const gone = after === null ? [] : [...before].filter((windowId) => !after.has(windowId));
+            return gone.length > 0 ? gone : null;
+          })) ?? [];
+        this.ports.log.write({ event: "extension-recovered", reason, windows: before.size, lost: lost.length, extension });
+        if (!worker) {
+          if (before.size > 0) this.ports.log.write({ event: "panel-not-reopened", step: "no-focus-guard" });
+          return;
+        }
         const windows = await this.ports.bridge.windows();
-        const target = windows?.find((entry) => entry.lastFocused) ?? windows?.find((entry) => entry.focused) ?? windows?.[0];
-        if (windows === null || windows.some((entry) => entry.panelOpen) || target === undefined) return;
-        crashed = [target.id];
-      }
-      for (const windowId of crashed) {
-        const opened = await this.openWithoutFocus(connected.session, windowId, true);
-        this.ports.log.write(opened === "opened" ? { event: "panel-reopened", reason: "crashed" } : { event: "panel-not-reopened", step: opened });
+        if (windows === null) return;
+        lost = lost.filter((windowId) => windows.find((entry) => entry.id === windowId)?.panelOpen !== true);
+        if (lost.length === 0 && reason === "panel-crashed" && before.size === 0 && !windows.some((entry) => entry.panelOpen)) {
+          const target = windows.find((entry) => entry.lastFocused) ?? windows.find((entry) => entry.focused) ?? windows[0];
+          if (target !== undefined) lost = [target.id];
+        }
+        for (const windowId of lost) {
+          const opened = await this.openWithoutFocus(session, windowId, true);
+          this.ports.log.write(opened === "opened" ? { event: "panel-reopened", reason: "crashed" } : { event: "panel-not-reopened", step: opened });
+        }
+      } finally {
+        session?.close();
+        await lock.release();
       }
     } finally {
-      connected.session.close();
+      this.recovering = false;
+    }
+  }
+
+  /**
+   * Every 2 s while Chrome is followed: a service worker that is gone for two checks in a row means the extension's
+   * renderer died (Chrome does not always report a side panel's crash), so the watch recovers it.
+   */
+  private async health(): Promise<void> {
+    let misses = 0;
+    while (!this.stopped) {
+      await this.ports.clock.sleep(HEALTH_MS);
+      if (this.stopped) return;
+      if (this.wsUrl === null || this.returning || this.recovering) {
+        misses = 0;
+        continue;
+      }
+      misses = (await this.workerConnected()) ? 0 : misses + 1;
+      if (misses < 2) continue;
+      misses = 0;
+      await this.recover(new Set(this.panelWindows), "worker-gone").catch((err: unknown) => this.warn(err));
     }
   }
 

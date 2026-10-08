@@ -24,6 +24,6 @@ export type LogEvent =
    * A Desk panel crashed: how many windows the daemon had panels in, how many lost theirs, and whether the extension was
    * loaded again (a panel crash takes the extension's renderer, and with it the service worker).
    */
-  | { event: "panel-crashed"; windows: number; lost: number; extension: "loaded" | "kept" | "refused" }
+  | { event: "extension-recovered"; reason: "panel-crashed" | "worker-gone"; windows: number; lost: number; extension: "loaded" | "kept" | "refused" }
   | { event: "panel-reopened"; reason: "crashed" }
   | { event: "panel-not-reopened"; step: "no-tab" | "no-focus-guard" | "action-refused" };

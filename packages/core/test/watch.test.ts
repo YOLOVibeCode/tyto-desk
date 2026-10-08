@@ -405,7 +405,7 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
     watch.targets.emit({ type: "panel-crashed" });
     await pass(watch.clock, 6_000);
 
-    expect(watch.sink.events).toContainEqual({ event: "panel-crashed", windows: 0, lost: 0, extension: "kept" });
+    expect(watch.sink.events).toContainEqual({ event: "extension-recovered", reason: "panel-crashed", windows: 0, lost: 0, extension: "kept" });
     expect(watch.bridge.autoOpens).toEqual([{ windowId: 2, close: true }]);
   });
 
@@ -440,7 +440,7 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
     expect(watch.extension.loads).toEqual([`${deskHome}/extension`]);
     expect(watch.log.indexOf("extension.load")).toBeLessThan(watch.log.indexOf("panels.open tab-2"));
     expect(watch.bridge.autoOpens).toEqual([{ windowId: 2, close: true }]);
-    expect(watch.sink.events).toContainEqual({ event: "panel-crashed", windows: 1, lost: 1, extension: "loaded" });
+    expect(watch.sink.events).toContainEqual({ event: "extension-recovered", reason: "panel-crashed", windows: 1, lost: 1, extension: "loaded" });
   });
 
   it("desk watch names a crashed panel's window from the daemon's list as the crash arrives", async () => {
@@ -475,5 +475,39 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
 
     expect(early).toBe(0);
     expect(watch.panels.opened).toEqual([{ extensionId: DESK_EXTENSION_ID, tab: "tab-2" }]);
+  });
+
+  it("desk watch loads the extension again when its worker is gone for two checks while Chrome runs, and reopens the panels that went with it", async () => {
+    const watch = setup();
+    await settle();
+    watch.daemon.panels = [2];
+    watch.targets.emit({ type: "panels", open: 1 });
+    await pass(watch.clock, 1_000);
+    const load = watch.extension.load.bind(watch.extension);
+    watch.extension.load = async (path) => {
+      const loaded = await load(path);
+      watch.daemon.swConnected = true;
+      return loaded;
+    };
+
+    watch.daemon.swConnected = false;
+    watch.daemon.panels = [];
+    await pass(watch.clock, 8_000);
+
+    expect(watch.extension.loads).toEqual([`${deskHome}/extension`]);
+    expect(watch.bridge.autoOpens).toEqual([{ windowId: 2, close: true }]);
+    expect(watch.sink.events).toContainEqual({ event: "extension-recovered", reason: "worker-gone", windows: 1, lost: 1, extension: "loaded" });
+  });
+
+  it("desk watch leaves a worker that is back by the next check alone", async () => {
+    const watch = setup();
+    await settle();
+
+    watch.daemon.swConnected = false;
+    await pass(watch.clock, 2_000);
+    watch.daemon.swConnected = true;
+    await pass(watch.clock, 6_000);
+
+    expect(watch.extension.loads).toEqual([]);
   });
 });

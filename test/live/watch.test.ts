@@ -145,8 +145,17 @@ describe("desk watch (slice 3b) in the live container", () => {
     "attaching to the panel target raises the banner",
     async () => {
       const cdp = await connect();
-      const panel = await waitFor(() => panelTarget(cdp), { label: "the panel" });
-      const session = await attach(cdp, panel.targetId);
+      // A panel that answers: a crashed one may still be listed for a moment.
+      const session = await waitFor(
+        async () => {
+          for (const target of (await targets(cdp)).filter((t) => t.url.startsWith(PANEL_URL))) {
+            const candidate = await attach(cdp, target.targetId);
+            if (await evaluate<boolean>(cdp, candidate, "typeof deskTest === 'object'", 2_000).catch(() => false)) return candidate;
+          }
+          return null;
+        },
+        { label: "a panel that answers", timeoutMs: 20_000 },
+      );
       const alert = await waitFor(
         async () => {
           const text = await evaluate<string>(cdp, session, "typeof deskTest === 'object' ? deskTest.alert() : ''");
