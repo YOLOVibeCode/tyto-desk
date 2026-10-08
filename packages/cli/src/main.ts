@@ -7,6 +7,7 @@ import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
 import { doctorCommand } from "./doctor.ts";
 import { uninstallCommand } from "./uninstall.ts";
+import { updateCommand } from "./update.ts";
 import { versionsCommand } from "./versions.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
@@ -39,6 +40,7 @@ const USAGE = [
   "       desk doctor [--fix]        what is wrong and how to fix it; --fix rewrites only what lives in ~/.desk",
   "       desk uninstall [--profile] remove what install added, after you confirm; --profile also the Desk profile",
   "       desk versions | desk use <version> | desk rollback   the installed versions, and switching between them",
+  "       desk update [--channel stable|edge] [--version X.Y.Z] [--check]   install a newer release after checking its provenance",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
@@ -98,6 +100,38 @@ export async function main(input: MainInput): Promise<number> {
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         channel: version.info.channel,
         env: input.env,
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "update") {
+      let channel: "stable" | "edge" | undefined;
+      let wanted: string | undefined;
+      let check = false;
+      for (let i = 0; i < rest.length; i += 1) {
+        const flag = rest[i];
+        const value = rest[i + 1];
+        if (flag === "--check" && !check) check = true;
+        else if (flag === "--channel" && channel === undefined && (value === "stable" || value === "edge")) {
+          channel = value;
+          i += 1;
+        } else if (flag === "--version" && wanted === undefined && value !== undefined && /^\d+\.\d+\.\d+$/.test(value)) {
+          wanted = value;
+          i += 1;
+        } else return usage();
+      }
+      const result = await updateCommand({
+        env: input.env,
+        platform: input.platform,
+        arch: process.arch,
+        home,
+        deskHome,
+        info: version.info,
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
+        ...(channel === undefined ? {} : { channel }),
+        ...(wanted === undefined ? {} : { version: wanted }),
+        check,
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);

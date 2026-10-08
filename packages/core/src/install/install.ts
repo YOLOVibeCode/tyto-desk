@@ -32,6 +32,10 @@ export type InstallInput = {
   provenance: string;
   /** Now, as UTC ISO 8601. */
   now: string;
+  /** What `desk update` asked for: the runtime's version.json must name exactly this (§23.5 rule 2). */
+  expected?: { version: string; channel: string; commit: string };
+  /** The prompt names a downgrade as one (§23.5 rule 9). */
+  downgrade?: boolean;
 };
 
 /** §6.5: 64 needs an interactive terminal · 65 a check failed · 75 another install runs · 77 the operator declined. */
@@ -74,6 +78,15 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
       return { ok: false, code: 65, message: `the runtime at ${input.from} does not match its files.sha256 (${staged.reason}); nothing was installed` };
     }
     const info = parseVersionInfo(staged.versionJson);
+    const expected = input.expected;
+    if (info !== null && expected !== undefined && (info.version !== expected.version || info.channel !== expected.channel || info.commit !== expected.commit)) {
+      await ports.versions.discard(staged.staging);
+      return {
+        ok: false,
+        code: 65,
+        message: `the download's version.json names ${info.version} (${info.channel}, ${info.commit}), not ${expected.version} (${expected.channel}, ${expected.commit}); nothing was installed`,
+      };
+    }
     const verified = info !== null && (input.platform !== "darwin" || (await ports.signing.verify(`${staged.staging}/Desk Terminal.app`)));
     if (info === null || !verified) {
       await ports.versions.discard(staged.staging);
@@ -101,7 +114,7 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
     const alreadyCurrent = before === info.version;
     if (!alreadyCurrent) {
       const consent = await ports.prompter.confirm(
-        `Make Desk ${info.version} the current version? Running shells and tmux sessions keep running; the next desk loads it.`,
+        `${input.downgrade === true ? "This is a downgrade. " : ""}Make Desk ${info.version} the current version? Running shells and tmux sessions keep running; the next desk loads it.`,
       );
       if (!consent.ok) {
         return { ok: false, code: 64, message: `Desk ${info.version} is installed; making it current needs an interactive terminal` };

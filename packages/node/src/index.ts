@@ -19,3 +19,5 @@ export { NodeTmux, findTmux } from "./tmux.ts";
 export { NodeLaunchAgents } from "./launch-agents.ts";
 export { NodePathModes } from "./path-modes.ts";
 export { NodeTreeRemover } from "./tree-remover.ts";
+export { TarArchive } from "./archive.ts";
+export { NodeFileDigest } from "./file-digest.ts";

@@ -104,17 +104,21 @@ export async function installDesk(options: { port: number; resultTag: string }):
   };
 }
 
-/** This checkout packed as a linux dev runtime of `version`, with the test hooks. */
-async function packVersion(version: string, tag: string): Promise<{ dir: string }> {
+/** This checkout packed as a linux runtime of `version` (a dev build unless told), with the test hooks. */
+export async function packVersion(
+  version: string,
+  tag: string,
+  options: { channel?: "dev" | "stable"; commit?: string; tarball?: boolean } = {},
+): Promise<{ dir: string; tarball: string | null }> {
   const out = await mkdtemp(join(tmpdir(), `${tag}-dist-`));
   const packed = await packRuntime({
     root: repo,
     out,
     version: {
       version,
-      channel: "dev",
-      branch: "live",
-      commit: "0".repeat(40),
+      channel: options.channel ?? "dev",
+      branch: options.channel === "stable" ? null : "live",
+      commit: options.commit ?? "0".repeat(40),
       dirty: false,
       builtAt: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
       node: "26.10.0",
@@ -125,9 +129,9 @@ async function packVersion(version: string, tag: string): Promise<{ dir: string 
     node: process.execPath,
     runtime: await readNodeRuntime(repo),
     signing: new NodeCodeSigning("/nonexistent/codesign"),
-    tarball: false,
+    tarball: options.tarball ?? false,
     testHooks: true,
   });
   if (!packed.ok) throw new Error(`pack failed: ${packed.reason}`);
-  return { dir: packed.dir };
+  return { dir: packed.dir, tarball: packed.tarball };
 }

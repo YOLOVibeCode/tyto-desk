@@ -47,3 +47,7 @@ export type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "./t
 export type { TextFiles } from "./text-files.ts";
 export type { TreeRemover } from "./tree-remover.ts";
 export type { Tmux } from "./tmux.ts";
+export type { Archive } from "./archive.ts";
+export type { FileDigest } from "./file-digest.ts";
+export type { GhStatus, Provenance } from "./provenance.ts";
+export type { ReleaseFeed, ReleaseRef, Unreachable } from "./release-feed.ts";

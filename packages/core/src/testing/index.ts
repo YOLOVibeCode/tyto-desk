@@ -44,3 +44,7 @@ export { MemoryNativeHostDir } from "./memory-native-host-dir.ts";
 export { MemoryTextFiles } from "./memory-text-files.ts";
 export { ScriptedPrompter } from "./scripted-prompter.ts";
 export { SeqRandom } from "./seq-random.ts";
+export { FakeArchive } from "./fake-archive.ts";
+export { FakeFileDigest } from "./fake-file-digest.ts";
+export { FakeProvenance } from "./fake-provenance.ts";
+export { FakeReleaseFeed } from "./fake-release-feed.ts";

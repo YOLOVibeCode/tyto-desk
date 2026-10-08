@@ -183,3 +183,4 @@ export {
 export { Backoff } from "./time/backoff.ts";
 export { parseVersionInfo, versionLine, type VersionInfo } from "./version/version-info.ts";
 export { WorkerController, type WorkerPorts } from "./worker/worker-controller.ts";
+export { parseSha256Sums, update, type UpdateInput, type UpdatePorts, type UpdateResult } from "./update/update.ts";
