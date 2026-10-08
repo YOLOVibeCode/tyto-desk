@@ -11,7 +11,7 @@ const REPO = "YOLOVibeCode/tyto-desk";
 const COMMIT = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
 const TARBALL = "desk-0.4.0-darwin-arm64.tar.gz";
 // gzip: GNU tar runs it for -z (macOS's bsdtar decompresses itself); ln: the stub gh's link case.
-const TOOLS = ["awk", "basename", "cat", "chmod", "cp", "grep", "gzip", "head", "ln", "mkdir", "mktemp", "od", "rm", "shasum", "tr"];
+const TOOLS = ["awk", "basename", "cat", "chmod", "cp", "grep", "gzip", "head", "ln", "mkdir", "mktemp", "od", "rm", "shasum", "tr", "wc"];
 const MAIN = "9".repeat(40);
 const TAG_OBJECT = "7".repeat(40);
 
@@ -249,40 +249,36 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
     expect(named(ran, "gh").filter((argv) => argv[0] === "api" || argv[0] === "release")).toEqual([]);
   });
 
-  it.each<[string, { env?: Record<string, string>; assets?: string }]>([
-    ["the commit is not on main", { env: { STUB_COMPARE: "diverged" } }],
-    ["the commit is ahead of main", { env: { STUB_COMPARE: "behind" } }],
-    ["GitHub calls the commits identical but main's head is another", { env: { STUB_COMPARE: "identical" } }],
-    ["the tag peels to a tag a third time", { env: { STUB_TAG_REF: `tag ${TAG_OBJECT}`, STUB_PEELED: `tag ${TAG_OBJECT}` } }],
-    ["the tag's ref names more than a commit", { env: { STUB_TAG_REF: `commit ${COMMIT}0` } }],
-    ["SHA256SUMS names the tarball again on an indented line", { assets: "two-sums-indented" }],
-    ["the sha256 differs from SHA256SUMS", { assets: "wrong-sum" }],
-    ["SHA256SUMS names the tarball twice", { assets: "two-sums" }],
-    ["SHA256SUMS names the tarball twice, the right digest last", { assets: "two-sums-right-last" }],
-    ["GitHub names no head for main", { env: { STUB_MAIN: "" } }],
-    ["verify-asset refuses it", { env: { STUB_VERIFY_ASSET: "1" } }],
-    ["its provenance is refused", { env: { STUB_ATTEST: "1" } }],
-    ["the tag's ref names no commit", { env: { STUB_TAG_REF: "tree " + "1".repeat(40) } }],
-    ["the download is not gzip", { assets: "not-gzip" }],
-  ])("install.sh verifies the tarball before it extracts anything: when %s it exits 65 and extracts nothing", async (_, input) => {
+  const zeros = "0".repeat(64);
+  it.each<[string, { env?: Record<string, string>; sums?: (sha: string) => string; raw?: string }, "download" | "tar"]>([
+    ["the commit is not on main", { env: { STUB_COMPARE: "diverged" } }, "download"],
+    ["the commit is ahead of main", { env: { STUB_COMPARE: "behind" } }, "download"],
+    ["GitHub calls the commits identical but main's head is another", { env: { STUB_COMPARE: "identical" } }, "download"],
+    ["the tag peels to a tag a third time", { env: { STUB_TAG_REF: `tag ${TAG_OBJECT}`, STUB_PEELED: `tag ${TAG_OBJECT}` } }, "download"],
+    ["the tag's ref names more than a commit", { env: { STUB_TAG_REF: `commit ${COMMIT}0` } }, "download"],
+    ["the tag's ref names no commit", { env: { STUB_TAG_REF: "tree " + "1".repeat(40) } }, "download"],
+    ["GitHub names no head for main", { env: { STUB_MAIN: "" } }, "download"],
+    ["the sha256 differs from SHA256SUMS", { sums: () => `${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball twice", { sums: (sha) => `${sha}  ${TARBALL}\n${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball twice, the right digest last", { sums: (sha) => `${zeros}  ${TARBALL}\n${sha}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball again on an indented line", { sums: (sha) => `${sha}  ${TARBALL}\n  ${zeros}  ${TARBALL}\r\n` }, "tar"],
+    ["SHA256SUMS holds a byte-order mark, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\ufeff${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS holds a no-break space, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\u00a0${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS holds a NUL", { sums: (sha) => `${sha}  ${TARBALL}\u0000\n` }, "tar"],
+    ["SHA256SUMS is longer than 4 KiB", { sums: (sha) => `${sha}  ${TARBALL}\n${" ".repeat(5000)}\n` }, "tar"],
+    ["verify-asset refuses it", { env: { STUB_VERIFY_ASSET: "1" } }, "tar"],
+    ["its provenance is refused", { env: { STUB_ATTEST: "1" } }, "tar"],
+    ["the download is not gzip", { raw: "PK\u0003\u0004 a zip, not a gzip" }, "tar"],
+  ])("install.sh verifies before it reads anything it downloaded: when %s it exits 65, and nothing reaches tar", async (_, input, before) => {
     const assets =
-      input.assets === "wrong-sum"
-        ? await release(RUNTIME, { sums: () => `${"0".repeat(64)}  ${TARBALL}\n` })
-        : input.assets === "two-sums"
-          ? await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${"0".repeat(64)}  ${TARBALL}\n` })
-          : input.assets === "two-sums-indented"
-            ? await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n  ${"0".repeat(64)}  ${TARBALL}\r\n` })
-          : input.assets === "two-sums-right-last"
-            ? await release(RUNTIME, { sums: (sha) => `${"0".repeat(64)}  ${TARBALL}\n${sha}  ${TARBALL}\n` })
-          : input.assets === "not-gzip"
-            ? await release(RUNTIME, { raw: "PK\u0003\u0004 a zip, not a gzip" })
-            : undefined;
+      input.sums !== undefined ? await release(RUNTIME, { sums: input.sums }) : input.raw !== undefined ? await release(RUNTIME, { raw: input.raw }) : undefined;
 
     const ran = await run({ ...(input.env === undefined ? {} : { env: input.env }), ...(assets === undefined ? {} : { assets }) });
 
     expect(ran.code).toBe(65);
-    expect(extracted(ran)).toBe(false);
+    expect(named(ran, "tar")).toEqual([]);
     expect(named(ran, "desk-node")).toEqual([]);
+    if (before === "download") expect(named(ran, "gh").filter((argv) => argv[0] === "release" && argv[1] === "download")).toEqual([]);
   });
 
   it.each([
@@ -459,6 +455,46 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
 
     expect(ran.code).toBe(65);
     expect(extracted(ran)).toBe(false);
+  });
+
+  it("install.sh never reports success after a fatal shell error, which bash 3.2 would otherwise exit 0 on", async () => {
+    // BASH_ENV (the operator's environment) makes mkdir a function that reads an unset variable: under set -u that is a
+    // fatal error in the main shell, after a command that succeeded.
+    const env = join(await mkdtemp(join(tmpdir(), "install-sh-env-")), "env.sh");
+    await writeFile(env, 'mkdir() { : "${DESK_TEST_NEVER_SET}"; }\n');
+
+    const ran = await run({ env: { BASH_ENV: env } });
+
+    expect(ran.code).not.toBe(0);
+    expect(named(ran, "desk-node")).toEqual([]);
+  });
+
+  it.each([
+    ["names no member", "STUB_TAR_LIST"],
+    ["shows no entry", "STUB_TAR_VLIST"],
+  ])("install.sh refuses a tarball whose listing %s, and extracts nothing", async (_, variable) => {
+    const list = join(await mkdtemp(join(tmpdir(), "install-sh-list-")), "empty");
+    await writeFile(list, "");
+
+    const ran = await run({ env: { [variable]: list } });
+
+    expect(ran.code).toBe(65);
+    expect(extracted(ran)).toBe(false);
+  });
+
+  it("install.sh refuses a SHA256SUMS line longer than 256 characters before it trims it", async () => {
+    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${"a".repeat(300)}\n` }) });
+
+    expect(ran.code).toBe(65);
+    expect(named(ran, "tar")).toEqual([]);
+  });
+
+  it("install.sh says in one line that no temporary directory could be made", async () => {
+    const ran = await run({ env: { TMPDIR: "/nonexistent-desk-tmp" } });
+
+    expect(ran.stderr.trim().split("\n").filter((line) => !line.startsWith("install.sh: using DESK_GH="))).toEqual([
+      "install.sh: no temporary directory could be made; nothing was installed",
+    ]);
   });
 
   it("install.sh reads a SHA256SUMS whose last line has no newline", async () => {
