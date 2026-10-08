@@ -43,6 +43,19 @@ describe("lint:extension (docs/IMPLEMENTATION.md §9)", () => {
     expect(checkExtensionSource(text, "src/panel.ts")).toEqual([]);
   });
 
+  it.each([
+    ["convertEol true", "new Terminal({ convertEol: true, scrollback: 5000 });"],
+    ["no convertEol", "new Terminal({ scrollback: 5000 });"],
+    ["windowOptions", "new Terminal({ convertEol: false, windowOptions: { getWinTitle: true } });"],
+    ["options it cannot read", "new Terminal(options);"],
+  ])("the panel's xterm keeps convertEol false and windowOptions at their defaults: lint:extension refuses %s", (_label, text) => {
+    expect(checkExtensionSource(text, "src/xterm-view.ts")).toEqual([{ file: "src/xterm-view.ts", line: 1, rule: "xterm options" }]);
+  });
+
+  it("lint:extension accepts an xterm with convertEol false", () => {
+    expect(checkExtensionSource("new Terminal({ convertEol: false, scrollback: 5000 });", "src/xterm-view.ts")).toEqual([]);
+  });
+
   it("lint:extension reports the file and line, never the source", async () => {
     const root = await mkdtemp(join(tmpdir(), "extension-lint-"));
     await mkdir(join(root, "src"), { recursive: true });

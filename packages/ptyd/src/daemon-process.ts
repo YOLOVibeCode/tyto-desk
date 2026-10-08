@@ -106,6 +106,18 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
     mirror: new NodeTerminalMirror(),
     scrollback: startConfig?.terminal.scrollback ?? 5_000,
     closeOnExit: startConfig?.terminal.closeOnExit ?? true,
+    ...(startConfig === null
+      ? {}
+      : {
+          terminal: {
+            fontFamily: startConfig.terminal.fontFamily,
+            fontSize: startConfig.terminal.fontSize,
+            scrollback: startConfig.terminal.scrollback,
+            macOptionIsMeta: startConfig.terminal.macOptionIsMeta,
+            osc52Write: startConfig.terminal.osc52Write,
+            keymap: { ...startConfig.terminal.keymap },
+          },
+        }),
     log: input.log ?? new FileLogSink(join(deskHome, "logs", "ptyd.log")),
     onShutdown: () => {
       void server.close().then(async () => {

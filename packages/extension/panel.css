@@ -64,8 +64,46 @@ body {
   font: 12px -apple-system, "Segoe UI", sans-serif;
 }
 #tabs[hidden],
-#note[hidden] {
+#note[hidden],
+#find[hidden] {
   display: none;
+}
+#find {
+  padding: 4px 6px;
+}
+#find input {
+  width: 100%;
+  box-sizing: border-box;
+  font: 12px -apple-system, "Segoe UI", sans-serif;
+}
+/* The context menu: text buttons in a column, where the pointer was. */
+.menu {
+  position: fixed;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 4px 0;
+  background: var(--desk-background);
+  border: 1px solid var(--desk-divider);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 20%);
+  font: 13px -apple-system, "Segoe UI", sans-serif;
+}
+.menu button {
+  padding: 4px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.menu button:hover:not([disabled]),
+.menu button:focus-visible {
+  background: var(--desk-tab);
+}
+.menu button[disabled] {
+  opacity: 0.4;
 }
 #tabs .tab {
   max-width: 14em;

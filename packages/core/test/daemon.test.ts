@@ -25,12 +25,12 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
   const shutdowns: string[] = [];
   const shells: string[] = [];
   const cwds = new FakeProcessCwd();
-  const daemon = new Daemon({
+  const daemonPorts = {
     spawner,
     clock,
     build: "0.3.0",
     cwds,
-    shellFor: async (pane, cwd): Promise<PaneShell> => {
+    shellFor: async (pane: string, cwd: string | null): Promise<PaneShell> => {
       shells.push(pane);
       return {
         file: "/bin/zsh",
@@ -40,12 +40,13 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
         notice: options.notice ?? null,
       };
     },
-    onShutdown: (mode) => shutdowns.push(mode),
+    onShutdown: (mode: "stop" | "restart") => shutdowns.push(mode),
     layouts,
     log,
     mirror,
     scrollback: 5000,
-  });
+  };
+  const daemon = new Daemon(daemonPorts);
   const connect = (): Peer => {
     const sent: DaemonMessage[] = [];
     const peer = {
@@ -72,7 +73,7 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
     await settle();
     return peer;
   };
-  return { daemon, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client, cwds };
+  return { daemon, daemonPorts, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client, cwds };
 }
 
 /** Lets the daemon's pending promises run. */
@@ -101,6 +102,18 @@ describe("the terminal daemon", () => {
 
     expect(panel.sent[0]).toMatchObject({ type: "hello", layout: saved });
     expect(cli.sent[0]).not.toHaveProperty("layout");
+  });
+
+  it("a panel's hello carries the terminal settings from config.json", async () => {
+    const terminal = { fontFamily: "Menlo", fontSize: 14, scrollback: 5000, macOptionIsMeta: false, osc52Write: false, keymap: { "split-right": "Cmd+Shift+E" } };
+    const daemon = new Daemon({ ...setup().daemonPorts, terminal });
+    const sent: DaemonMessage[] = [];
+    const connection = daemon.connect({ send: (message) => sent.push(message), close: () => undefined });
+
+    connection.receive(JSON.stringify({ type: "hello", vMin: 1, vMax: 1, client: "panel", build: "0.3.0", window: 7 }));
+    await settle();
+
+    expect(sent[0]).toMatchObject({ type: "hello", terminal });
   });
 
   it("open with cwdFrom starts the new shell in the directory of that pane's shell, read from its process", async () => {

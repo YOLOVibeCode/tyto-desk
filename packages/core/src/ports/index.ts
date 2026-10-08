@@ -43,7 +43,7 @@ export type { SidePanelApi } from "./side-panel-api.ts";
 export type { TabTargets } from "./tab-targets.ts";
 export type { FollowedBrowser, TargetWatch, TargetWatchEvent } from "./target-watch.ts";
 export type { MirrorScreen, TerminalMirror } from "./terminal-mirror.ts";
-export type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "./terminal-view.ts";
+export type { BannerAction, KeyInput, MenuItem, TerminalPane, TerminalSettings, TerminalSize, TerminalView } from "./terminal-view.ts";
 export type { TextFiles } from "./text-files.ts";
 export type { TreeRemover } from "./tree-remover.ts";
 export type { Tmux } from "./tmux.ts";
