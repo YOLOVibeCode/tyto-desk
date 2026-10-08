@@ -29,19 +29,19 @@ export async function stampedVersion(input) {
   }
   const facts = await gatherBuildFacts({ root, env: input.env, git, now: input.now ?? (() => new Date()), allowDirty: input.allowDirty, dryRun: false });
   if (facts.problems.length > 0) return { ok: false, reasons: facts.problems };
+  // The pin is read before the build is classified, so a refused build names it with its other refusals, as the stamp does.
+  /** @type {{ ok: true; node: string } | { ok: false; reason: string }} */
+  const pin = await pinnedNode(root).then(
+    (node) => ({ ok: true, node }),
+    (err) => ({ ok: false, reason: `node-pin: ${err instanceof Error ? err.message : String(err)}` }),
+  );
   const build = classifyBuild(facts.input);
   if (!build.ok) {
     const dirty = build.refusals.includes("dirty-tree") && facts.dirtyFiles !== null ? facts.dirtyFiles.map((file) => `uncommitted: ${file}`) : [];
-    return { ok: false, reasons: [...build.refusals.map((refusal) => `${refusal}: ${REFUSAL_TEXT[refusal]}`), ...dirty] };
+    return { ok: false, reasons: [...build.refusals.map((refusal) => `${refusal}: ${REFUSAL_TEXT[refusal]}`), ...(pin.ok ? [] : [pin.reason]), ...dirty] };
   }
-  /** @type {string} */
-  let node;
-  try {
-    node = await pinnedNode(root);
-  } catch (err) {
-    return { ok: false, reasons: [`node-pin: ${err instanceof Error ? err.message : String(err)}`] };
-  }
-  const file = versionFile(facts.input, build, node);
+  if (!pin.ok) return { ok: false, reasons: [pin.reason] };
+  const file = versionFile(facts.input, build, pin.node);
   await writeVersionFile(out, file);
   const version = parseVersionInfo(JSON.stringify(file));
   return version === null ? { ok: false, reasons: ["the stamp wrote a version.json that does not parse"] } : { ok: true, version };

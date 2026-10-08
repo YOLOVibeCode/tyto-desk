@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DESK_COMPAT, type VersionInfo } from "../packages/core/src/index.ts";
 import { stampedVersion } from "../scripts/lib/stamped.mjs";
-import { gitCheckout, gitEnv } from "./delivery/helpers.ts";
+import { fileURLToPath } from "node:url";
+import { gitCheckout, gitEnv, runScript } from "./delivery/helpers.ts";
 
 /** GitHub Actions as `npm run pack` sees it in build-darwin.yml, after the workflow's stamp step. */
 const actions = { ...gitEnv, GITHUB_ACTIONS: "true" };
@@ -72,5 +73,33 @@ describe("the version npm run pack takes (docs/IMPLEMENTATION.md §23.3, D93)", 
     );
 
     expect(await stampedVersion({ root, env: gitEnv, allowDirty: false })).toEqual({ ok: false, reasons: ["node-pin: node-runtime.json is not JSON"] });
+  });
+
+  it("locally a refused build with a refused Node pin names both", async () => {
+    const { root } = await gitCheckout(
+      { "package.json": `${JSON.stringify({ name: "x", version: "0.3" })}\n`, ".gitignore": "dist/\n", "scripts/delivery/node-runtime.json": "not json" },
+      "slice-1c/walking-skeleton",
+    );
+
+    const stamped = await stampedVersion({ root, env: gitEnv, allowDirty: false });
+
+    expect(stamped.ok).toBe(false);
+    expect(stamped.ok ? [] : stamped.reasons).toEqual(expect.arrayContaining([expect.stringMatching(/^bad-base-version: /), "node-pin: node-runtime.json is not JSON"]));
+  });
+
+  it("in GitHub Actions npm run pack refuses a Node pin it cannot trust in one line with 65", async () => {
+    let head = "";
+    const root = await checkoutWith((commit) => {
+      head = commit;
+      return `${JSON.stringify(stampedFor(commit))}\n`;
+    });
+    await mkdir(join(root, "scripts", "delivery"), { recursive: true });
+    await writeFile(join(root, "scripts", "delivery", "node-runtime.json"), "not json");
+
+    const packed = await runScript(fileURLToPath(new URL("../scripts/pack.mjs", import.meta.url)), [], { cwd: root, env: actions });
+
+    expect(head).not.toBe("");
+    expect(packed.code).toBe(65);
+    expect(packed.stderr.trim().split("\n")).toEqual(["pack: the Node pin is refused (node-runtime.json is not JSON)"]);
   });
 });
