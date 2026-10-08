@@ -27,6 +27,7 @@ on:
       - "**/.cursor/**"
       - "**/.cursorrules"
       - "**/.mcp.json"
+      - "**/.gitattributes"
   workflow_dispatch:
 
 permissions: {}

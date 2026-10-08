@@ -2072,7 +2072,9 @@ write token, the stamp, `github-setup`, and the Node pin), `packages/core/src/re
 and the stamp run, D61, D65), `scripts/allowed-install-scripts.json`, `.npmrc`, `.gitleaks.toml`,
 `scripts/lib/secrets.mjs`, `release-please-config.json`, `.release-please-manifest.json`, `docs/CONTRIBUTING.md` (the
 rules for agents), and the agent rules at any depth: `**/CLAUDE.md`, `**/CLAUDE.local.md`, `**/AGENTS.md`,
-`**/AGENTS.override.md`, `**/.claude/**`, `**/.cursor/**`, `**/.cursorrules`, and `**/.mcp.json` (D82). Paths compare
+`**/AGENTS.override.md`, `**/.claude/**`, `**/.cursor/**`, `**/.cursorrules`, and `**/.mcp.json` (D82), and
+`**/.gitattributes`, which decides how git checks out and diffs every file, the Node pin's canonical form among them
+(§23.6). Paths compare
 after NFKC normalization and without case, as macOS reads names (`AGENTſ.md`, with the long s, opens `AGENTS.md`
 there). A PR that touches one changes the pipeline or what every later agent obeys, so it never merges itself, and
 change detection never calls it docs-only. `owner-merge.yml` turns such a PR's auto-merge off, labels it
@@ -2418,10 +2420,11 @@ names a downgrade as one, and asks for each step (§15.1). It runs from `/` and 
   (`X.Y.Z`), `source` (`https://nodejs.org/dist/vX.Y.Z/`) and `platforms`, with exactly the darwin-arm64 and
   linux-arm64 entries as its own keys, each holding only nodejs.org's archive name for that version and platform and
   two lowercase sha256 digests, read only as the file's own fields; each version part has at most four digits. The
-  file must be a regular file (never a link, whose diff shows only its target) in its canonical form (2-space JSON, one
+  file must be a regular file, opened without following a link and checked through the handle it is read from (a
+  link's diff shows only its target), in its canonical form (2-space JSON, one
   trailing newline, LF line endings, which `.gitattributes` keeps under `core.autocrlf`), so a duplicate or escaped
   key cannot hide behind the line a reviewer reads. A refusal is one short
-  line of printable ASCII: at most three names from the file, each cut to 64 characters, JSON-quoted with every other
+  line of printable ASCII: at most three names from the file, each cut to 64 code points, JSON-quoted with every other
   character escaped, then how many more. The stamp, the pack and `npm run deploy` each exit 65 on it. A build that classifies as refused (or as another
   channel than the workflow asked for) names it among its other refusals; facts that contradict each other (§23.3)
   stop the stamp before the pin is read.

@@ -18,7 +18,8 @@
     "**/.claude/**",
     "**/.cursor/**",
     "**/.cursorrules",
-    "**/.mcp.json"
+    "**/.mcp.json",
+    "**/.gitattributes"
   ],
   "branches": ["release-please--branches--main--components--tyto-desk"]
 }

@@ -4,7 +4,8 @@
  * build copies a Node binary only when its sha256 is the pinned one, and the stamp records the pinned version. It lives
  * under scripts/delivery/, an owner-merge path, with the stamp that reads it (D61).
  */
-import { lstat, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 
 /** @typedef {{ archive: string; archiveSha256: string; binarySha256: string }} NodePin */
@@ -21,16 +22,18 @@ const PIN_KEYS = ["version", "source", "platforms"];
 const ENTRY_KEYS = ["archive", "archiveSha256", "binarySha256"];
 
 /**
- * A name from the file, as it may appear in a refusal: its first 64 UTF-16 units (then `...`), JSON-quoted, and every
- * character outside printable ASCII as a `\uXXXX` escape, so no newline, Unicode line separator, C1 control or bidi
- * override in it reaches a log or terminal (the reviews of PRs #29 and #30).
+ * A name from the file, as it may appear in a refusal: its first 64 characters (code points, so an astral one is never
+ * split; then `...`), JSON-quoted, and every character outside printable ASCII as a `\uXXXX` escape, so no newline,
+ * Unicode line separator, C1 control or bidi override in it reaches a log or terminal (the reviews of PRs #29 and #30).
  * @param {string} name
  */
-const quoted = (name) =>
-  JSON.stringify(name.length > NAME_SHOWN ? `${name.slice(0, NAME_SHOWN)}...` : name).replace(
+const quoted = (name) => {
+  const characters = [...name];
+  return JSON.stringify(characters.length > NAME_SHOWN ? `${characters.slice(0, NAME_SHOWN).join("")}...` : name).replace(
     /[^\x20-\x7e]/g,
     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
+};
 
 /** At most three names from the file, quoted, then how many more: a refusal stays short whatever the file holds. */
 const named = (/** @type {string[]} */ names) => `${names.slice(0, 3).map(quoted).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`;
@@ -100,16 +103,29 @@ export function parseNodeRuntime(json) {
  */
 export async function readNodeRuntime(root) {
   const path = join(root, "scripts", "delivery", "node-runtime.json");
-  // A regular file only: a symbolic link's diff shows its target, never what is read.
-  const stat = await lstat(path).catch(() => null);
-  if (stat === null) throw new Error("scripts/delivery/node-runtime.json cannot be read");
-  if (!stat.isFile()) throw new Error("scripts/delivery/node-runtime.json is not a regular file");
+  const unreadable = "scripts/delivery/node-runtime.json cannot be read";
+  const notRegular = "scripts/delivery/node-runtime.json is not a regular file";
+  // A regular file only: a symbolic link's diff shows its target, never what is read. It is opened without following a
+  // link (and without waiting on a FIFO) and checked through the same handle it is read from, so nothing can swap it
+  // between the check and the read (the reviews of PR #30).
+  /** @type {import("node:fs/promises").FileHandle} */
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (err) {
+    throw new Error(/** @type {{ code?: unknown }} */ (err).code === "ELOOP" ? notRegular : unreadable);
+  }
   /** @type {string} */
   let text;
   try {
-    text = await readFile(path, "utf8");
-  } catch {
-    throw new Error("scripts/delivery/node-runtime.json cannot be read");
+    const stat = await handle.stat().catch(() => null);
+    if (stat === null) throw new Error(unreadable);
+    if (!stat.isFile()) throw new Error(notRegular);
+    text = await handle.readFile({ encoding: "utf8" }).catch(() => {
+      throw new Error(unreadable);
+    });
+  } finally {
+    await handle.close().catch(() => undefined);
   }
   /** @type {unknown} */
   let json;

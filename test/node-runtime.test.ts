@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,7 +62,11 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     ["a pre-release version", (pin) => (pin.version = "26.10.0-rc.1"), /exact Node version/],
     ["a version with a leading v", (pin) => (pin.version = "v26.10.0"), /exact Node version/],
     ["a version with a trailing newline", (pin) => (pin.version = "26.10.0\n"), /exact Node version/],
-    ["a version part of more than four digits", (pin) => (pin.version = "26.10000.0"), /exact Node version/],
+    ["a major part of more than four digits", (pin) => (pin.version = "10000.10.0"), /exact Node version/],
+    ["a minor part of more than four digits", (pin) => (pin.version = "26.10000.0"), /exact Node version/],
+    ["a patch part of more than four digits", (pin) => (pin.version = "26.10.10000"), /exact Node version/],
+    ["a source with more after nodejs.org's directory", (pin) => (pin.source = "https://nodejs.org/dist/v26.10.0/x"), /source is not/],
+    ["an archive with more after its name", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archive = "node-v26.10.0-darwin-arm64.tar.gz.sig"), /darwin-arm64 archive/],
     ["a version that is not a string", (pin) => (pin.version = ["26.10.0"]), /exact Node version/],
     ["a source in another of nodejs.org's directories", (pin) => (pin.source = "https://nodejs.org/dist/v26.9.0/"), /source is not https:\/\/nodejs\.org\/dist\/v26\.10\.0\//],
     ["a key that differs from a known one only in case", (pin) => (pin.Version = "26.10.0"), /unknown key "Version"/],
@@ -152,6 +157,18 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
       expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/"k1", "k2", "k3" and 2 more$/) }));
     });
 
+    it("a refusal shows a name of exactly 64 characters whole", async () => {
+      const pin = await pinWith((p) => put(p, "k".repeat(64)));
+
+      expect(() => parseNodeRuntime(pin)).toThrow(`"${"k".repeat(64)}"`);
+    });
+
+    it("a refusal cuts by characters, never inside an astral one", async () => {
+      const pin = await pinWith((p) => put(p, `a${"\u{1f600}".repeat(100)}`));
+
+      expect(() => parseNodeRuntime(pin)).toThrow(`"a${"\\ud83d\\ude00".repeat(63)}..."`);
+    });
+
     it("a refusal cuts a long name to its first 64 characters, so it stays short whatever the file holds", async () => {
       const pin = await pinWith((p) => put(p, "\u2028".repeat(100_000)));
 
@@ -195,6 +212,28 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
   it("readNodeRuntime refuses a pin file with a byte-order mark as not JSON", async () => {
     await expect(readNodeRuntime(await pinFile((text) => `\ufeff${text}`))).rejects.toThrow(/^node-runtime\.json is not JSON$/);
   });
+
+  it("a pin with four digits in each version part is taken", async () => {
+    const pin = await pinWith((p) => {
+      p.version = "1234.5678.9999";
+      p.source = "https://nodejs.org/dist/v1234.5678.9999/";
+      (p.platforms["darwin-arm64"] ?? {}).archive = "node-v1234.5678.9999-darwin-arm64.tar.gz";
+      (p.platforms["linux-arm64"] ?? {}).archive = "node-v1234.5678.9999-linux-arm64.tar.xz";
+    });
+
+    expect(parseNodeRuntime(pin).version).toBe("1234.5678.9999");
+  });
+
+  it.each([
+    ["a directory", async (path: string) => mkdir(path)],
+    ["a FIFO, which it never waits on", async (path: string) => void execFileSync("/usr/bin/mkfifo", [path])],
+  ])("readNodeRuntime refuses a pin file that is %s", async (_, make) => {
+    const root = await mkdtemp(join(tmpdir(), "pin-"));
+    await mkdir(join(root, "scripts", "delivery"), { recursive: true });
+    await make(join(root, "scripts", "delivery", "node-runtime.json"));
+
+    await expect(readNodeRuntime(root)).rejects.toThrow(/^scripts\/delivery\/node-runtime\.json is not a regular file$/);
+  }, 5_000);
 
   it("readNodeRuntime refuses a pin file that is a symbolic link, whose diff would show only its target", async () => {
     const elsewhere = await pinFile((text) => text);
