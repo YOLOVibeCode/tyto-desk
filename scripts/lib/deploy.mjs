@@ -73,7 +73,13 @@ export async function deploy(input) {
   }
   if (platform !== "darwin" || arch !== "arm64") return refuse(69, `npm run deploy runs on macOS on Apple silicon only, not ${platform}-${arch}`);
   if (!input.isTTY) return refuse(64, "npm run deploy asks before it changes your Desk: run it in an interactive terminal");
-  const runtime = input.runtime ?? (await readNodeRuntime(root));
+  /** @type {import("../delivery/lib/node-runtime.mjs").NodeRuntime} */
+  let runtime;
+  try {
+    runtime = input.runtime ?? (await readNodeRuntime(root));
+  } catch (err) {
+    return refuse(65, `npm run deploy: the Node pin is refused (${err instanceof Error ? err.message : String(err)})`);
+  }
   if (input.nodeVersion !== runtime.version) {
     return refuse(65, `npm run deploy needs Node ${runtime.version}, the version Desk Terminal pins (this is ${input.nodeVersion}): nvm use`);
   }

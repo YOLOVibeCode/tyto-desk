@@ -91,6 +91,40 @@ describe("the stamp", () => {
     expect(existsSync(join(root, "dist", "version.json"))).toBe(false);
   });
 
+  it("a refused build with a refused Node pin names every refusal, the pin's among them", async () => {
+    const bad = { ...project, "package.json": JSON.stringify({ version: "0.3" }), "scripts/delivery/node-runtime.json": "not json" };
+    const { root } = await gitCheckout(bad);
+    const env = { ...gitEnv, ...ci, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/tags/v0.3", GITHUB_REF_TYPE: "tag", PATH: process.env.PATH ?? "", GIT_TERMINAL_PROMPT: "0" };
+
+    const result = await runScript(stamp, ["--plan"], { cwd: root, env });
+
+    expect(result.code).toBe(65);
+    expect(result.stderr).toContain("tag-not-semver");
+    expect(result.stderr).toContain("node-pin: node-runtime.json is not JSON");
+  });
+
+  it("a --out inside the repo is refused with 64 even when the Node pin is refused too", async () => {
+    const { root } = await gitCheckout({ ...project, "scripts/delivery/node-runtime.json": "not json" }, "slice-1c/walking-skeleton");
+
+    const result = await runScript(stamp, ["--out", "."], { cwd: root });
+
+    expect(result.code).toBe(64);
+    expect(result.stderr).toContain("never into the repository");
+  });
+
+  it("the plan on a refused Node pin writes nothing to GITHUB_OUTPUT", async () => {
+    const { root } = await gitCheckout({ ...project, "scripts/delivery/node-runtime.json": "not json" });
+    const output = join(await mkdtemp(join(tmpdir(), "output-")), "github-output");
+    await writeFile(output, "");
+    const env = { ...gitEnv, ...ci, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", GITHUB_REF_TYPE: "branch", GITHUB_OUTPUT: output };
+
+    const result = await runScript(stamp, ["--plan", "--expect-channel", "edge"], { cwd: root, env });
+
+    expect(result.code).toBe(65);
+    expect(result.stderr).toContain("the Node pin is refused");
+    expect(await readFile(output, "utf8")).toBe("");
+  });
+
   it.each([".", "..cache", "packages/x"])(
     "the stamp writes version.json into the build output and never into the repo (refuses --out %s)",
     async (out) => {

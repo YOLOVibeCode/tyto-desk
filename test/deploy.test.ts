@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, chmod, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -148,6 +148,18 @@ describe("npm run deploy", () => {
 
     expect(await deploy({ argv: [], env: {}, root: repo, runtime, ...mac, nodeVersion: "26.9.0", stamp: unreachable, pack: unreachable, install: unreachable, ...out })).toBe(65);
     expect(out.lines.join("\n")).toContain("26.10.0");
+  });
+
+  it("npm run deploy refuses a Node pin it cannot trust in one line with 65", async () => {
+    const root = await mkdtemp(join(tmpdir(), "deploy-pin-"));
+    await mkdir(join(root, "scripts", "delivery"), { recursive: true });
+    await writeFile(join(root, "scripts", "delivery", "node-runtime.json"), "not json");
+    const warned: string[] = [];
+
+    const code = await deploy({ argv: [], env: {}, root, ...mac, stamp: unreachable, pack: unreachable, install: unreachable, say: () => undefined, warn: (text) => warned.push(text) });
+
+    expect(code).toBe(65);
+    expect(warned).toEqual(["npm run deploy: the Node pin is refused (node-runtime.json is not JSON)"]);
   });
 
   it("npm run deploy refuses a dirty tree unless --allow-dirty", async () => {

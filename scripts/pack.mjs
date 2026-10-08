@@ -27,7 +27,10 @@ const packed = await packRuntime({
   platform: process.platform,
   arch: process.arch,
   node: process.execPath,
-  runtime: await readNodeRuntime(root),
+  runtime: await readNodeRuntime(root).catch((err) => {
+    console.error(`pack: the Node pin is refused (${err instanceof Error ? err.message : String(err)})`);
+    process.exit(65);
+  }),
   signing: new NodeCodeSigning(),
   tarball: true,
 });

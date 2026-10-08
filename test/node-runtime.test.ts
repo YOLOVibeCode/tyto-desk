@@ -61,34 +61,58 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     ["a version with a leading zero", (pin) => (pin.version = "26.010.0"), /exact Node version/],
     ["a source other than nodejs.org's directory for the version", (pin) => (pin.source = "https://example.com/dist/v26.10.0/"), /source/],
     ["no source", (pin) => delete pin.source, /source/],
-    ["no platforms", (pin) => delete (pin as Record<string, unknown>).platforms, /platforms/],
+    ["no platforms", (pin) => delete (pin as Record<string, unknown>).platforms, /has no platforms/],
+    ["platforms that are an array", (pin) => ((pin as Record<string, unknown>).platforms = []), /has no platforms/],
+    ["a key it does not know", (pin) => (pin.url = "https://example.com/node.tar.gz"), /unknown key "url"/],
     ["a platform Desk does not build for", (pin) => (pin.platforms["darwin-x64"] = { ...pin.platforms["darwin-arm64"] }), /darwin-x64/],
-    ["a __proto__ platform", (pin) => Object.defineProperty(pin.platforms, "__proto__", { value: {}, enumerable: true }), /__proto__/],
+    ["a __proto__ platform", (pin) => Object.defineProperty(pin.platforms, "__proto__", { value: {}, enumerable: true }), /"__proto__"/],
+    ["a constructor platform", (pin) => (pin.platforms["constructor"] = { ...pin.platforms["darwin-arm64"] }), /"constructor"/],
+    [
+      "an entry it only inherits",
+      (pin) => (pin.platforms = Object.assign(Object.create({ "linux-arm64": pin.platforms["linux-arm64"] }) as Record<string, Record<string, unknown>>, { "darwin-arm64": pin.platforms["darwin-arm64"] })),
+      /has no linux-arm64 entry/,
+    ],
     ["a missing platform", (pin) => delete pin.platforms["linux-arm64"], /linux-arm64/],
-    ["an entry that is not an object", (pin) => ((pin.platforms as Record<string, unknown>)["darwin-arm64"] = null), /darwin-arm64/],
+    ["an entry that is not an object", (pin) => ((pin.platforms as Record<string, unknown>)["darwin-arm64"] = null), /darwin-arm64 entry is malformed/],
+    ["an entry that is an array", (pin) => ((pin.platforms as Record<string, unknown>)["darwin-arm64"] = []), /darwin-arm64 entry is malformed/],
+    ["an entry with a key it does not know", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).url = "https://example.com/node.tar.gz"), /darwin-arm64 entry has an unknown key "url"/],
+    ["an archive that is a URL", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archive = "https://example.com/node-v26.10.0-darwin-arm64.tar.gz"), /darwin-arm64 archive/],
     ["an archive path that leaves the directory", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archive = "../../etc/node.tar.gz"), /archive/],
     ["an archive of another version", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archive = "node-v26.9.0-darwin-arm64.tar.gz"), /archive/],
     ["an archive of another platform", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archive = "node-v26.10.0-linux-arm64.tar.gz"), /archive/],
-    ["a digest of the wrong length", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archiveSha256 = "ab"), /darwin-arm64/],
-    ["a digest in capitals", (pin) => ((pin.platforms["linux-arm64"] ?? {}).binarySha256 = "A".repeat(64)), /linux-arm64/],
+    ["a digest of the wrong length", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archiveSha256 = "ab"), /darwin-arm64 entry is malformed/],
+    ["a digest in capitals", (pin) => ((pin.platforms["linux-arm64"] ?? {}).binarySha256 = "A".repeat(64)), /linux-arm64 entry is malformed/],
   ])("the pin is refused with %s", async (_, change, why) => {
     const pin = await pinWith(change);
 
     expect(() => parseNodeRuntime(pin)).toThrow(why);
   });
 
+  it("a __proto__ platform in the file's own text is refused too", async () => {
+    const text = (await readFile(`${repo}scripts/delivery/node-runtime.json`, "utf8")).replace('"platforms": {', '"platforms": { "__proto__": {},');
+
+    expect(() => parseNodeRuntime(JSON.parse(text))).toThrow(/"__proto__"/);
+  });
+
+  it("a refusal stays one line: a platform name from the file is quoted as JSON, so a newline in it cannot start a line", async () => {
+    const pin = await pinWith((p) => (p.platforms["x\n::error title=pin::injected"] = { ...p.platforms["darwin-arm64"] }));
+
+    expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.not.stringContaining("\n") }));
+    expect(() => parseNodeRuntime(pin)).toThrow('"x\\n::error title=pin::injected"');
+  });
+
   it.each([
-    ["is not JSON", "{ not json"],
-    ["is not an object", "[]\n"],
-  ])("readNodeRuntime refuses a pin file that %s", async (_, text) => {
+    ["is not JSON", "{ not json", /^node-runtime\.json is not JSON$/],
+    ["is not an object", "[]\n", /^node-runtime\.json is not an object$/],
+  ])("readNodeRuntime refuses a pin file that %s", async (_, text, why) => {
     const root = await mkdtemp(join(tmpdir(), "pin-"));
     await mkdir(join(root, "scripts", "delivery"), { recursive: true });
     await writeFile(join(root, "scripts", "delivery", "node-runtime.json"), text);
 
-    await expect(readNodeRuntime(root)).rejects.toThrow(/node-runtime\.json/);
+    await expect(readNodeRuntime(root)).rejects.toThrow(why);
   });
 
   it("readNodeRuntime refuses a checkout without a pin file", async () => {
-    await expect(readNodeRuntime(await mkdtemp(join(tmpdir(), "pin-")))).rejects.toThrow(/node-runtime\.json/);
+    await expect(readNodeRuntime(await mkdtemp(join(tmpdir(), "pin-")))).rejects.toThrow(/^scripts\/delivery\/node-runtime\.json cannot be read$/);
   });
 });

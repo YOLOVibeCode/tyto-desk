@@ -60,18 +60,18 @@ const facts = await gatherBuildFacts({
 });
 if (facts.problems.length > 0) fail(`stamp: ${facts.problems.join("; ")}`, 65);
 
-/** @type {string} */
-let node;
-try {
-  node = await pinnedNode(root);
-} catch (err) {
-  fail(`stamp: the Node pin is refused (${err instanceof Error ? err.message : String(err)}); nothing was written`, 65);
-}
+// The pin is read before the build is classified: a refused build names it with its other refusals.
+/** @type {{ ok: true; node: string } | { ok: false; reason: string }} */
+const pin = await pinnedNode(root).then(
+  (node) => ({ ok: true, node }),
+  (err) => ({ ok: false, reason: err instanceof Error ? err.message : String(err) }),
+);
 
 const build = classifyBuild(facts.input);
 if (!build.ok) {
   console.error("stamp: this build is refused; nothing was written:");
   for (const refusal of build.refusals) console.error(`  ${refusal}: ${REFUSAL_TEXT[refusal]}`);
+  if (!pin.ok) console.error(`  node-pin: ${pin.reason}`);
   if (build.refusals.includes("dirty-tree")) {
     console.error(facts.dirtyFiles === null ? "  git could not list the changes" : "Uncommitted or untracked files:");
     for (const file of facts.dirtyFiles ?? []) console.error(`  ${file}`);
@@ -86,13 +86,14 @@ if (expected !== undefined && expected !== build.channel) {
   fail(`stamp: expected ${article(expected)} build, but this is ${article(build.channel)} build (${build.version})`, 65);
 }
 
-if (!options.plan) {
-  const outDir = resolve(root, options.out);
-  if (!(await outsideTheRepository(git, root, outDir))) {
-    fail(`stamp: version.json goes into the build output (dist/), never into the repository: ${options.out}`, 64);
-  }
-  await writeVersionFile(outDir, versionFile(facts.input, build, node));
+// A bad --out (64) is named before a refused pin, which alone would otherwise hide it.
+const outDir = resolve(root, options.out);
+if (!options.plan && !(await outsideTheRepository(git, root, outDir))) {
+  fail(`stamp: version.json goes into the build output (dist/), never into the repository: ${options.out}`, 64);
 }
+if (!pin.ok) fail(`stamp: the Node pin is refused (${pin.reason}); nothing was written`, 65);
+
+if (!options.plan) await writeVersionFile(outDir, versionFile(facts.input, build, pin.node));
 if (process.env.GITHUB_ACTIONS === "true" && process.env.GITHUB_OUTPUT) {
   await appendFile(process.env.GITHUB_OUTPUT, githubOutput(build));
 }
