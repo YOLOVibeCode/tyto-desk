@@ -36,7 +36,7 @@ const info: VersionInfo = {
 /** The staged runtime's build id: the sha256 of its files.sha256. */
 const BUILD = "9f8e7d6c".repeat(8);
 
-function setup(options: { answers?: (boolean | "no-tty")[]; platform?: string; signed?: boolean } = {}) {
+function setup(options: { answers?: (boolean | "no-tty")[]; platform?: string; signed?: boolean; expected?: { version: string; channel: string; commit: string } } = {}) {
   const versions = new MemoryAppVersions();
   versions.runtimes.set(from, { ok: true, staging, versionJson: JSON.stringify(info), build: BUILD });
   const signing = new FakeCodeSigning();
@@ -48,7 +48,15 @@ function setup(options: { answers?: (boolean | "no-tty")[]; platform?: string; s
   const run = () =>
     installVersion(
       { lock, versions, signing, prompter, files, hosts, clock: new FakeClock({ auto: true }) },
-      { from, deskHome, home, platform: options.platform ?? "darwin", provenance: "dev", now: "2026-10-07T09:30:00Z" },
+      {
+        from,
+        deskHome,
+        home,
+        platform: options.platform ?? "darwin",
+        provenance: "dev",
+        now: "2026-10-07T09:30:00Z",
+        ...(options.expected === undefined ? {} : { expected: options.expected }),
+      },
     );
   return { versions, signing, prompter, files, hosts, lock, run };
 }
@@ -232,6 +240,43 @@ describe("desk install --from", () => {
     desk.versions.builds.set(info.version, "b2".repeat(32));
 
     expect(await desk.run()).toMatchObject({ ok: true, message: expect.stringContaining("the installed copy stays as it was") });
+  });
+
+  it.each([
+    ["another commit", { channel: info.channel, commit: "1".repeat(40) }],
+    ["another channel", { channel: "edge", commit: info.commit }],
+    ["no record in installed.json", null],
+  ])(
+    "an install that expects a verified build refuses an installed copy of its version with %s, as desk update does (65)",
+    async (_, record) => {
+      const desk = setup({ expected: { version: info.version, channel: info.channel, commit: info.commit } });
+      desk.versions.installed.push(info.version, "0.3.0");
+      desk.versions.currentVersion = "0.3.0";
+      desk.versions.builds.set(info.version, "b2".repeat(32));
+      const versions = record === null ? {} : { [info.version]: { ...record, build: "b2".repeat(32), provenance: "directory", installedAt: "2026-10-01T08:00:00Z" } };
+      desk.files.files.set(`${deskHome}/installed.json`, { text: JSON.stringify({ version: 1, current: "0.3.0", previous: null, versions, files: [] }), mode: 0o600 });
+
+      const result = await desk.run();
+
+      expect(result).toEqual({ ok: false, code: 65, message: `another build of Desk ${info.version} is installed, not ${info.channel} at ${info.commit}; nothing changed` });
+      expect(desk.prompter.asked).toEqual([]);
+      expect(desk.versions.used).toEqual([]);
+      expect(desk.versions.discarded).toEqual([staging]);
+    },
+  );
+
+  it("an install that expects a verified build takes an installed copy recorded as that build", async () => {
+    const desk = setup({ expected: { version: info.version, channel: info.channel, commit: info.commit } });
+    desk.versions.installed.push(info.version, "0.3.0");
+    desk.versions.currentVersion = "0.3.0";
+    desk.versions.builds.set(info.version, "b2".repeat(32));
+    const recorded = { channel: info.channel, commit: info.commit, build: "b2".repeat(32), provenance: "dev", installedAt: "2026-10-01T08:00:00Z" };
+    desk.files.files.set(`${deskHome}/installed.json`, { text: JSON.stringify({ version: 1, current: "0.3.0", previous: null, versions: { [info.version]: recorded }, files: [] }), mode: 0o600 });
+
+    const result = await desk.run();
+
+    expect(result.ok).toBe(true);
+    expect(desk.versions.used).toEqual([info.version]);
   });
 
   it("install refuses an installed version whose installed copy has no files.sha256, and changes nothing", async () => {

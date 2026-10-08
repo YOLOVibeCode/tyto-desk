@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { userInfo } from "node:os";
-import { guiAllowed, installExtras, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
+import { compareVersions, guiAllowed, installExtras, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
 import { NodeNativeHostDir } from "@desk/chrome";
 import { retainAfterInstall } from "./versions.ts";
 import {
@@ -25,6 +25,8 @@ export type InstallCommandInput = {
   prompter: Prompter;
   /** The runtime's channel, from its version.json: a dev build's provenance is `dev`. */
   channel: string;
+  /** The release install.sh verified: its version.json must name it, and it is recorded as release.yml's (§23.5). */
+  release?: { version: string; commit: string };
   probe?: PortProbe;
   random?: Random;
   codesign?: string;
@@ -34,6 +36,24 @@ export type InstallCommandInput = {
 
 /** A command's exit code and stdout line, and a warning for stderr. */
 export type CommandResult = { code: number; message: string; warning?: string };
+
+/**
+ * What installed.json records and what the runtime must be (§23.5): a release install.sh verified is recorded as
+ * release.yml on its tag, must be exactly that stable build, and is named a downgrade when older than the current one.
+ */
+export function releaseInstall(input: {
+  release?: { version: string; commit: string };
+  channel: string;
+  current: string | null;
+}): { provenance: string; expected?: { version: string; channel: string; commit: string }; downgrade?: true } {
+  const { release } = input;
+  if (release === undefined) return { provenance: input.channel === "dev" ? "dev" : "directory" };
+  return {
+    provenance: `release.yml@refs/tags/v${release.version}`,
+    expected: { version: release.version, channel: "stable", commit: release.commit },
+    ...(input.current !== null && compareVersions(release.version, input.current) < 0 ? { downgrade: true as const } : {}),
+  };
+}
 
 /**
  * `desk install --from <dir>` (slice 1c's minimal install, docs/IMPLEMENTATION.md §15.1): the version steps of core's
@@ -49,6 +69,7 @@ export async function installCommand(input: InstallCommandInput): Promise<Comman
     platform: input.platform,
   });
   if (!loaded.ok) return { code: loaded.code === "no-free-ports" ? 75 : 65, message: `Desk cannot make a config here (${loaded.code})` };
+  const current = input.release === undefined ? null : await new NodeAppVersions(input.deskHome).current();
   const result = await installVersion(
     {
       lock: new NodeInstanceLock(join(input.deskHome, "run")),
@@ -64,7 +85,8 @@ export async function installCommand(input: InstallCommandInput): Promise<Comman
       deskHome: input.deskHome,
       home: input.home,
       platform: input.platform,
-      provenance: input.channel === "dev" ? "dev" : "directory",
+      // install.sh installs the release it was given: one older than the current version is named a downgrade (§23.5).
+      ...releaseInstall({ ...(input.release === undefined ? {} : { release: input.release }), channel: input.channel, current }),
       now: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     },
   );
