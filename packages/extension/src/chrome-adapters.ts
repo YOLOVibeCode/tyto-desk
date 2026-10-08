@@ -1,16 +1,20 @@
 import {
   NATIVE_HOST_NAME,
   type AgentTabs,
+  type Badge,
   type Clock,
   type PageVisibility,
   type ExtensionWindow,
   type ExtensionWindows,
   type HostChannel,
   type HostConnector,
+  type PanelFocusLink,
   type PanelQuestions,
   type Random,
   type SidePanelApi,
+  type TabOpener,
   type TabTargets,
+  type ToggleCommand,
 } from "@desk/core";
 
 /** `chrome.runtime.connectNative` to the Desk host (§9 `HostConnector`). */
@@ -45,6 +49,10 @@ export class ChromeSidePanel implements SidePanelApi {
     await chrome.sidePanel.setOptions({ path }).catch(() => undefined);
   }
 
+  openInGesture(windowId: number): void {
+    void chrome.sidePanel.open({ windowId }).catch(() => undefined);
+  }
+
   async close(windowId: number): Promise<void> {
     await chrome.sidePanel.close({ windowId }).catch(() => undefined);
   }
@@ -60,6 +68,60 @@ export class ChromeSidePanel implements SidePanelApi {
 
 /** The panel's question as it loads: whether it may take the keyboard (§9). */
 export const FOCUS_QUESTION = "desk-focus-on-load";
+/** A panel's report to its worker: `{type, window, focused}`. */
+export const PANEL_FOCUS = "desk-panel-focus";
+/** The worker asks a panel to take the keyboard: `{type, window}`. */
+export const FOCUS_TERMINAL = "desk-focus-terminal";
+
+/** Whether a message came from the extension's own panel page. */
+function fromPanel(sender: chrome.runtime.MessageSender): boolean {
+  return sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL("panel.html")) === true;
+}
+
+/** `chrome.commands`: the toggle shortcut and the window it was pressed in (§10 `ToggleCommand`). */
+export class ChromeToggleCommand implements ToggleCommand {
+  onToggle(listener: (windowId: number) => void): void {
+    chrome.commands.onCommand.addListener((command, tab) => {
+      if (command === "toggle-terminal" && typeof tab?.windowId === "number") listener(tab.windowId);
+    });
+  }
+}
+
+/** Panels' focus reports, and the worker's request that one take the keyboard (§10 `PanelFocusLink`). */
+export class ChromePanelFocusLink implements PanelFocusLink {
+  onReport(listener: (windowId: number, focused: boolean) => void): void {
+    chrome.runtime.onMessage.addListener((message, sender) => {
+      if (!fromPanel(sender) || typeof message !== "object" || message === null) return undefined;
+      const { type, window, focused } = message as { type?: unknown; window?: unknown; focused?: unknown };
+      if (type === PANEL_FOCUS && typeof window === "number" && typeof focused === "boolean") listener(window, focused);
+      return undefined;
+    });
+  }
+
+  focus(windowId: number): void {
+    void chrome.runtime.sendMessage({ type: FOCUS_TERMINAL, window: windowId }).catch(() => undefined);
+  }
+}
+
+/** `chrome.action`'s badge (§10 `Badge`). */
+export class ChromeBadge implements Badge {
+  set(text: string | null): void {
+    void chrome.action.setBadgeText({ text: text ?? "" }).catch(() => undefined);
+  }
+}
+
+/** A link as a new tab in the panel's window (§10 `TabOpener`). */
+export class ChromeTabOpener implements TabOpener {
+  private readonly windowId: number;
+
+  constructor(windowId: number) {
+    this.windowId = windowId;
+  }
+
+  open(url: string): void {
+    void chrome.tabs.create({ windowId: this.windowId, active: true, url }).catch(() => undefined);
+  }
+}
 
 /** The worker's answer, only to the extension's own panel page (D108). */
 export class ChromePanelQuestions implements PanelQuestions {

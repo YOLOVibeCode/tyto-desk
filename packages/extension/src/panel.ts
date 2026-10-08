@@ -1,10 +1,20 @@
 import { PanelController } from "@desk/core";
-import { BrowserClock, ChromeHostConnector, DocumentVisibility, FOCUS_QUESTION, WebCryptoRandom } from "./chrome-adapters.ts";
+import {
+  BrowserClock,
+  ChromeBadge,
+  ChromeHostConnector,
+  ChromeTabOpener,
+  DocumentVisibility,
+  FOCUS_QUESTION,
+  FOCUS_TERMINAL,
+  PANEL_FOCUS,
+  WebCryptoRandom,
+} from "./chrome-adapters.ts";
 import { deskBuild } from "./desk-build.ts";
 import { XtermView } from "./xterm-view.ts";
 
 /** The settings until the daemon's hello brings config.json's (§10). */
-const TERMINAL = { fontFamily: "Menlo, 'SF Mono', 'DejaVu Sans Mono', monospace", fontSize: 13, scrollback: 5_000, macOptionIsMeta: false };
+const TERMINAL = { fontFamily: "Menlo, 'SF Mono', 'DejaVu Sans Mono', monospace", fontSize: 13, scrollback: 5_000, macOptionIsMeta: false, osc52Write: false };
 
 /**
  * Whether this panel may take the keyboard as it loads: not when it was opened with `focus=0`, nor when the worker says an
@@ -51,6 +61,8 @@ async function start(): Promise<void> {
     connector: new ChromeHostConnector(),
     view,
     layout: view,
+    badge: new ChromeBadge(),
+    tabs: new ChromeTabOpener(current.id),
     random: new WebCryptoRandom(),
     clock: new BrowserClock(),
     build: deskBuild(),
@@ -59,6 +71,18 @@ async function start(): Promise<void> {
     visibility: new DocumentVisibility(),
   });
   panel.start();
+  // The toggle (§10): the worker learns whether this panel has the keyboard, and may ask it to take it.
+  const windowId = current.id;
+  const report = (focused: boolean) => void chrome.runtime.sendMessage({ type: PANEL_FOCUS, window: windowId, focused }).catch(() => undefined);
+  window.addEventListener("focus", () => report(true));
+  window.addEventListener("blur", () => report(false));
+  if (document.hasFocus()) report(true);
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (sender.id !== chrome.runtime.id || typeof message !== "object" || message === null) return undefined;
+    const { type, window: target } = message as { type?: unknown; window?: unknown };
+    if (type === FOCUS_TERMINAL && target === windowId) panel.focusTerminal();
+    return undefined;
+  });
   // The live suite drives the panel's actions in a test build (the keymap, slice 6b, drives them for you).
   if (DESK_TEST) {
     const hooks = (globalThis as { deskTest?: Record<string, unknown> }).deskTest;

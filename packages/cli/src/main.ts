@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseVersionInfo, versionLine, type Prompter, type VersionInfo } from "@desk/core";
-import { ConfigFileError, FileLogSink, logCrashes } from "@desk/node";
+import { parseVersionInfo, setToggleKey, versionLine, type Prompter, type VersionInfo } from "@desk/core";
+import { ConfigFileError, FileConfigStore, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
 import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
@@ -43,6 +43,7 @@ const USAGE = [
   "       desk update [--channel stable|edge] [--version X.Y.Z] [--check]   install a newer release after checking its provenance",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
+  "       desk config toggle-key <key>   the shortcut that shows, focuses or hides the panel (Command+Shift+Period)",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
   "       desk agents [pause|resume|detach]       Desk's agent sessions; pause refuses every command but close",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
@@ -204,6 +205,14 @@ export async function main(input: MainInput): Promise<number> {
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         action,
       });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "config" && rest[0] === "toggle-key") {
+      const key = rest[1];
+      if (rest.length !== 2 || key === undefined) return usage();
+      const result = await setToggleKey({ config: new FileConfigStore(deskHome) }, key);
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
       return result.code;

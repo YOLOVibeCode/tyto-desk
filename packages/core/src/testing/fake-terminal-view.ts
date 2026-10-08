@@ -16,6 +16,9 @@ export class FakeTerminalPane implements TerminalPane {
   private readonly focusListeners: (() => void)[] = [];
   private readonly keyListeners: ((input: KeyInput) => boolean)[] = [];
   private readonly menuListeners: ((item: MenuItem) => void)[] = [];
+  private readonly titleListeners: ((title: string) => void)[] = [];
+  private readonly bellListeners: (() => void)[] = [];
+  private readonly linkListeners: ((uri: string, click: { meta: boolean }) => void)[] = [];
   /** The find bar commands the panel gave this pane. */
   readonly finds: string[] = [];
   clears = 0;
@@ -74,6 +77,33 @@ export class FakeTerminalPane implements TerminalPane {
 
   onMenu(listener: (item: MenuItem) => void): void {
     this.menuListeners.push(listener);
+  }
+
+  onTitle(listener: (title: string) => void): void {
+    this.titleListeners.push(listener);
+  }
+
+  onBell(listener: () => void): void {
+    this.bellListeners.push(listener);
+  }
+
+  onLink(listener: (uri: string, click: { meta: boolean }) => void): void {
+    this.linkListeners.push(listener);
+  }
+
+  /** The program sets a title. */
+  titled(title: string): void {
+    for (const listener of this.titleListeners) listener(title);
+  }
+
+  /** The program rings the bell. */
+  rings(): void {
+    for (const listener of this.bellListeners) listener();
+  }
+
+  /** The user clicks a link. */
+  clicks(uri: string, meta: boolean): void {
+    for (const listener of this.linkListeners) listener(uri, { meta });
   }
 
   find(command: "open" | "next" | "previous"): void {

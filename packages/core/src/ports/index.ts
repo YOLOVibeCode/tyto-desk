@@ -54,3 +54,7 @@ export type { GhInstalled, GhVersion } from "./gh-version.ts";
 export type { ReleaseFeed, ReleaseRef, Unreachable } from "./release-feed.ts";
 export type { ProcessCwd } from "./process-cwd.ts";
 export type { LayoutShown, LayoutView, TabLabel } from "./layout-view.ts";
+export type { ToggleCommand } from "./toggle-command.ts";
+export type { PanelFocusLink } from "./panel-focus-link.ts";
+export type { Badge } from "./badge.ts";
+export type { TabOpener } from "./tab-opener.ts";

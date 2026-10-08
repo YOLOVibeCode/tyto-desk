@@ -51,3 +51,7 @@ export { FakeGhVersion } from "./fake-gh-version.ts";
 export { FakeReleaseFeed } from "./fake-release-feed.ts";
 export { FakeProcessCwd } from "./fake-process-cwd.ts";
 export { FakeLayoutView } from "./fake-layout-view.ts";
+export { FakeToggleCommand } from "./fake-toggle-command.ts";
+export { FakePanelFocusLink } from "./fake-panel-focus-link.ts";
+export { FakeBadge } from "./fake-badge.ts";
+export { FakeTabOpener } from "./fake-tab-opener.ts";

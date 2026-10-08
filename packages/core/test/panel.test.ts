@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PanelController } from "../src/index.ts";
-import { FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
+import { FakeBadge, FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom, FakeTabOpener } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 
@@ -13,6 +13,8 @@ function setup(options: { focusOnLoad?: boolean } = {}) {
     connector,
     view,
     layout: new FakeLayoutView(),
+    badge: new FakeBadge(),
+    tabs: new FakeTabOpener(),
     random: new SeqRandom([]),
     clock,
     build: "0.3.0",

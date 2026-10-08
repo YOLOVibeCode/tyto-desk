@@ -81,6 +81,9 @@ const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
 
 type Client = { peer: DaemonPeer; kind: ClientKind | null; window: number | null; stale: boolean; hidden: boolean };
 
+/** An alert this recent reaches a panel that says hello after it (a panel reopened as it was raised). */
+const ALERT_REPLAY_MS = 30_000;
+
 type Pane = {
   id: string;
   pty: Pty | null;
@@ -130,6 +133,8 @@ export class Daemon {
   private nextCall = 0;
   private shuttingDown = false;
   /** The layout as saved, loaded at the first ask; `null` until then or when none is saved. */
+  /** When each alert from `desk watch` was last raised, to replay recent ones to a panel that says hello late. */
+  private readonly alerts = new Map<string, number>();
   private layout: Layout | null = null;
   private layoutLoaded: Promise<void> | null = null;
   private gatewayClients = 0;
@@ -250,6 +255,7 @@ export class Daemon {
         if (client.hidden) for (const pane of this.panes.values()) if (pane.owner === client) this.resetFlow(pane);
         return;
       case "alert":
+        this.alerts.set(message.kind, this.ports.clock.now());
         this.broadcast({ type: "alert", kind: message.kind });
         return;
       case "agents.state":
@@ -294,8 +300,14 @@ export class Daemon {
         ...(layout === null ? {} : { layout }),
       });
     // A panel gets the layout with its hello: it lays out its panes at once, without a layout.get round trip (§10).
-    if (kind === "panel") void this.layoutFor().then(greet);
-    else greet(null);
+    if (kind === "panel") {
+      void this.layoutFor().then((layout) => {
+        greet(layout);
+        // An alert raised while this panel was still connecting (a panel desk watch just reopened) reaches it too.
+        const now = this.ports.clock.now();
+        for (const [alertKind, at] of this.alerts) if (now - at <= ALERT_REPLAY_MS) this.send(client, { type: "alert", kind: alertKind });
+      });
+    } else greet(null);
   }
 
   /** The pane's PTY when `client` owns the live pane, else null after E_NOPANE. */
