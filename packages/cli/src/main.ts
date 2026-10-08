@@ -5,6 +5,7 @@ import { ConfigFileError, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
 import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
+import { doctorCommand } from "./doctor.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
@@ -33,6 +34,7 @@ const USAGE = [
   "       desk cdp [--raw] [--ws]    the guarded endpoint for CDP clients; --raw the browser's own port",
   "       desk tab current|mine      the tab you are looking at, or this pane's agent tab (made in the background)",
   "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
+  "       desk doctor [--fix]        what is wrong and how to fix it; --fix rewrites only what lives in ~/.desk",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
@@ -95,6 +97,12 @@ export async function main(input: MainInput): Promise<number> {
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "doctor") {
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--fix")) return usage();
+      const result = await doctorCommand({ env: input.env, platform: input.platform, home, deskHome, info: version.info, fix: rest[0] === "--fix" });
+      say(result.message);
       return result.code;
     }
     if (command === "status") {

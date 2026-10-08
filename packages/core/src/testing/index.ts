@@ -23,6 +23,7 @@ export { FakeLoginShell } from "./fake-login-shell.ts";
 export { FakePageFocus } from "./fake-page-focus.ts";
 export { FakePageVisibility } from "./fake-page-visibility.ts";
 export { FakePanelOpener } from "./fake-panel-opener.ts";
+export { FakePathModes } from "./fake-path-modes.ts";
 export { FakePanelQuestions } from "./fake-panel-questions.ts";
 export { FakePortProbe } from "./fake-port-probe.ts";
 export { FakeProcessInfo } from "./fake-process-info.ts";

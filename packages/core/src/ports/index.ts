@@ -30,6 +30,7 @@ export type { NativeHostDir } from "./native-host-dir.ts";
 export type { PageFocus } from "./page-focus.ts";
 export type { PageVisibility } from "./page-visibility.ts";
 export type { PanelOpener } from "./panel-opener.ts";
+export type { PathMode, PathModes } from "./path-modes.ts";
 export type { PanelQuestions } from "./panel-questions.ts";
 export type { PortProbe } from "./port-probe.ts";
 export type { ProcessInfo } from "./process-info.ts";
