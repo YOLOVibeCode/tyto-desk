@@ -15,6 +15,15 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 /** The platforms Desk Terminal ships for (darwin-arm64) and the test container runs (linux-arm64): exactly these. */
 const PLATFORMS = ["darwin-arm64", "linux-arm64"];
+const PIN_KEYS = ["version", "source", "platforms"];
+const ENTRY_KEYS = ["archive", "archiveSha256", "binarySha256"];
+
+/**
+ * A name from the file, as it may appear in a refusal: JSON-quoted, so a newline in it cannot start a line of its own
+ * (a workflow command, in an Actions log).
+ * @param {string} name
+ */
+const quoted = (name) => JSON.stringify(name);
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) {
@@ -22,28 +31,33 @@ function isRecord(value) {
 }
 
 /**
- * The pin, checked (the security reviews of PR #8): an exact `X.Y.Z` version; `source` nodejs.org's own directory for
- * it; exactly the darwin-arm64 and linux-arm64 entries; each archive nodejs.org's own name for that version and
- * platform, so no field can name a path or another build; lowercase sha256 digests. Anything else throws one line: no
- * build goes ahead on a pin it cannot trust.
+ * The pin, checked (the security reviews of PRs #8 and #15): an exact `X.Y.Z` version; `source` nodejs.org's own
+ * directory for it; exactly the darwin-arm64 and linux-arm64 entries, as the file's own keys; each archive
+ * nodejs.org's own name for that version and platform, so no field can name a path or another build; lowercase sha256
+ * digests; no key it does not know. Anything else throws one line, with any name from the file JSON-quoted: no build
+ * goes ahead on a pin it cannot trust.
  * @param {unknown} json
  * @returns {NodeRuntime}
  */
 export function parseNodeRuntime(json) {
   if (!isRecord(json)) throw new Error("node-runtime.json is not an object");
+  const extra = Object.keys(json).filter((key) => !PIN_KEYS.includes(key));
+  if (extra.length > 0) throw new Error(`node-runtime.json has an unknown key ${extra.map(quoted).join(", ")}`);
   const { version, source, platforms } = json;
   if (typeof version !== "string" || !VERSION.test(version)) throw new Error("node-runtime.json names no exact Node version");
   if (source !== `https://nodejs.org/dist/v${version}/`) throw new Error(`node-runtime.json's source is not https://nodejs.org/dist/v${version}/`);
   if (!isRecord(platforms)) throw new Error("node-runtime.json has no platforms");
   const keys = Object.keys(platforms);
   const unknown = keys.filter((key) => !PLATFORMS.includes(key));
-  if (unknown.length > 0) throw new Error(`node-runtime.json names a platform Desk does not build for: ${unknown.join(", ")}`);
+  if (unknown.length > 0) throw new Error(`node-runtime.json names a platform Desk does not build for: ${unknown.map(quoted).join(", ")}`);
   /** @type {Record<string, NodePin>} */
   const checked = {};
   for (const key of PLATFORMS) {
     if (!keys.includes(key)) throw new Error(`node-runtime.json has no ${key} entry`);
     const pin = platforms[key];
     if (!isRecord(pin)) throw new Error(`node-runtime.json's ${key} entry is malformed`);
+    const extraInEntry = Object.keys(pin).filter((name) => !ENTRY_KEYS.includes(name));
+    if (extraInEntry.length > 0) throw new Error(`node-runtime.json's ${key} entry has an unknown key ${extraInEntry.map(quoted).join(", ")}`);
     const { archive, archiveSha256, binarySha256 } = pin;
     if (archive !== `node-v${version}-${key}.tar.gz` && archive !== `node-v${version}-${key}.tar.xz`) {
       throw new Error(`node-runtime.json's ${key} archive is not nodejs.org's node-v${version}-${key} tarball`);

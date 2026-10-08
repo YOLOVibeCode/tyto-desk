@@ -64,4 +64,13 @@ describe("the version npm run pack takes (docs/IMPLEMENTATION.md §23.3, D93)", 
       reasons: ["dist/version.json names another commit than the one checked out"],
     });
   });
+
+  it("locally the pack refuses a Node pin it cannot trust with a reason, never an exception", async () => {
+    const { root } = await gitCheckout(
+      { "package.json": `${JSON.stringify({ name: "x", version: "0.3.0" })}\n`, ".gitignore": "dist/\n", "scripts/delivery/node-runtime.json": "not json" },
+      "slice-1c/walking-skeleton",
+    );
+
+    expect(await stampedVersion({ root, env: gitEnv, allowDirty: false })).toEqual({ ok: false, reasons: ["node-pin: node-runtime.json is not JSON"] });
+  });
 });

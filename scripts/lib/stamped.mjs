@@ -34,7 +34,14 @@ export async function stampedVersion(input) {
     const dirty = build.refusals.includes("dirty-tree") && facts.dirtyFiles !== null ? facts.dirtyFiles.map((file) => `uncommitted: ${file}`) : [];
     return { ok: false, reasons: [...build.refusals.map((refusal) => `${refusal}: ${REFUSAL_TEXT[refusal]}`), ...dirty] };
   }
-  const file = versionFile(facts.input, build, await pinnedNode(root));
+  /** @type {string} */
+  let node;
+  try {
+    node = await pinnedNode(root);
+  } catch (err) {
+    return { ok: false, reasons: [`node-pin: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+  const file = versionFile(facts.input, build, node);
   await writeVersionFile(out, file);
   const version = parseVersionInfo(JSON.stringify(file));
   return version === null ? { ok: false, reasons: ["the stamp wrote a version.json that does not parse"] } : { ok: true, version };
