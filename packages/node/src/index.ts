@@ -16,6 +16,9 @@ export {
 } from "./test-guard.ts";
 export { NodeTextFiles } from "./text-files.ts";
 export { NodeTmux, findTmux } from "./tmux.ts";
+export { findGh } from "./gh.ts";
 export { NodeLaunchAgents } from "./launch-agents.ts";
 export { NodePathModes } from "./path-modes.ts";
 export { NodeTreeRemover } from "./tree-remover.ts";
+export { TarArchive } from "./archive.ts";
+export { NodeFileDigest } from "./file-digest.ts";

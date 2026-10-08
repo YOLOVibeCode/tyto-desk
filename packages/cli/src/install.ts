@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { userInfo } from "node:os";
 import { guiAllowed, installExtras, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
 import { NodeNativeHostDir } from "@desk/chrome";
+import { retainAfterInstall } from "./versions.ts";
 import {
   CryptoRandom,
   FileConfigStore,
@@ -84,6 +85,8 @@ export async function installCommand(input: InstallCommandInput): Promise<Comman
     { home: input.home, deskHome: input.deskHome, platform: input.platform, guiAllowed: guiAllowed(env, input.platform) },
   );
   if (!extras.ok) return { code: extras.code, message: `${result.message}, but ${extras.message}` };
+  // Keep three versions, never one a running Desk process uses (§23.5 rule 7).
+  await retainAfterInstall(input.deskHome, input.prompter);
   return { code: 0, message: extras.notes.length === 0 ? result.message : `${result.message}. Notes: ${extras.notes.join("; ")}` };
 }
 

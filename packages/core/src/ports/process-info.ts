@@ -13,4 +13,6 @@ export interface ProcessInfo {
    * any process uses its profile (§6.1 step 4); `null` when the process list cannot be read. Only pids leave the adapter.
    */
   withArgument(argument: string): Promise<number[] | null>;
+  /** The processes whose executable lies under `dir` (a version's Desk Terminal, native hosts included); `null` when unknown. */
+  executablesUnder(dir: string): Promise<readonly { pid: number; exe: string }[] | null>;
 }

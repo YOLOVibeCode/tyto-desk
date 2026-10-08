@@ -10,8 +10,10 @@ import {
   NodePathModes,
   NodeTextFiles,
   NodeTmux,
+  findGh,
   findTmux,
 } from "@desk/node";
+import { DESK_REPO, GhProvenance } from "./provenance.ts";
 import { UnixDaemonClient } from "./daemon-client.ts";
 import type { CommandResult } from "./install.ts";
 
@@ -44,6 +46,7 @@ export async function doctorCommand(input: {
       daemon: new UnixDaemonClient(join(input.deskHome, "run", "ptyd.sock"), input.info.version),
       tmux: binary === null ? null : new NodeTmux(binary, input.env),
       shell: new NodeLoginShell({ env: input.env }),
+      gh: new GhProvenance({ gh: await findGh(input.env, input.platform), repo: DESK_REPO, env: input.env }),
     },
     { home: input.home, deskHome: input.deskHome, platform: input.platform, info: input.info, fix: input.fix },
   );

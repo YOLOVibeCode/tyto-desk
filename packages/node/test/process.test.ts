@@ -245,3 +245,24 @@ describe("a login shell's names (docs/IMPLEMENTATION.md §15.3)", () => {
     expect((await shell.calls()).map((call) => call.argv)).toEqual([["-l", "-c", 'command -v -- "$1"', "desk-which", "desk"]]);
   });
 });
+
+describe("the processes a version's executables run (§23.5 rule 7)", () => {
+  it.runIf(process.platform === "darwin")("executablesUnder reads ps's executable paths on macOS", async () => {
+    const ps = await fakeExecutable("ps", [
+      {
+        match: ["-axo", "pid=,comm="],
+        stdout: "  4100 /Users/alex/.desk/app/0.3.0/Desk Terminal.app/Contents/MacOS/desk-node\n  4200 /usr/bin/login\n  4300 /Users/alex/.desk/app-old/x\n",
+      },
+    ]);
+
+    expect(await new NodeProcessInfo({ ps: ps.path }).executablesUnder("/Users/alex/.desk/app")).toEqual([
+      { pid: 4100, exe: "/Users/alex/.desk/app/0.3.0/Desk Terminal.app/Contents/MacOS/desk-node" },
+    ]);
+  });
+
+  it.runIf(process.platform === "linux")("executablesUnder finds this process under its own executable's directory on Linux", async () => {
+    const found = await new NodeProcessInfo().executablesUnder(join(process.execPath, ".."));
+
+    expect(found?.some((entry) => entry.pid === process.pid)).toBe(true);
+  });
+});

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomInt, randomBytes } from "node:crypto";
-import { readlink } from "node:fs/promises";
+import { readdir, readlink } from "node:fs/promises";
 import { userInfo } from "node:os";
 import type { Clock, DetachedSpawner, ListenerInfo, LoginShell, ProcessInfo, ProcessSignals, Random } from "@desk/core";
 import { runArgv } from "./run.ts";
@@ -79,6 +79,33 @@ export class NodeProcessInfo implements ProcessInfo {
     if (result.code !== 0) return null;
     const elapsed = elapsedSeconds(result.stdout.trim());
     return elapsed === null ? null : asked - elapsed * 1_000;
+  }
+
+  /**
+   * The processes whose executable lies under `dir`: on Linux `/proc/<pid>/exe`, on macOS `ps -axo pid=,comm=` (which
+   * prints the executable's path there); `null` when they cannot be listed.
+   */
+  async executablesUnder(dir: string): Promise<readonly { pid: number; exe: string }[] | null> {
+    const prefix = `${dir.replace(/\/+$/, "")}/`;
+    if (process.platform === "linux") {
+      const pids = await readdir("/proc").catch(() => null);
+      if (pids === null) return null;
+      const found: { pid: number; exe: string }[] = [];
+      for (const name of pids) {
+        if (!/^\d+$/.test(name)) continue;
+        const exe = await readlink(`/proc/${name}/exe`).catch(() => null);
+        if (exe !== null && exe.startsWith(prefix)) found.push({ pid: Number(name), exe });
+      }
+      return found;
+    }
+    const result = await runArgv(this.ps, ["-axo", "pid=,comm="], { env: { PATH: "/usr/bin:/bin", LC_ALL: "C" }, timeoutMs: 3_000, maxBytes: 16 * 1024 * 1024 });
+    if (result.code !== 0) return null;
+    const found: { pid: number; exe: string }[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const match = /^\s*(\d+)\s(.*)$/.exec(line);
+      if (match?.[2] !== undefined && match[2].startsWith(prefix)) found.push({ pid: Number(match[1]), exe: match[2] });
+    }
+    return found;
   }
 
   /** `ps -axww -o pid=,args=` (every process, full argument lines); only the matching pids leave this method. */

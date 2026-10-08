@@ -54,6 +54,19 @@ function setup(options: { answers?: (boolean | "no-tty")[]; platform?: string; s
 }
 
 describe("desk install --from", () => {
+  it("install refuses a version whose state schemas are older than the files on disk before it asks or installs anything", async () => {
+    const desk = setup();
+    desk.versions.runtimes.set(from, { ok: true, staging, versionJson: JSON.stringify({ ...info, compat: { state: { layout: 1 } } }), build: BUILD });
+    await desk.files.write(`${deskHome}/layout.json`, JSON.stringify({ version: 2, tabs: [] }), 0o600);
+
+    const result = await desk.run();
+
+    expect(result).toEqual({ ok: false, code: 65, message: expect.stringContaining(`${deskHome}/layout.json is version 2`) });
+    expect(desk.versions.committed).toEqual([]);
+    expect(desk.versions.used).toEqual([]);
+    expect(desk.prompter.asked).toEqual([]);
+  });
+
   it("install verifies the runtime, asks on a TTY, renames it into place and switches current", async () => {
     const desk = setup();
 
@@ -104,6 +117,20 @@ describe("desk install --from", () => {
 
     expect(desk.lock.acquired).toEqual(["install"]);
     expect(desk.lock.released).toEqual(["install"]);
+  });
+
+  it("an install stages, verifies and then renames the version into place, and a failed one leaves nothing behind", async () => {
+    const good = setup();
+    await good.run();
+    const bad = setup();
+    bad.versions.runtimes.set(from, { ok: false, reason: "mismatch" });
+
+    await bad.run();
+
+    expect(good.versions.committed).toEqual([`${staging} -> ${info.version}`]);
+    expect(bad.versions.committed).toEqual([]);
+    expect(bad.versions.used).toEqual([]);
+    expect(bad.versions.installed).toEqual([]);
   });
 
   it("install refuses a runtime that does not match its files.sha256 and installs nothing", async () => {

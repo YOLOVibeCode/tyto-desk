@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, stat, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -65,6 +66,18 @@ describe("NodeAppVersions", () => {
     const empty = await mkdtemp(join(tmpdir(), "runtime-"));
 
     expect(await versions.stage(empty)).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    ["a link", (path: string) => symlink("/dev/zero", path)],
+    ["a FIFO", async (path: string) => void execFileSync("mkfifo", [path])],
+  ])("stage refuses a runtime whose version.json is %s, without reading it", async (_, make) => {
+    const versions = new NodeAppVersions(await deskHome());
+    const dir = await runtime();
+    await rm(join(dir, "version.json"));
+    await make(join(dir, "version.json"));
+
+    expect(await versions.stage(dir)).toEqual({ ok: false, reason: "no-version-json" });
   });
 
   it("commit renames a staging into app/<version>, and current switches with a relative link", async () => {
@@ -202,5 +215,36 @@ describe("NodeAppVersions", () => {
     await change(dir);
 
     expect(await versions.verify("0.3.1-dev.x+a1b2c3d")).toBe(false);
+  });
+
+  it("install clones files identical to the current version's instead of copying them", async () => {
+    const versions = new NodeAppVersions(await deskHome());
+    const first = await versions.stage(await runtime());
+    if (!first.ok) throw new Error("stage failed");
+    await versions.commit(first.staging, "0.3.1-dev.x+a1b2c3d");
+    await versions.use("0.3.1-dev.x+a1b2c3d");
+    // The next version's desk.mjs is the current one's; only a clone from the current version can read it.
+    const next = await runtime({ "version.json": JSON.stringify({ version: "0.3.2-dev.x+a1b2c3d" }) });
+    await chmod(join(next, "desk.mjs"), 0o000);
+
+    const staged = await versions.stage(next);
+
+    expect(staged.ok).toBe(true);
+  });
+
+  it("remove deletes an installed version that is not current, and refuses the current one", async () => {
+    const home = await deskHome();
+    const versions = new NodeAppVersions(home);
+    for (const version of ["0.3.1-dev.x+a1b2c3d", "0.3.2-dev.x+a1b2c3d"]) {
+      const staged = await versions.stage(await runtime());
+      if (!staged.ok) throw new Error("stage failed");
+      await versions.commit(staged.staging, version);
+    }
+    await versions.use("0.3.2-dev.x+a1b2c3d");
+
+    await versions.remove("0.3.1-dev.x+a1b2c3d");
+
+    expect(await versions.list()).toEqual(["0.3.2-dev.x+a1b2c3d"]);
+    await expect(versions.remove("0.3.2-dev.x+a1b2c3d")).rejects.toThrow(/current/);
   });
 });

@@ -44,6 +44,15 @@ export class MemoryAppVersions implements AppVersions {
     return this.installed.includes(version) && this.builds.has(version) && !this.damaged.has(version);
   }
 
+  readonly removed: string[] = [];
+
+  async remove(version: string): Promise<void> {
+    if (version === this.currentVersion) throw new Error(`${version} is current`);
+    this.removed.push(version);
+    const at = this.installed.indexOf(version);
+    if (at >= 0) this.installed.splice(at, 1);
+  }
+
   async use(version: string): Promise<void> {
     if (!this.installed.includes(version)) throw new Error(`${version} is not installed`);
     this.used.push(version);
