@@ -15,7 +15,7 @@ import type { Prompter } from "../ports/prompter.ts";
 import type { TextFiles } from "../ports/text-files.ts";
 import type { TreeRemover } from "../ports/tree-remover.ts";
 import { TMUX_DESK_LINE } from "../pty/agent-env.ts";
-import { WEB_ACCESS_DESK_STEP, type ManagedFile } from "./extras.ts";
+import { WEB_ACCESS_DESK_STEP, isManagedFile } from "./extras.ts";
 import { parseInstalled } from "./installed.ts";
 
 export type UninstallPorts = {
@@ -85,7 +85,7 @@ export async function uninstall(ports: UninstallPorts, input: { home: string; de
   }
 
   const installed = parseInstalled((await ports.files.read(`${deskHome}/installed.json`)) ?? "");
-  const recorded = (installed?.files ?? []).filter((entry): entry is ManagedFile => typeof entry === "object" && entry !== null && "kind" in entry);
+  const recorded = (installed?.files ?? []).filter(isManagedFile);
   for (const entry of recorded) {
     switch (entry.kind) {
       case "skill": {
@@ -112,6 +112,10 @@ export async function uninstall(ports: UninstallPorts, input: { home: string; de
         break;
       case "launch-agent":
         await ports.agents.remove(entry.label);
+        break;
+      case "native-host":
+        // A host desk import native-hosts copied (§14).
+        if (config !== null) await ports.hostsFor(config).remove(entry.name);
         break;
       default: {
         const never: never = entry;

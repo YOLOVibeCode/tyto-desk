@@ -246,3 +246,25 @@ export async function chromeBinaryMachine(): Promise<string> {
     await file.close();
   }
 }
+
+/**
+ * A "main" Chrome for desk import (slice 8): the same Chrome in `home`'s default profile (no `--user-data-dir`), with
+ * remote debugging on, so it writes `DevToolsActivePort` there as the operator's Chrome does once its toggle is on.
+ */
+export async function startMainChrome(options: { home: string; urls?: readonly string[] }): Promise<{ pid: number; stop(): Promise<Exit> }> {
+  assertGuiAllowed();
+  // Chrome 136 and later ignore --remote-debugging-port in the default profile; the operator's way is the
+  // chrome://inspect/#remote-debugging toggle, which is this Local State pref.
+  const profile = join(options.home, ".config", "google-chrome");
+  await mkdir(profile, { recursive: true });
+  await writeFile(join(profile, "Local State"), JSON.stringify({ devtools: { remote_debugging: { "user-enabled": true } } }));
+  const args = ["--no-first-run", "--no-default-browser-check", ...WINDOW, ...(options.urls ?? [])];
+  const proc = await launch("main", "/usr/bin/google-chrome-stable", args, options.home);
+  return {
+    pid: proc.pid,
+    async stop() {
+      process.kill(proc.pid, "SIGTERM");
+      return exitWithin(proc.exit, 15_000, "the main Chrome after SIGTERM");
+    },
+  };
+}

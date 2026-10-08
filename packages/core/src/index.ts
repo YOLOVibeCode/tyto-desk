@@ -209,3 +209,7 @@ export { TITLE_MAX, linkTarget, osc52Write, tabTitle } from "./term/osc.ts";
 export { setToggleKey } from "./config/toggle-key.ts";
 export { parseStoredPanes } from "./ptyd/panes-file.ts";
 export { PaneKeeper, type PaneKeeperPorts, type RestorePlan } from "./ptyd/pane-keeper.ts";
+export { cookieDomains, cookiesFor, importableCookies, isGoogleAccountCookie } from "./import/cookies.ts";
+export { GOOGLE_ACCOUNT_EXTRA_DOMAINS, GOOGLE_DOMAINS_SHA256, GOOGLE_SUPPORTED_DOMAINS } from "./import/google-domains.ts";
+export { importCookies, type ImportCookiesInput, type ImportCookiesPorts, type ImportResult } from "./import/import-cookies.ts";
+export { importNativeHost, type ImportNativeHostPorts } from "./import/native-hosts.ts";

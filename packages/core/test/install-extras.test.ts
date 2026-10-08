@@ -44,6 +44,15 @@ describe("install's skills (docs/IMPLEMENTATION.md §11, §15.1)", () => {
     );
   });
 
+  it("install keeps the native hosts desk import recorded", async () => {
+    const host = { kind: "native-host", name: "com.1password.1password", sha256: "a".repeat(64) };
+    const desk = setup({ answers: [false, false, false, false], files: { [`${deskHome}/installed.json`]: JSON.stringify({ version: 1, current: "0.4.0", previous: null, versions: {}, files: [host] }) } });
+
+    await desk.run();
+
+    expect((await recorded(desk.files)).filter((entry) => (entry as { kind?: unknown }).kind === "native-host")).toEqual([host]);
+  });
+
   it("install keeps a skill the user edited", async () => {
     // Each run asks again for the steps declined before: their result is still missing.
     const desk = setup({ answers: [false, false, false, false, false, false, false, false] });
