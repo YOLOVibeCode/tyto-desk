@@ -139,7 +139,8 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       await typeLine("");
       await waitFor(async () => (await screen()).includes("desk-live %"), { label: "the prompt after vi" });
 
-      await typeLine("tmux new -s desklive");
+      // A named window keeps its name: automatic-rename would turn "tmux" into "zsh" between the two snapshots.
+      await typeLine("tmux new -s desklive -n main");
       await waitFor(async () => (await screen()).includes("[desklive]"), { label: "tmux's status line", timeoutMs: 20_000 });
       await typeLine("echo inside-tmux");
       await waitFor(async () => (await lines()).includes("inside-tmux"), { label: "output in tmux" });
