@@ -23,3 +23,4 @@ export { NodeTreeRemover } from "./tree-remover.ts";
 export { TarArchive } from "./archive.ts";
 export { NodeFileDigest } from "./file-digest.ts";
 export { NodeProcessCwd } from "./process-cwd.ts";
+export { NodeShellProbe } from "./shell-probe.ts";

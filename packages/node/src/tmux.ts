@@ -1,5 +1,5 @@
 import { access, constants } from "node:fs/promises";
-import type { Tmux } from "@desk/core";
+import type { Tmux, TmuxClient, TmuxSessions } from "@desk/core";
 import { runArgv } from "./run.ts";
 
 /** Where Desk looks for tmux when the config names none. */
@@ -22,9 +22,10 @@ const PASSED = ["HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE",
 
 /**
  * The user's tmux on its default socket (docs/IMPLEMENTATION.md §3), through `tmux` argv with a 3 s timeout. It reads and
- * appends to the server's global `update-environment` only; it never runs `show-environment`.
+ * appends to the server's global `update-environment`, lists clients and asks whether a session exists (§7.4); it never
+ * runs `show-environment`.
  */
-export class NodeTmux implements Tmux {
+export class NodeTmux implements Tmux, TmuxSessions {
   private readonly binary: string;
   private readonly env: Record<string, string>;
 
@@ -56,5 +57,23 @@ export class NodeTmux implements Tmux {
     if (names.length === 0 || names.some((name) => !/^[A-Z_][A-Z0-9_]*$/.test(name))) return false;
     const result = await runArgv(this.binary, ["set-option", "-ga", "update-environment", ` ${names.join(" ")}`], { env: this.env, timeoutMs: 3_000 });
     return result.code === 0;
+  }
+
+  async clients(): Promise<readonly TmuxClient[] | null> {
+    const result = await runArgv(this.binary, ["list-clients", "-F", "#{client_tty} #{session_name}"], { env: this.env, timeoutMs: 3_000 });
+    if (result.code !== 0) return null;
+    const clients: TmuxClient[] = [];
+    for (const line of result.stdout.split("\n")) {
+      const at = line.indexOf(" ");
+      if (at <= 0 || !line.startsWith("/dev/")) continue;
+      clients.push({ tty: line.slice(0, at), session: line.slice(at + 1) });
+    }
+    return clients;
+  }
+
+  async hasSession(name: string): Promise<boolean> {
+    if (name === "" || /[\u0000-\u001f\u007f]/.test(name)) return false;
+    // `=` asks for exactly this name, never a prefix or a pattern.
+    return (await runArgv(this.binary, ["has-session", "-t", `=${name}`], { env: this.env, timeoutMs: 3_000 })).code === 0;
   }
 }

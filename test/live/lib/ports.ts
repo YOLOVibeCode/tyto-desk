@@ -22,4 +22,5 @@ export const LIVE_PORTS = {
   layout: 9577,
   keys: 9587,
   toggle: 9597,
+  restore: 9607,
 } as const;

@@ -6,6 +6,12 @@ export type LogEvent =
   | { event: "bad-line"; size: number }
   | { event: "line-refused"; size: number }
   | { event: "state-recovered"; file: "layout" | "panes" | "config" }
+  /** §7.4: how a pane the daemon did not have came back. */
+  | { event: "pane-restored"; how: "attach" | "shell" | "waiting" }
+  /** §7.4: a fallback shell gave its pane to the tmux session that came back. */
+  | { event: "pane-attached-session"; code: number | null; signal: number | null }
+  /** §7.4: a restored tmux client exited, and a login shell goes on in its pane. */
+  | { event: "pane-tmux-exited"; code: number | null; signal: number | null }
   | { event: "crash"; errorClass: string; code: string | null }
   | { event: "warning"; errorClass: string; code: string | null }
   | { event: "shutdown"; mode: "stop" | "restart" }

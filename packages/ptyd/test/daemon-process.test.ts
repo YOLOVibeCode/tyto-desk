@@ -4,7 +4,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PROTOCOL_MAX, PROTOCOL_MIN, type InstanceLock } from "@desk/core";
+import { PROTOCOL_MAX, PROTOCOL_MIN, newDeskConfig, type InstanceLock } from "@desk/core";
 import { FakeInstanceLock, FakeProcessInfo, FakePtySpawner } from "@desk/core/testing";
 import { NodeInstanceLock } from "@desk/node";
 import { serveDaemon } from "../src/index.ts";
@@ -45,14 +45,14 @@ async function until(check: () => Promise<boolean>): Promise<void> {
 }
 
 /** Starts the daemon's process logic with a fake PTY, signals the test sends, and the umask it would set. */
-function serve(deskHome: string, options: { uid?: number | null; lock?: InstanceLock; order?: string[] } = {}) {
+function serve(deskHome: string, options: { uid?: number | null; lock?: InstanceLock; order?: string[]; spawner?: FakePtySpawner } = {}) {
   const signals = new EventEmitter();
   const order = options.order ?? [];
   const exit = serveDaemon({
     deskHome,
     env: { HOME: dirname(deskHome) },
     version: VERSION,
-    spawner: new FakePtySpawner(),
+    spawner: options.spawner ?? new FakePtySpawner(),
     uid: options.uid === undefined ? UID : options.uid,
     umask: (mask) => order.push(`umask ${mask.toString(8)}`),
     signals,
@@ -62,6 +62,28 @@ function serve(deskHome: string, options: { uid?: number | null; lock?: Instance
 }
 
 describe("desk-ptyd, the process", () => {
+  it("a restored pane whose saved directory is gone starts in HOME (§7.4)", async () => {
+    const deskHome = await freshDeskHome();
+    const home = dirname(deskHome);
+    const pane = "p_k2m9q3x7ab";
+    await writeFile(join(deskHome, "config.json"), JSON.stringify(newDeskConfig({ home, platform: "darwin", chromePort: 9417, gatewayPort: 9583 })), { mode: 0o600 });
+    await writeFile(join(deskHome, "panes.json"), JSON.stringify({ version: 1, panes: { [pane]: { cwd: join(home, "gone"), tmux: null, lastTmux: null, shell: "/bin/sh" } } }), { mode: 0o600 });
+    const spawner = new FakePtySpawner();
+    const daemon = serve(deskHome, { spawner });
+    await until(() => answers(daemon.socket));
+
+    const socket = connect({ path: daemon.socket });
+    await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+    socket.write(`${JSON.stringify({ type: "hello", vMin: PROTOCOL_MIN, vMax: PROTOCOL_MAX, client: "panel", build: VERSION, window: 7 })}\n`);
+    socket.write(`${JSON.stringify({ type: "open", id: "r1", pane, cols: 100, rows: 30 })}\n`);
+    await until(async () => spawner.spawned.length > 0);
+    socket.destroy();
+    daemon.signals.emit("SIGTERM");
+    await daemon.exit;
+
+    expect(spawner.spawned[0]?.options.cwd).toBe(home);
+  });
+
   it.each(["SIGTERM", "SIGHUP"])("on %s the daemon stops as on shutdown: its socket closes, run/ptyd.lock is released, and it exits 0", async (signal) => {
     const daemon = serve(await freshDeskHome());
     await until(() => answers(daemon.socket));

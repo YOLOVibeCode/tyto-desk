@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type Layout, type PaneShell } from "../src/index.ts";
-import { FakeClock, FakeProcessCwd, FakePtySpawner, FakeTerminalMirror, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
+import { FakeClock, FakeProcessCwd, FakePtySpawner, FakeShellProbe, FakeTerminalMirror, FakeTmuxSessions, MemoryLayoutStore, MemoryLogSink, MemoryPaneStore } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 const OTHER = "p_m9x1d4f6hz";
@@ -16,7 +16,7 @@ type Peer = {
   last(): DaemonMessage | undefined;
 };
 
-function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } = {}) {
+function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore; paneStore?: MemoryPaneStore } = {}) {
   const spawner = new FakePtySpawner();
   const mirror = new FakeTerminalMirror();
   const layouts = options.layouts ?? new MemoryLayoutStore();
@@ -25,19 +25,28 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
   const shutdowns: string[] = [];
   const shells: string[] = [];
   const cwds = new FakeProcessCwd();
+  const paneStore = options.paneStore ?? new MemoryPaneStore();
+  const probe = new FakeShellProbe();
+  const sessions = new FakeTmuxSessions();
+  const shellCalls: { pane: string; cwd: string | null; attach?: string }[] = [];
   const daemonPorts = {
     spawner,
     clock,
     build: "0.3.0",
     cwds,
-    shellFor: async (pane: string, cwd: string | null): Promise<PaneShell> => {
+    paneStore,
+    probe,
+    sessions,
+    shellFor: async (pane: string, cwd: string | null, attach?: string): Promise<PaneShell> => {
       shells.push(pane);
+      shellCalls.push({ pane, cwd, ...(attach === undefined ? {} : { attach }) });
       return {
-        file: "/bin/zsh",
-        args: ["-l"],
+        file: attach === undefined ? "/bin/zsh" : "/opt/homebrew/bin/tmux",
+        args: attach === undefined ? ["-l"] : ["attach-session", "-t", `=${attach}`],
         cwd: cwd ?? "/Users/alex",
         env: { HOME: "/Users/alex", DESK_PANE: pane },
         notice: options.notice ?? null,
+        loginShell: "/bin/zsh",
       };
     },
     onShutdown: (mode: "stop" | "restart") => shutdowns.push(mode),
@@ -73,7 +82,7 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
     await settle();
     return peer;
   };
-  return { daemon, daemonPorts, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client, cwds };
+  return { daemon, daemonPorts, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client, cwds, paneStore, probe, sessions, shellCalls };
 }
 
 /** Lets the daemon's pending promises run. */
@@ -477,6 +486,7 @@ describe("the terminal daemon", () => {
     const cli = await client("cli");
 
     cli.send({ type: "shutdown", mode: "stop" });
+    await settle();
 
     expect(spawner.pty(0).signals).toEqual(["SIGHUP"]);
     expect(spawner.pty(1).signals).toEqual([]);
@@ -491,6 +501,7 @@ describe("the terminal daemon", () => {
 
     daemon.stop();
     daemon.stop();
+    await settle();
 
     expect(spawner.pty().signals).toEqual(["SIGHUP"]);
     expect(panel.closed).toBe(true);
@@ -503,6 +514,7 @@ describe("the terminal daemon", () => {
     stale.send({ type: "hello", vMin: 2, vMax: 2, client: "panel", build: "0.9.0" });
 
     stale.send({ type: "shutdown", mode: "restart" });
+    await settle();
 
     expect(shutdowns).toEqual(["restart"]);
   });
@@ -906,5 +918,194 @@ describe("the terminal daemon's output, attach and flow control (slice 2b)", () 
     pty.end({ code: null, signal: 9 });
 
     expect(panel.last()).toEqual({ type: "exit", pane: PANE, code: null, signal: 9 });
+  });
+});
+
+describe("cold restore (docs/IMPLEMENTATION.md §7.4)", () => {
+  const saved = (record: { cwd?: string | null; tmux?: string | null; lastTmux?: string | null }) =>
+    new MemoryPaneStore({ panes: { version: 1, panes: { [PANE]: { cwd: "/Users/alex/Dev", tmux: null, lastTmux: null, shell: "/bin/zsh", ...record } } }, recovered: false });
+  const exits = (peer: { sent: DaemonMessage[] }) => peer.sent.filter((m) => m.type === "exit");
+
+  it("restore attaches a pane to its tmux session with attach-session -t =name", async () => {
+    const desk = setup({ paneStore: saved({ tmux: "work", lastTmux: "work" }) });
+    desk.sessions.sessions.add("work");
+    const panel = await desk.client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(desk.shellCalls).toEqual([{ pane: PANE, cwd: "/Users/alex/Dev", attach: "work" }]);
+    expect(desk.spawner.spawned[0]?.options.args).toEqual(["attach-session", "-t", "=work"]);
+    expect(desk.sessions.asked).toEqual(["work"]);
+  });
+
+  it("restore starts a login shell in the saved cwd when the tmux session is gone, with one dim line saying why", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: null }) });
+    const panel = await desk.client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(desk.shellCalls).toEqual([{ pane: PANE, cwd: "/Users/alex/Dev" }]);
+    expect(JSON.stringify(panel.sent)).toContain("the shell that ran here ended when the terminal daemon stopped");
+  });
+
+  it("a pane the daemon still runs is attached as it is, never restored", async () => {
+    const desk = setup({ paneStore: saved({ tmux: "work", lastTmux: "work" }) });
+    desk.sessions.sessions.add("work");
+    const panel = await desk.client("panel", { window: 7 });
+    desk.daemonPorts.paneStore.saved.length = 0;
+
+    panel.send({ type: "open", id: "r1", pane: OTHER, cols: 100, rows: 30 });
+    await settle();
+    panel.send({ type: "open", id: "r2", pane: OTHER, cols: 100, rows: 30 });
+    await settle();
+
+    expect(desk.shellCalls).toEqual([{ pane: OTHER, cwd: null }]);
+  });
+
+  it("a pane whose tmux client exits continues as a login shell in the same cwd", async () => {
+    const desk = setup({ paneStore: saved({ tmux: "work", lastTmux: "work" }) });
+    desk.sessions.sessions.add("work");
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    desk.spawner.pty(0).end({ code: 0, signal: null });
+    await settle();
+
+    expect(desk.shellCalls.at(-1)).toEqual({ pane: PANE, cwd: "/Users/alex/Dev" });
+    expect(desk.spawner.spawned).toHaveLength(2);
+    expect(exits(panel)).toEqual([]);
+  });
+
+  it("after a cold restore, an idle fallback shell is replaced by its tmux session when the session appears within 10 minutes", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: "work" }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    await desk.clock.advance(5_000);
+
+    desk.sessions.sessions.add("work");
+    await desk.clock.advance(5_000);
+    await settle();
+    const signals = [...desk.spawner.pty(0).signals];
+    desk.spawner.pty(0).end({ code: null, signal: 1 });
+    await settle();
+
+    expect(signals).toEqual(["SIGHUP"]);
+    expect(desk.shellCalls.at(-1)).toEqual({ pane: PANE, cwd: "/Users/alex/Dev", attach: "work" });
+    expect(exits(panel)).toEqual([]);
+  });
+
+  it("a busy fallback shell is never replaced and the panel offers the attach", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: "work" }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    desk.probe.busy.add(desk.spawner.pty(0).pid);
+
+    desk.sessions.sessions.add("work");
+    await desk.clock.advance(5_000);
+    await settle();
+    await desk.clock.advance(5_000);
+    await settle();
+    const offered = panel.sent.filter((m) => m.type === "notice");
+    const signals = [...desk.spawner.pty(0).signals];
+    panel.send({ type: "attach", pane: PANE });
+    await settle();
+
+    expect(signals).toEqual([]);
+    expect(offered).toEqual([{ type: "notice", kind: "tmux-back", pane: PANE, session: "work" }]);
+    expect(desk.spawner.pty(0).signals).toEqual(["SIGHUP"]);
+  });
+
+  it("a fallback shell whose session is still gone after 10 minutes stops waiting", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: "work" }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    await desk.clock.advance(11 * 60_000);
+    desk.sessions.sessions.add("work");
+    desk.sessions.asked.length = 0;
+    await desk.clock.advance(10_000);
+    await settle();
+
+    expect(desk.sessions.asked).toEqual([]);
+    expect(desk.spawner.pty(0).signals).toEqual([]);
+  });
+
+  it("a restored pane whose shell exits and is opened again gets a plain new shell, not a second restore", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: null }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    desk.spawner.pty(0).end({ code: 0, signal: null });
+    await settle();
+    panel.send({ type: "open", id: "r2", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    expect(desk.shellCalls).toEqual([
+      { pane: PANE, cwd: "/Users/alex/Dev" },
+      { pane: PANE, cwd: null },
+    ]);
+  });
+
+  it("a restored tmux pane the user closes never comes back as a login shell", async () => {
+    const desk = setup({ paneStore: saved({ tmux: "work", lastTmux: "work" }) });
+    desk.sessions.sessions.add("work");
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    panel.send({ type: "close", id: "c1", pane: PANE });
+    desk.spawner.pty(0).end({ code: null, signal: 1 });
+    await settle();
+
+    expect(desk.spawner.spawned).toHaveLength(1);
+  });
+
+  it("a fallback shell typed into less than 5 s ago is busy: it is offered the attach, not replaced", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: "work" }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    await desk.clock.advance(3_000);
+    panel.send({ type: "in", pane: PANE, data: "l" });
+
+    desk.sessions.sessions.add("work");
+    await desk.clock.advance(2_000);
+    await settle();
+
+    expect(desk.spawner.pty(0).signals).toEqual([]);
+    expect(panel.sent.filter((m) => m.type === "notice")).toEqual([{ type: "notice", kind: "tmux-back", pane: PANE, session: "work" }]);
+  });
+
+  it("panes.json is flushed on SIGTERM and SIGHUP, without waiting for its debounce", async () => {
+    const desk = setup();
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    desk.daemon.stop();
+    await settle();
+
+    expect(desk.paneStore.last().panes[PANE]).toMatchObject({ shell: "/bin/zsh" });
+    expect(desk.shutdowns).toEqual(["stop"]);
+  });
+
+  it("an explicit close forgets the pane in panes.json", async () => {
+    const desk = setup({ paneStore: saved({ tmux: null, lastTmux: "work" }) });
+    const panel = await desk.client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+
+    panel.send({ type: "close", id: "c1", pane: PANE });
+    await desk.clock.advance(2_000);
+    await settle();
+
+    expect(desk.paneStore.last().panes[PANE]).toBeUndefined();
   });
 });
