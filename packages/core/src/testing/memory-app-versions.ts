@@ -10,6 +10,8 @@ export class MemoryAppVersions implements AppVersions {
   readonly committed: string[] = [];
   readonly discarded: string[] = [];
   readonly used: string[] = [];
+  /** Installed versions whose files no longer match their files.sha256. */
+  readonly damaged = new Set<string>();
 
   async list(): Promise<readonly string[]> {
     return [...this.installed];
@@ -36,6 +38,10 @@ export class MemoryAppVersions implements AppVersions {
 
   async discard(staging: string): Promise<void> {
     this.discarded.push(staging);
+  }
+
+  async verify(version: string): Promise<boolean> {
+    return this.installed.includes(version) && this.builds.has(version) && !this.damaged.has(version);
   }
 
   async use(version: string): Promise<void> {

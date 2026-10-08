@@ -16,3 +16,4 @@ export {
 } from "./test-guard.ts";
 export { NodeTextFiles } from "./text-files.ts";
 export { NodeTmux, findTmux } from "./tmux.ts";
+export { NodeLaunchAgents } from "./launch-agents.ts";

@@ -26,4 +26,6 @@ export interface AppVersions {
   discard(staging: string): Promise<void>;
   /** Points `current` at an installed version with one rename. */
   use(version: string): Promise<void>;
+  /** Whether an installed version's files are exactly what its files.sha256 lists (§15.1: the host checks this). */
+  verify(version: string): Promise<boolean>;
 }

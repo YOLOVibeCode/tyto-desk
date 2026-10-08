@@ -33,6 +33,9 @@ function installWithPackedRuntime(dir, platform, env) {
     const value = env[name];
     if (value !== undefined) childEnv[name] = value;
   }
+  // The operator's own install, on their Mac at a terminal (deploy refuses CI and Vitest): it may offer Desk.app and the
+  // login agent, as the desk launcher's installs do (§15.1).
+  childEnv.DESK_ALLOW_GUI = "1";
   return new Promise((resolve) => {
     const child = spawn(join(dir, terminalBinary(platform)), [join(dir, "desk.mjs"), "install", "--from", dir], { stdio: "inherit", env: childEnv });
     child.once("error", () => resolve(70));

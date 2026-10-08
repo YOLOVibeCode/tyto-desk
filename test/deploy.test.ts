@@ -201,7 +201,7 @@ describe("npm run deploy", () => {
     expect(code).toBe(0);
     expect(dir).toMatch(new RegExp(`/desk-${version.version.replace(/[.+]/g, "\\$&")}$`));
     expect(ran.argv).toEqual([join(dir, "desk.mjs"), "install", "--from", dir]);
-    expect(Object.keys(ran.env).filter((name) => !name.startsWith("__CF_")).sort()).toEqual(["DESK_HOME", "HOME", "LANG", "LOGNAME", "PATH", "TERM", "TMPDIR", "USER"]);
+    expect(Object.keys(ran.env).filter((name) => !name.startsWith("__CF_")).sort()).toEqual(["DESK_ALLOW_GUI", "DESK_HOME", "HOME", "LANG", "LOGNAME", "PATH", "TERM", "TMPDIR", "USER"]);
     expect(ran.env.DESK_HOME).toBe(deskHome);
     expect(out.lines).toContain(`Installed ${version.version}; run desk`);
     expect(await exists(stubs.ran)).toBe(false);

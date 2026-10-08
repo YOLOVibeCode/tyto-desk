@@ -11,9 +11,10 @@ export { detachAgents, detachEnvironment, listAgents } from "./agents/sessions.t
 export { restoreKeyWarning } from "./agents/restore-warning.ts";
 export { DESK_SKILL, skillAllowedTools } from "./agents/skill.ts";
 export { addTmuxLine, type TmuxLinePorts } from "./install/tmux-line.ts";
+export { DESK_APP_IDENTIFIER, LOGIN_AGENT_LABEL, WEB_ACCESS_DESK_STEP, installExtras, type ExtrasPorts, type ManagedFile } from "./install/extras.ts";
 export { pauseAgents, policyModeOf, resumeAgents, setAgentPolicy, type AgentControlPorts, type AgentControlResult } from "./agents/controls.ts";
 export { base64Decode } from "./bytes/base64.ts";
-export { sha256 } from "./bytes/sha256.ts";
+export { sha256, sha256Hex } from "./bytes/sha256.ts";
 export {
   FORBIDDEN_CHROME_SWITCHES,
   FORBIDDEN_CHROME_SWITCH_VALUES,

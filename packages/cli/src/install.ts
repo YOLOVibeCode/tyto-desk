@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { userInfo } from "node:os";
-import { addTmuxLine, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
+import { guiAllowed, installExtras, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
 import { NodeNativeHostDir } from "@desk/chrome";
 import {
   CryptoRandom,
@@ -8,6 +8,7 @@ import {
   NodeAppVersions,
   NodeCodeSigning,
   NodeInstanceLock,
+  NodeLaunchAgents,
   NodePortProbe,
   NodeTextFiles,
   NodeTmux,
@@ -67,11 +68,23 @@ export async function installCommand(input: InstallCommandInput): Promise<Comman
     },
   );
   if (!result.ok) return { code: result.code, message: result.message };
-  // The consent steps that follow the version steps (§15.1); slice 4c's is the tmux line.
+  // The steps after the version steps (§15.1): the skills, then each consent step whose result is missing.
+  const env = input.env ?? { HOME: input.home };
   const binary = await findTmux(loaded.config.terminal.tmux);
-  const tmux = binary === null ? null : new NodeTmux(binary, input.env ?? { HOME: input.home });
-  const line = await addTmuxLine({ files: new NodeTextFiles(), tmux, prompter: input.prompter }, { home: input.home });
-  return { code: 0, message: line.note === null ? result.message : `${result.message}. Note: ${line.note}` };
+  const extras = await installExtras(
+    {
+      lock: new NodeInstanceLock(join(input.deskHome, "run")),
+      files: new NodeTextFiles(),
+      prompter: input.prompter,
+      tmux: binary === null ? null : new NodeTmux(binary, env),
+      signing: new NodeCodeSigning(input.codesign),
+      agents: new NodeLaunchAgents({ home: input.home, uid: process.getuid?.() ?? 0 }),
+      clock: new SystemClock(),
+    },
+    { home: input.home, deskHome: input.deskHome, platform: input.platform, guiAllowed: guiAllowed(env, input.platform) },
+  );
+  if (!extras.ok) return { code: extras.code, message: `${result.message}, but ${extras.message}` };
+  return { code: 0, message: extras.notes.length === 0 ? result.message : `${result.message}. Notes: ${extras.notes.join("; ")}` };
 }
 
 /** Where Desk keeps its state: DESK_HOME, which the launchers set, else ~/.desk. */
