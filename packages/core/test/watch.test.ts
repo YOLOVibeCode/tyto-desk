@@ -64,9 +64,11 @@ function setup(options: { config?: DeskConfig } = {}) {
     const id = Number(tab.split("-")[1]);
     if (!daemon.panels.includes(id)) daemon.panels.push(id);
   };
-  const bridge = new FakeExtensionBridge([win(1, { lastFocused: true, focused: true, panelOpen: true })]);
+  // Window 1 shows the panel, connected to the daemon; window 2 has none.
+  const bridge = new FakeExtensionBridge([win(1, { lastFocused: true, focused: true, panelOpen: true }), win(2)]);
   const daemon = new FakeDaemonClient({ log });
   daemon.swConnected = true;
+  daemon.panels = [1];
   const chrome = new FakeChromeProcess("155.0.8059.40", log);
   const profile = new FakeChromeProfile();
   const processes = new FakeProcessInfo();
@@ -401,6 +403,7 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
     const watch = setup();
     await settle();
     watch.bridge.windowList = [win(1), win(2, { lastFocused: true })];
+    watch.daemon.panels = [];
 
     watch.targets.emit({ type: "panel-crashed" });
     await pass(watch.clock, 6_000);
@@ -422,6 +425,7 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
   it("a panel crash that took the service worker with it loads the extension again, then reopens the panel", async () => {
     const watch = setup();
     await settle();
+    watch.bridge.windowList = [win(1, { lastFocused: true }), win(2)];
     watch.daemon.panels = [2];
     watch.targets.emit({ type: "panels", open: 1 });
     await pass(watch.clock, 1_000);
@@ -480,6 +484,7 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
   it("desk watch loads the extension again when its worker is gone for two checks while Chrome runs, and reopens the panels that went with it", async () => {
     const watch = setup();
     await settle();
+    watch.bridge.windowList = [win(1, { lastFocused: true }), win(2)];
     watch.daemon.panels = [2];
     watch.targets.emit({ type: "panels", open: 1 });
     await pass(watch.clock, 1_000);
@@ -509,5 +514,31 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
     await pass(watch.clock, 6_000);
 
     expect(watch.extension.loads).toEqual([]);
+  });
+
+  it("a panel the worker counts as open but that is not connected to the daemon for two checks is closed and reopened", async () => {
+    const watch = setup();
+    await settle();
+    watch.daemon.panels = [];
+    watch.bridge.windowList = [win(1, { lastFocused: true, focused: false, panelOpen: true })];
+
+    await pass(watch.clock, 7_000);
+
+    expect(watch.bridge.autoOpens).toEqual([{ windowId: 1, close: true }]);
+    expect(watch.panels.opened).toEqual([{ extensionId: DESK_EXTENSION_ID, tab: "tab-1" }]);
+    expect(watch.extension.loads).toEqual([]);
+  });
+
+  it("a panel that is loading, connected by the next check, is left alone", async () => {
+    const watch = setup();
+    await settle();
+    watch.daemon.panels = [];
+    watch.bridge.windowList = [win(1, { lastFocused: true, panelOpen: true })];
+    await pass(watch.clock, 2_000);
+
+    watch.daemon.panels = [1];
+    await pass(watch.clock, 6_000);
+
+    expect(watch.panels.opened).toEqual([]);
   });
 });

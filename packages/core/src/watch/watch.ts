@@ -411,8 +411,10 @@ export class ChromeWatch {
         }
         const windows = await this.ports.bridge.windows();
         if (windows === null) return;
-        lost = lost.filter((windowId) => windows.find((entry) => entry.id === windowId)?.panelOpen !== true);
-        if (lost.length === 0 && reason === "panel-crashed" && before.size === 0 && !windows.some((entry) => entry.panelOpen)) {
+        // A panel shows once it said hello; the worker may still count a dead one as open, which close: true clears.
+        const shown = (await this.listedPanelWindows()) ?? new Set<number>();
+        lost = lost.filter((windowId) => !shown.has(windowId) && windows.some((entry) => entry.id === windowId));
+        if (lost.length === 0 && reason === "panel-crashed" && before.size === 0 && shown.size === 0) {
           const target = windows.find((entry) => entry.lastFocused) ?? windows.find((entry) => entry.focused) ?? windows[0];
           if (target !== undefined) lost = [target.id];
         }
@@ -430,22 +432,39 @@ export class ChromeWatch {
   }
 
   /**
-   * Every 2 s while Chrome is followed: a service worker that is gone for two checks in a row means the extension's
-   * renderer died (Chrome does not always report a side panel's crash), so the watch recovers it.
+   * Every 2 s while Chrome is followed, since Chrome does not always report a side panel's crash: a service worker gone
+   * for two checks in a row means the extension's renderer died; a window whose panel the worker counts as open but
+   * from which no panel is connected to the daemon, for two checks in a row, holds a dead panel. Either is recovered.
    */
   private async health(): Promise<void> {
     let misses = 0;
+    const dead = new Map<number, number>();
     while (!this.stopped) {
       await this.ports.clock.sleep(HEALTH_MS);
       if (this.stopped) return;
       if (this.wsUrl === null || this.returning || this.recovering) {
         misses = 0;
+        dead.clear();
         continue;
       }
-      misses = (await this.workerConnected()) ? 0 : misses + 1;
-      if (misses < 2) continue;
+      if (!(await this.workerConnected())) {
+        misses += 1;
+        if (misses < 2) continue;
+        misses = 0;
+        await this.recover(new Set(this.panelWindows), "worker-gone").catch((err: unknown) => this.warn(err));
+        continue;
+      }
       misses = 0;
-      await this.recover(new Set(this.panelWindows), "worker-gone").catch((err: unknown) => this.warn(err));
+      const windows = await this.ports.bridge.windows();
+      const connected = await this.listedPanelWindows();
+      if (windows === null || connected === null) continue;
+      const suspects = windows.filter((entry) => entry.panelOpen && !connected.has(entry.id)).map((entry) => entry.id);
+      for (const id of [...dead.keys()]) if (!suspects.includes(id)) dead.delete(id);
+      for (const id of suspects) dead.set(id, (dead.get(id) ?? 0) + 1);
+      const confirmed = [...dead].filter(([, count]) => count >= 2).map(([id]) => id);
+      if (confirmed.length === 0) continue;
+      dead.clear();
+      await this.recover(new Set(confirmed), "panel-crashed").catch((err: unknown) => this.warn(err));
     }
   }
 
