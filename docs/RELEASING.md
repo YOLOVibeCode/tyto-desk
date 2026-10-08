@@ -117,7 +117,7 @@ not that anyone read it. A stable release is the version you read and chose to c
     package-lock.json release-please-config.json docs/CONTRIBUTING.md \
     ':(glob,icase)**/CLAUDE.md' ':(glob,icase)**/CLAUDE.local.md' ':(glob,icase)**/AGENTS.md' \
     ':(glob,icase)**/AGENTS.override.md' ':(glob,icase)**/.claude/**' ':(glob,icase)**/.cursor/**' \
-    ':(glob,icase)**/.cursorrules' ':(glob,icase)**/.mcp.json'
+    ':(glob,icase)**/.cursorrules' ':(glob,icase)**/.mcp.json' ':(glob,icase)**/.gitattributes'
   git -c core.quotePath=false diff --name-only vPREV..origin/main | LC_ALL=C grep '[^ -~]'
   ```
 
