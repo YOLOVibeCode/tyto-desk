@@ -22,8 +22,10 @@ export interface ReleaseFeed {
   latest(channel: "stable" | "edge"): Promise<ReleaseRef | null | Unreachable>;
   /** The release tagged `v<version>`. */
   find(version: string): Promise<ReleaseRef | null | Unreachable>;
-  /** Whether `commit` is on `main` (`compare/<commit>...main` is ahead or identical). */
+  /** Whether `commit` is on `main`: `main` is ahead of it or is it. */
   onMain(commit: string): Promise<boolean | Unreachable>;
+  /** Whether `head` is strictly ahead of `base` (`compare/<base>...<head>` is `ahead`), so `base` is its ancestor. */
+  ahead(base: string, head: string): Promise<boolean | Unreachable>;
   /** Downloads the ref's tarball for `asset` (`darwin-arm64`) and its `SHA256SUMS` into `dir`. */
   fetch(ref: ReleaseRef, asset: string, dir: string): Promise<{ tarball: string; sums: string } | null | Unreachable>;
 }

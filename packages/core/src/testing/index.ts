@@ -47,4 +47,5 @@ export { SeqRandom } from "./seq-random.ts";
 export { FakeArchive } from "./fake-archive.ts";
 export { FakeFileDigest } from "./fake-file-digest.ts";
 export { FakeProvenance } from "./fake-provenance.ts";
+export { FakeGhVersion } from "./fake-gh-version.ts";
 export { FakeReleaseFeed } from "./fake-release-feed.ts";

@@ -21,6 +21,7 @@ import {
   FakeListenerInfo,
   FakeLoginShell,
   FakePathModes,
+  FakeGhVersion,
   FakeTmux,
   MemoryAppVersions,
   MemoryConfigStore,
@@ -69,6 +70,7 @@ function setup() {
     daemon,
     tmux: new FakeTmux({ running: false }),
     shell,
+    gh: new FakeGhVersion(),
   };
   const run = (fix = false, change: Partial<VersionInfo> = {}) => doctor(ports, { home, deskHome, platform: "darwin", info: { ...info, ...change }, fix });
   return { ...ports, chrome, profile, hosts, run };
@@ -108,6 +110,8 @@ describe("desk doctor (docs/IMPLEMENTATION.md §15.2)", () => {
     ["a -desk- file in ~/.agent-browser/sessions", (desk) => desk.files.write(`${home}/.agent-browser/sessions/state-desk-p_1.json`, "{}", 0o600), "agent-state", "delete them"],
     ["background mode on", (desk) => void (desk.profile.localState = { background_mode: { enabled: true } }), "background-mode", "background apps"],
     ["another program on the Desk port", (desk) => void (desk.devTools.answering = true), "desk-port", "quit it"],
+    ["gh missing", (desk) => void (desk.gh.status = { ok: false, reason: "missing" }), "gh", "brew install gh"],
+    ["gh older than 2.102.0", (desk) => void (desk.gh.status = { ok: false, reason: "old" }), "gh", "brew upgrade gh"],
   ])("doctor reports %s and names its fix", async (_problem, change, check, fix) => {
     const desk = setup();
     await change(desk);

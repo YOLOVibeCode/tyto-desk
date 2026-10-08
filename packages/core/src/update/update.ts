@@ -1,3 +1,4 @@
+import { parseInstalled } from "../install/installed.ts";
 import { installVersion, type InstallPorts } from "../install/install.ts";
 import type { Archive } from "../ports/archive.ts";
 import type { FileDigest } from "../ports/file-digest.ts";
@@ -85,11 +86,22 @@ export async function update(ports: UpdatePorts, input: UpdateInput): Promise<Up
   if (ref.channel === "edge" && order <= 0) {
     return { code: 65, message: `edge ${describe(ref)} does not sort after the current version (${input.current.version}); nothing changed` };
   }
+  if (ref.channel === "edge") {
+    // A later run number is not enough: after main is rewound, a newer run can build older code (D55).
+    const ahead = await ports.feed.ahead(input.current.commit, ref.commit);
+    if (ahead === "unreachable") return { code: 75, message: "GitHub could not be reached; nothing changed" };
+    if (!ahead) return { code: 65, message: `edge ${describe(ref)}'s commit ${ref.commit} is not after the current commit ${input.current.commit}; nothing changed` };
+  }
   if (ref.channel === "stable" && input.version === undefined && order < 0) {
     return { code: 0, message: `releases/latest (${ref.tag}) is older than what you run (${input.current.version}); nothing changed` };
   }
   if (order === 0) return { code: 0, message: `${input.current.version} is the newest ${ref.channel === "edge" ? "edge build" : "release"}; nothing changed` };
   if ((await ports.versions.list()).includes(ref.version)) {
+    // The installed copy must be this build, not another one under the same name (a directory install, another commit).
+    const recorded = parseInstalled((await ports.files.read(`${input.deskHome.replace(/\/+$/, "")}/installed.json`)) ?? "")?.versions[ref.version];
+    const same =
+      typeof recorded === "object" && recorded !== null && (recorded as { commit?: unknown }).commit === ref.commit && (recorded as { channel?: unknown }).channel === ref.channel;
+    if (!same) return { code: 65, message: `another build of Desk ${ref.version} is installed, not ${describe(ref)} at ${ref.commit}; nothing changed` };
     return { code: 0, message: `Desk ${ref.version} is installed already; desk use ${ref.version} makes it current` };
   }
 

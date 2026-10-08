@@ -11,6 +11,7 @@ import type { TextFiles } from "../ports/text-files.ts";
 import { parseVersionInfo } from "../version/version-info.ts";
 import { nextInstalled, parseInstalled, serializeInstalled, type InstalledVersion } from "./installed.ts";
 import { deskLauncher, hostLauncher } from "./launchers.ts";
+import { stateTooNew } from "./state-compat.ts";
 
 export type InstallPorts = {
   lock: InstanceLock;
@@ -92,6 +93,12 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
       await ports.versions.discard(staged.staging);
       const what = info === null ? "its version.json is damaged" : "Desk Terminal's signature does not verify";
       return { ok: false, code: 65, message: `the runtime at ${input.from} is refused: ${what}; nothing was installed` };
+    }
+    // A version that would become current must read every state file on disk, or it would move one aside (rule 6).
+    const tooNew = (await ports.versions.current()) === info.version ? null : await stateTooNew(ports.files, input.deskHome, info);
+    if (tooNew !== null) {
+      await ports.versions.discard(staged.staging);
+      return { ok: false, code: 65, message: `${tooNew}; nothing was installed` };
     }
     const alreadyInstalled = (await ports.versions.list()).includes(info.version);
     let build = staged.build;

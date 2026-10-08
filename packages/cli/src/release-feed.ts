@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { lstat, mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -9,6 +9,7 @@ import { assertPathAllowed, runArgv } from "@desk/node";
 /** §23.5: 30 s per call, 300 MB at most. */
 const CALL_MS = 30_000;
 const DOWNLOAD_MAX = 300 * 1024 * 1024;
+const SHA = /^[0-9a-f]{40}$/;
 
 type Json = Record<string, unknown>;
 
@@ -19,7 +20,7 @@ function nextPatch(base: string): string | null {
 
 /**
  * Where updates come from (docs/IMPLEMENTATION.md §23.5). Stable: GitHub's REST API without a token (`releases/latest`,
- * `releases/tags/v<version>`, `commits/<tag>`, `compare/<commit>...main`) and the release's assets. Edge: `gh run list`
+ * `releases/tags/v<version>`, `git/ref/tags/<tag>`, `branches/main`, `compare/<base>...<head>`) and the release's assets. Edge: `gh run list`
  * for the newest successful `edge.yml` run on `main` that has the artifact, its version as edge.yml names it
  * (`<next patch of package.json>-edge.<run number>+<sha7>`), and `gh run download`.
  */
@@ -30,11 +31,11 @@ export class GitHubReleaseFeed implements ReleaseFeed {
   private readonly gh: string;
   private readonly env: Record<string, string>;
 
-  constructor(input: { api?: string; repo: string; asset: string; gh?: string; env: Readonly<Record<string, string | undefined>> }) {
+  constructor(input: { api?: string; repo: string; asset: string; gh: string; env: Readonly<Record<string, string | undefined>> }) {
     this.api = (input.api ?? "https://api.github.com").replace(/\/+$/, "");
     this.repo = input.repo;
     this.asset = input.asset;
-    this.gh = input.gh ?? "gh";
+    this.gh = input.gh;
     this.env = {};
     for (const name of ["HOME", "PATH", "USER", "TMPDIR", "LANG", "GH_CONFIG_DIR", "XDG_CONFIG_HOME"]) {
       const value = input.env[name];
@@ -54,15 +55,37 @@ export class GitHubReleaseFeed implements ReleaseFeed {
     return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Json) : null;
   }
 
+  /**
+   * The commit a tag names, through `git/ref/tags/<tag>`: an exact ref, so a branch of the same name never answers.
+   * An annotated tag is peeled (at most twice).
+   */
+  private async tagCommit(tag: string): Promise<string | null | Unreachable> {
+    const ref = await this.get(`git/ref/tags/${encodeURIComponent(tag)}`);
+    if (ref === null || ref === "unreachable") return ref;
+    let object = ref.object as Json | undefined;
+    for (let peel = 0; peel < 2 && object?.type === "tag" && typeof object.sha === "string" && SHA.test(object.sha); peel += 1) {
+      const annotated = await this.get(`git/tags/${object.sha}`);
+      if (annotated === null || annotated === "unreachable") return annotated;
+      object = annotated.object as Json | undefined;
+    }
+    return object?.type === "commit" && typeof object.sha === "string" && SHA.test(object.sha) ? object.sha : null;
+  }
+
+  /** The commit at the head of `main`, through `branches/main`: never a tag of that name. */
+  private async mainCommit(): Promise<string | null | Unreachable> {
+    const branch = await this.get("branches/main");
+    if (branch === null || branch === "unreachable") return branch;
+    const sha = (branch.commit as Json | undefined)?.sha;
+    return typeof sha === "string" && SHA.test(sha) ? sha : null;
+  }
+
   private async release(body: Json | null | Unreachable): Promise<ReleaseRef | null | Unreachable> {
     if (body === null || body === "unreachable") return body;
     const tag = body.tag_name;
     if (typeof tag !== "string") return null;
-    const commit = await this.get(`commits/${encodeURIComponent(tag)}`);
+    const commit = await this.tagCommit(tag);
     if (commit === null || commit === "unreachable") return commit;
-    const sha = commit.sha;
-    if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) return null;
-    return { tag, version: tag.replace(/^v/, ""), channel: "stable", commit: sha };
+    return { tag, version: tag.replace(/^v/, ""), channel: "stable", commit };
   }
 
   async latest(channel: "stable" | "edge"): Promise<ReleaseRef | null | Unreachable> {
@@ -70,7 +93,7 @@ export class GitHubReleaseFeed implements ReleaseFeed {
     const runs = await runArgv(
       this.gh,
       ["run", "list", "--repo", this.repo, "--workflow", "edge.yml", "--branch", "main", "--status", "success", "--limit", "20", "--json", "databaseId,number,headSha"],
-      { env: this.env, timeoutMs: CALL_MS },
+      { env: this.env, timeoutMs: CALL_MS, cwd: "/" },
     );
     if (runs.code !== 0) return "unreachable";
     let listed: unknown;
@@ -81,10 +104,20 @@ export class GitHubReleaseFeed implements ReleaseFeed {
     }
     for (const run of Array.isArray(listed) ? (listed as Json[]) : []) {
       const { databaseId, number, headSha } = run;
-      if (typeof databaseId !== "number" || typeof number !== "number" || typeof headSha !== "string" || !/^[0-9a-f]{40}$/.test(headSha)) continue;
-      const artifacts = await runArgv(this.gh, ["api", `repos/${this.repo}/actions/runs/${databaseId}/artifacts`, "--jq", ".artifacts[].name"], { env: this.env, timeoutMs: CALL_MS });
-      if (artifacts.code !== 0 || !artifacts.stdout.split("\n").includes(`desk-edge-${this.asset}`)) continue;
-      const manifest = await runArgv(this.gh, ["api", `repos/${this.repo}/contents/package.json?ref=${headSha}`, "--jq", ".content"], { env: this.env, timeoutMs: CALL_MS });
+      if (typeof databaseId !== "number" || typeof number !== "number" || typeof headSha !== "string" || !SHA.test(headSha)) continue;
+      const artifacts = await runArgv(
+        this.gh,
+        ["api", `repos/${this.repo}/actions/runs/${databaseId}/artifacts`, "--jq", ".artifacts[] | [.name, (.size_in_bytes | tostring)] | @tsv"],
+        { env: this.env, timeoutMs: CALL_MS, cwd: "/" },
+      );
+      if (artifacts.code !== 0) continue;
+      // The artifact, at most 300 MB: `gh run download` unpacks it before anything is verified.
+      const artifact = artifacts.stdout
+        .split("\n")
+        .map((line) => line.split("\t"))
+        .find(([name]) => name === `desk-edge-${this.asset}`);
+      if (artifact === undefined || !(Number(artifact[1]) > 0 && Number(artifact[1]) <= DOWNLOAD_MAX)) continue;
+      const manifest = await runArgv(this.gh, ["api", `repos/${this.repo}/contents/package.json?ref=${headSha}`, "--jq", ".content"], { env: this.env, timeoutMs: CALL_MS, cwd: "/" });
       if (manifest.code !== 0) return "unreachable";
       let base: unknown;
       try {
@@ -106,10 +139,21 @@ export class GitHubReleaseFeed implements ReleaseFeed {
   }
 
   async onMain(commit: string): Promise<boolean | Unreachable> {
-    if (!/^[0-9a-f]{40}$/.test(commit)) return false;
-    const compared = await this.get(`compare/${commit}...main`);
+    if (!SHA.test(commit)) return false;
+    const main = await this.mainCommit();
+    if (main === "unreachable") return "unreachable";
+    if (main === null) return false;
+    if (main === commit) return true;
+    const compared = await this.get(`compare/${commit}...${main}`);
     if (compared === "unreachable") return "unreachable";
-    return compared !== null && (compared.status === "ahead" || compared.status === "identical");
+    return compared !== null && compared.status === "ahead";
+  }
+
+  async ahead(base: string, head: string): Promise<boolean | Unreachable> {
+    if (!SHA.test(base) || !SHA.test(head)) return false;
+    const compared = await this.get(`compare/${base}...${head}`);
+    if (compared === "unreachable") return "unreachable";
+    return compared !== null && compared.status === "ahead";
   }
 
   async fetch(ref: ReleaseRef, asset: string, dir: string): Promise<{ tarball: string; sums: string } | null | Unreachable> {
@@ -121,8 +165,13 @@ export class GitHubReleaseFeed implements ReleaseFeed {
       const got = await runArgv(this.gh, ["run", "download", String(ref.run), "--repo", this.repo, "--name", `desk-edge-${asset}`, "--dir", dir], {
         env: this.env,
         timeoutMs: 5 * 60_000,
+        cwd: dir,
       });
       if (got.code !== 0) return "unreachable";
+      // The artifact holds exactly the tarball and SHA256SUMS, as regular files.
+      const names = (await readdir(dir)).sort();
+      if (names.length !== 2 || names[0] !== "SHA256SUMS" || names[1] !== tarballName) return null;
+      for (const name of names) if (!(await lstat(join(dir, name))).isFile()) return null;
       return { tarball: join(dir, tarballName), sums: join(dir, "SHA256SUMS") };
     }
     const release = await this.get(`releases/tags/${encodeURIComponent(ref.tag)}`);

@@ -6,6 +6,8 @@ export class FakeReleaseFeed implements ReleaseFeed {
   edge: ReleaseRef | null | Unreachable = null;
   readonly tagged = new Map<string, ReleaseRef>();
   readonly offMain = new Set<string>();
+  /** `<base>...<head>` pairs where head is not ahead of base. */
+  readonly notAhead = new Set<string>();
   readonly fetched: { tag: string; asset: string; dir: string }[] = [];
   /** What a fetch writes: the tarball's and SHA256SUMS' paths under the directory. */
   download: (dir: string) => { tarball: string; sums: string } | null = (dir) => ({ tarball: `${dir}/desk.tar.gz`, sums: `${dir}/SHA256SUMS` });
@@ -20,6 +22,10 @@ export class FakeReleaseFeed implements ReleaseFeed {
 
   async onMain(commit: string): Promise<boolean | Unreachable> {
     return !this.offMain.has(commit);
+  }
+
+  async ahead(base: string, head: string): Promise<boolean | Unreachable> {
+    return !this.notAhead.has(`${base}...${head}`);
   }
 
   async fetch(ref: ReleaseRef, asset: string, dir: string): Promise<{ tarball: string; sums: string } | null | Unreachable> {

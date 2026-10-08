@@ -8,6 +8,7 @@ import type { TextFiles } from "../ports/text-files.ts";
 import { compareVersions } from "../release/semver.ts";
 import { parseVersionInfo } from "../version/version-info.ts";
 import { parseInstalled, serializeInstalled, type Installed } from "./installed.ts";
+import { stateTooNew } from "./state-compat.ts";
 
 export type VersionsPorts = { versions: AppVersions; files: TextFiles; lock: InstanceLock; processes: ProcessInfo; prompter: Prompter; clock: Clock };
 
@@ -15,9 +16,6 @@ export type VersionsPorts = { versions: AppVersions; files: TextFiles; lock: Ins
 export type VersionsResult = { code: 0 | 64 | 65 | 75 | 77; message: string };
 
 const INSTALL_LOCK_MS = 10_000;
-/** The state files `desk use` checks (§23.5 rule 6): each one's `version` against the target's `compat.state`. */
-const STATE_FILES = ["config", "layout", "panes", "installed"] as const;
-
 /** The version a path under `app/` belongs to (`…/app/0.3.1/node/desk-node` → `0.3.1`), or `null`. */
 function versionOfPath(appDir: string, path: string): string | null {
   const prefix = `${appDir}/`;
@@ -102,22 +100,8 @@ export async function useVersion(ports: VersionsPorts, input: { deskHome: string
     if (info === null || !(await ports.versions.verify(input.version))) {
       return { code: 65, message: `Desk ${input.version}'s files no longer match its files.sha256; install it again` };
     }
-    const reads = (info.compat as { state?: Record<string, unknown> } | null)?.state ?? {};
-    for (const name of STATE_FILES) {
-      const path = `${input.deskHome}/${name}.json`;
-      const text = await ports.files.read(path);
-      if (text === null) continue;
-      let onDisk: unknown;
-      try {
-        onDisk = (JSON.parse(text) as { version?: unknown }).version;
-      } catch {
-        continue;
-      }
-      const readable = reads[name];
-      if (typeof onDisk === "number" && typeof readable === "number" && onDisk > readable) {
-        return { code: 65, message: `Desk ${input.version} reads ${name}.json version ${readable}, but ${path} is version ${onDisk}: it would move it aside` };
-      }
-    }
+    const tooNew = await stateTooNew(ports.files, input.deskHome, info);
+    if (tooNew !== null) return { code: 65, message: tooNew };
     const downgrade = current !== null && compareVersions(input.version, current) < 0;
     const consent = await ports.prompter.confirm(
       `${downgrade ? "This is a downgrade. " : ""}Make Desk ${input.version} the current version${current === null ? "" : ` instead of ${current}`}? Running shells and tmux sessions keep running; the next desk loads it.`,

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, stat, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -65,6 +66,18 @@ describe("NodeAppVersions", () => {
     const empty = await mkdtemp(join(tmpdir(), "runtime-"));
 
     expect(await versions.stage(empty)).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    ["a link", (path: string) => symlink("/dev/zero", path)],
+    ["a FIFO", async (path: string) => void execFileSync("mkfifo", [path])],
+  ])("stage refuses a runtime whose version.json is %s, without reading it", async (_, make) => {
+    const versions = new NodeAppVersions(await deskHome());
+    const dir = await runtime();
+    await rm(join(dir, "version.json"));
+    await make(join(dir, "version.json"));
+
+    expect(await versions.stage(dir)).toEqual({ ok: false, reason: "no-version-json" });
   });
 
   it("commit renames a staging into app/<version>, and current switches with a relative link", async () => {

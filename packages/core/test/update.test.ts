@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { update, type ReleaseRef, type VersionInfo } from "../src/index.ts";
+import { serializeInstalled, update, type Installed, type ReleaseRef, type VersionInfo } from "../src/index.ts";
 import {
   FakeArchive,
   FakeClock,
@@ -33,10 +33,17 @@ const current = (change: Partial<VersionInfo> = {}): VersionInfo => ({
   compat: {},
   ...change,
 });
+const recordOf = (version: string, commit: string): Installed => ({
+  version: 1,
+  current: "0.3.0",
+  previous: null,
+  versions: { [version]: { channel: "stable", build: "b".repeat(64), provenance: `release.yml@refs/tags/v${version}`, commit, installedAt: "2026-10-06T00:00:00Z" } },
+  files: [],
+});
 const stable = (version = "0.4.0", tag = `v${version}`): ReleaseRef => ({ tag, version, channel: "stable", commit: COMMIT });
 const edge = (version = "0.4.1-edge.57+a1b2c3d"): ReleaseRef => ({ tag: version, version, channel: "edge", commit: EDGE_COMMIT, run: 9001 });
 
-function setup(options: { answers?: (boolean | "no-tty")[]; ref?: ReleaseRef; installed?: string[] } = {}) {
+function setup(options: { answers?: (boolean | "no-tty")[]; ref?: ReleaseRef; installed?: string[]; compat?: Record<string, unknown> } = {}) {
   const feed = new FakeReleaseFeed();
   feed.stable = options.ref ?? stable();
   const provenance = new FakeProvenance();
@@ -54,7 +61,7 @@ function setup(options: { answers?: (boolean | "no-tty")[]; ref?: ReleaseRef; in
   const signals = new FakeProcessSignals();
   const prompter = new ScriptedPrompter(options.answers ?? [true]);
   // What a download holds: the tarball whose sha256 SHA256SUMS lists, and a runtime that names the release.
-  const runtimeFor = (ref: ReleaseRef) => JSON.stringify({ version: ref.version, channel: ref.channel, branch: null, commit: ref.commit, dirty: false, builtAt: "2026-10-07T00:00:00Z", node: "26.10.0", compat: {} });
+  const runtimeFor = (ref: ReleaseRef) => JSON.stringify({ version: ref.version, channel: ref.channel, branch: null, commit: ref.commit, dirty: false, builtAt: "2026-10-07T00:00:00Z", node: "26.10.0", compat: options.compat ?? {} });
   let served: ReleaseRef | null = null;
   feed.download = (dir) => {
     digest.digests.set(`${dir}/desk.tar.gz`, SUM);
@@ -165,6 +172,18 @@ describe("desk update (docs/IMPLEMENTATION.md §23.5)", () => {
     expect(named.prompter.asked[0]).toMatch(/downgrade/i);
   });
 
+  it("desk update --version refuses an older release whose state schemas are older than the files on disk, before it asks", async () => {
+    const desk = setup({ ref: stable("0.2.9"), compat: { state: { config: 1 } } });
+    desk.feed.tagged.set("0.2.9", stable("0.2.9"));
+    await desk.files.write(`${deskHome}/config.json`, JSON.stringify({ version: 2 }), 0o600);
+
+    const result = await desk.run({ version: "0.2.9" });
+
+    expect(result).toEqual({ code: 65, message: expect.stringContaining(`${deskHome}/config.json is version 2`) });
+    expect(desk.versions.used).toEqual([]);
+    expect(desk.prompter.asked).toEqual([]);
+  });
+
   it("desk update --channel edge takes the newest successful edge.yml run on main that has the artifact, and verifies edge.yml on refs/heads/main and the run's commit", async () => {
     const desk = setup();
     desk.feed.edge = edge();
@@ -236,11 +255,33 @@ describe("desk update (docs/IMPLEMENTATION.md §23.5)", () => {
 
   it("a version that is already installed is never downloaded again", async () => {
     const desk = setup({ installed: ["0.4.0"] });
+    await desk.files.write(`${deskHome}/installed.json`, serializeInstalled(recordOf("0.4.0", COMMIT)), 0o600);
 
     const result = await desk.run();
 
     expect(desk.feed.fetched).toEqual([]);
     expect(result).toEqual({ code: 0, message: "Desk 0.4.0 is installed already; desk use 0.4.0 makes it current" });
+  });
+
+  it("desk update refuses a release whose version is installed from another build, and downloads nothing", async () => {
+    const desk = setup({ installed: ["0.4.0"] });
+    await desk.files.write(`${deskHome}/installed.json`, serializeInstalled(recordOf("0.4.0", "1".repeat(40))), 0o600);
+
+    const result = await desk.run();
+
+    expect(result).toEqual({ code: 65, message: expect.stringContaining("another build of Desk 0.4.0 is installed") });
+    expect(desk.feed.fetched).toEqual([]);
+  });
+
+  it("desk update --channel edge refuses a run whose commit is not ahead of the current one, even with a later run number", async () => {
+    const desk = setup();
+    desk.feed.edge = edge();
+    desk.feed.notAhead.add(`${"f".repeat(40)}...${EDGE_COMMIT}`);
+
+    const result = await desk.run({ channel: "edge" });
+
+    expect(result).toEqual({ code: 65, message: expect.stringContaining("is not after the current commit") });
+    expect(desk.feed.fetched).toEqual([]);
   });
 
   it("desk update says when GitHub cannot be reached (exit 75)", async () => {

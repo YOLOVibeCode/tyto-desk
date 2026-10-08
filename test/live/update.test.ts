@@ -54,10 +54,9 @@ async function shellPid(tag: string): Promise<string> {
   }
 }
 
-/** The installed desk with the stub gh first on PATH, the fixture's API, and the container's permission for a linux pack. */
+/** The installed desk with the stub gh (DESK_GH: desk never takes gh from PATH), the fixture's API, and a linux pack allowed. */
 function updateEnv(): NodeJS.ProcessEnv {
-  const env = userEnv(desk().home);
-  return { ...env, PATH: `${ghDir}:${env.PATH ?? "/usr/bin:/bin"}`, DESK_IN_CONTAINER: "1", DESK_RELEASE_API: api };
+  return { ...userEnv(desk().home), DESK_GH: join(ghDir, "gh"), DESK_IN_CONTAINER: "1", DESK_RELEASE_API: api };
 }
 
 describe("desk update (slice D2) in the live container", () => {
@@ -80,8 +79,8 @@ describe("desk update (slice D2) in the live container", () => {
         { name: "SHA256SUMS", browser_download_url: `${api}/download/SHA256SUMS` },
       ];
       if (req.url === `${base}/releases/latest` || req.url === `${base}/releases/tags/v${RELEASE}`) return json({ tag_name: `v${RELEASE}`, assets });
-      if (req.url === `${base}/commits/v${RELEASE}`) return json({ sha: COMMIT });
-      if (req.url === `${base}/compare/${COMMIT}...main`) return json({ status: "identical" });
+      if (req.url === `${base}/git/ref/tags/v${RELEASE}`) return json({ object: { type: "commit", sha: COMMIT } });
+      if (req.url === `${base}/branches/main`) return json({ commit: { sha: COMMIT } });
       if (req.url === `/download/${name}`) return res.end(tarball);
       if (req.url === "/download/SHA256SUMS") return res.end(sums);
       res.writeHead(404);

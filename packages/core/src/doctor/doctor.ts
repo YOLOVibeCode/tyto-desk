@@ -13,6 +13,7 @@ import type { DaemonClient } from "../ports/daemon-client.ts";
 import type { DevToolsHttp } from "../ports/dev-tools-http.ts";
 import type { InstanceLock } from "../ports/instance-lock.ts";
 import type { ListenerInfo } from "../ports/listener-info.ts";
+import type { GhVersion } from "../ports/gh-version.ts";
 import type { LoginShell } from "../ports/login-shell.ts";
 import type { NativeHostDir } from "../ports/native-host-dir.ts";
 import type { PathModes } from "../ports/path-modes.ts";
@@ -37,6 +38,7 @@ export type DoctorPorts = {
   daemon: DaemonClient;
   tmux: Tmux | null;
   shell: LoginShell;
+  gh: GhVersion;
 };
 
 export type DoctorInput = {
@@ -236,6 +238,15 @@ export async function doctor(ports: DoctorPorts, input: DoctorInput): Promise<{ 
     const agentNames = names.filter((name) => name.startsWith("AGENT_BROWSER_") && !DESK_AGENT_VARIABLES.has(name));
     if (agentNames.length > 0) add({ check: "login-shell", level: "warning", message: `your login shell exports ${agentNames.join(", ")}`, fix: "unset them where your shell sets them" });
     if (names.includes("ANTHROPIC_API_KEY")) add({ check: "login-shell", level: "warning", message: "your login shell exports ANTHROPIC_API_KEY, which turns Claude Code to API billing", fix: "unset it where your shell sets it" });
+  }
+  // gh, which desk update needs: installed and new enough (signing in is checked online, by desk update).
+  const gh = await ports.gh.installed();
+  if (!gh.ok) {
+    add(
+      gh.reason === "missing"
+        ? { check: "gh", level: "warning", message: "gh is not installed, so desk update cannot check where a release came from", fix: "brew install gh, then gh auth login" }
+        : { check: "gh", level: "warning", message: "gh is older than 2.102.0, whose attestation checks desk update cannot rely on", fix: "brew upgrade gh" },
+    );
   }
   const saved = (await ports.files.names(`${home}/.agent-browser/sessions`)).filter((name) => name.includes("-desk-"));
   if (saved.length > 0) add({ check: "agent-state", level: "problem", message: `~/.agent-browser/sessions holds ${saved.length} file(s) a Desk agent session saved`, fix: "look at them and delete them" });

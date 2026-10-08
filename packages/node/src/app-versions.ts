@@ -88,6 +88,11 @@ async function chmodTree(dir: string): Promise<void> {
   }
 }
 
+/** Whether `path` is a regular file itself, not a link to one. */
+async function isRegularFile(path: string): Promise<boolean> {
+  return (await lstat(path).catch(() => null))?.isFile() === true;
+}
+
 /**
  * `~/.desk/app` (docs/IMPLEMENTATION.md §23.5): versions side by side, each complete once installed, and `current`, a
  * relative symlink that changes only by renaming a new link over it. A runtime is copied into `.staging-<id>` and
@@ -141,6 +146,9 @@ export class NodeAppVersions implements AppVersions {
   async stage(from: string): Promise<StageResult> {
     await assertPathAllowed(this.appDir);
     await assertPathAllowed(from);
+    // Both must be regular files: a link would be followed and a FIFO would block the read.
+    if (!(await isRegularFile(join(from, FILES_SHA256)))) return { ok: false, reason: "bad-files-list" };
+    if (!(await isRegularFile(join(from, "version.json")))) return { ok: false, reason: "no-version-json" };
     let listText: string;
     let versionJson: string;
     try {
