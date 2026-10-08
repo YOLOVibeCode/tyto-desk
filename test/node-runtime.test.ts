@@ -58,6 +58,14 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
 
   it.each<[string, (pin: Record<string, unknown> & { platforms: Record<string, Record<string, unknown>> }) => void, RegExp]>([
     ["a version that is not X.Y.Z", (pin) => (pin.version = "26.10"), /exact Node version/],
+    ["a pre-release version", (pin) => (pin.version = "26.10.0-rc.1"), /exact Node version/],
+    ["a version with a leading v", (pin) => (pin.version = "v26.10.0"), /exact Node version/],
+    ["a version with a trailing newline", (pin) => (pin.version = "26.10.0\n"), /exact Node version/],
+    ["a version that is not a string", (pin) => (pin.version = ["26.10.0"]), /exact Node version/],
+    ["a source in another of nodejs.org's directories", (pin) => (pin.source = "https://nodejs.org/dist/v26.9.0/"), /source is not https:\/\/nodejs\.org\/dist\/v26\.10\.0\//],
+    ["a key that differs from a known one only in case", (pin) => (pin.Version = "26.10.0"), /unknown key "Version"/],
+    ["a digest one character too long", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).archiveSha256 = "a".repeat(65)), /darwin-arm64 entry is malformed/],
+    ["a digest that is not a string", (pin) => ((pin.platforms["darwin-arm64"] ?? {}).binarySha256 = ["a".repeat(64)]), /darwin-arm64 entry is malformed/],
     ["a version with a leading zero", (pin) => (pin.version = "26.010.0"), /exact Node version/],
     ["a source other than nodejs.org's directory for the version", (pin) => (pin.source = "https://example.com/dist/v26.10.0/"), /source/],
     ["no source", (pin) => delete pin.source, /source/],
@@ -92,6 +100,69 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     const text = (await readFile(`${repo}scripts/delivery/node-runtime.json`, "utf8")).replace('"platforms": {', '"platforms": { "__proto__": {},');
 
     expect(() => parseNodeRuntime(JSON.parse(text))).toThrow(/"__proto__"/);
+  });
+
+  it.each<[string, (pin: Record<string, unknown> & { platforms: Record<string, Record<string, unknown>> }) => void]>([
+    ["a top-level key", (p) => (p["x\n::error title=pin::injected"] = 1)],
+    ["an entry's key", (p) => ((p.platforms["darwin-arm64"] ?? {})["x\n::error title=pin::injected"] = 1)],
+  ])("a refusal stays one line: %s from the file is quoted, so a newline in it cannot start a line", async (_, change) => {
+    const pin = await pinWith(change);
+
+    expect(() => parseNodeRuntime(pin)).toThrow('"x\\n::error title=pin::injected"');
+  });
+
+  it.each([
+    ["a line separator", "\u2028"],
+    ["a next-line control", "\u0085"],
+    ["a C1 control sequence introducer", "\u009b"],
+    ["a right-to-left override", "\u202e"],
+    ["a delete", "\u007f"],
+  ])("a refusal shows %s from the file as an escape, so no terminal or log viewer acts on it", async (_, character) => {
+    const pin = await pinWith((p) => (p[`a${character}::error::x`] = 1));
+
+    expect(() => parseNodeRuntime(pin)).toThrow(`"a\\u${character.codePointAt(0)?.toString(16).padStart(4, "0")}::error::x"`);
+    expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/^[\x20-\x7e]+$/) }));
+  });
+
+  it("a refusal names two unknown platforms both", async () => {
+    const pin = await pinWith((p) => {
+      p.platforms["darwin-x64"] = {};
+      p.platforms["win32-x64"] = {};
+    });
+
+    expect(() => parseNodeRuntime(pin)).toThrow('"darwin-x64", "win32-x64"');
+  });
+
+  it("a refusal names at most three unknown names, then how many more there are", async () => {
+    const pin = await pinWith((p) => {
+      for (const key of ["a", "b", "c", "d", "e"]) p[key] = 1;
+    });
+
+    expect(() => parseNodeRuntime(pin)).toThrow('unknown key "a", "b", "c" and 2 more');
+  });
+
+  it("the pin reads only its own fields, never ones it inherits", async () => {
+    const pin = await pinWith(() => undefined);
+    const entry = (pin as { platforms: Record<string, Record<string, unknown>> }).platforms["darwin-arm64"] ?? {};
+    const inheritedEntry = await pinWith((p) => {
+      p.platforms["darwin-arm64"] = Object.assign(Object.create({ archive: entry.archive }) as Record<string, unknown>, { archiveSha256: entry.archiveSha256, binarySha256: entry.binarySha256 });
+    });
+
+    expect(() => parseNodeRuntime(Object.create(pin as object))).toThrow(/exact Node version/);
+    expect(() => parseNodeRuntime(inheritedEntry)).toThrow(/darwin-arm64 archive/);
+  });
+
+  it.each([
+    ["a duplicate key, whose last value would win", (text: string) => text.replace('"binarySha256": "', '"binarySha256": "' + "f".repeat(64) + '",\n      "binarySha256": "')],
+    ["compact JSON", (text: string) => `${JSON.stringify(JSON.parse(text))}\n`],
+    ["a byte-order mark", (text: string) => `\ufeff${text}`],
+    ["no trailing newline", (text: string) => text.trimEnd()],
+  ])("readNodeRuntime refuses a pin file that is not in its canonical form: %s", async (_, change) => {
+    const root = await mkdtemp(join(tmpdir(), "pin-"));
+    await mkdir(join(root, "scripts", "delivery"), { recursive: true });
+    await writeFile(join(root, "scripts", "delivery", "node-runtime.json"), change(await readFile(`${repo}scripts/delivery/node-runtime.json`, "utf8")));
+
+    await expect(readNodeRuntime(root)).rejects.toThrow(/canonical form|is not JSON/);
   });
 
   it("a refusal stays one line: a platform name from the file is quoted as JSON, so a newline in it cannot start a line", async () => {

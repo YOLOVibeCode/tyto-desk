@@ -19,11 +19,23 @@ const PIN_KEYS = ["version", "source", "platforms"];
 const ENTRY_KEYS = ["archive", "archiveSha256", "binarySha256"];
 
 /**
- * A name from the file, as it may appear in a refusal: JSON-quoted, so a newline in it cannot start a line of its own
- * (a workflow command, in an Actions log).
+ * A name from the file, as it may appear in a refusal: JSON-quoted, and every character outside printable ASCII as a
+ * `\uXXXX` escape, so no newline, Unicode line separator, C1 control or bidi override in it reaches a log or terminal
+ * (the reviews of PR #29).
  * @param {string} name
  */
-const quoted = (name) => JSON.stringify(name);
+const quoted = (name) => JSON.stringify(name).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
+/** At most three names from the file, quoted, then how many more: a refusal stays short whatever the file holds. */
+const named = (/** @type {string[]} */ names) => `${names.slice(0, 3).map(quoted).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`;
+
+/**
+ * A field the record holds itself, never one it inherits (JSON.parse makes none, but a caller or a polluted prototype
+ * could).
+ * @param {Record<string, unknown>} record
+ * @param {string} key
+ */
+const own = (record, key) => (Object.hasOwn(record, key) ? record[key] : undefined);
 
 /** @param {unknown} value @returns {value is Record<string, unknown>} */
 function isRecord(value) {
@@ -42,14 +54,16 @@ function isRecord(value) {
 export function parseNodeRuntime(json) {
   if (!isRecord(json)) throw new Error("node-runtime.json is not an object");
   const extra = Object.keys(json).filter((key) => !PIN_KEYS.includes(key));
-  if (extra.length > 0) throw new Error(`node-runtime.json has an unknown key ${extra.map(quoted).join(", ")}`);
-  const { version, source, platforms } = json;
+  if (extra.length > 0) throw new Error(`node-runtime.json has an unknown key ${named(extra)}`);
+  const version = own(json, "version");
+  const source = own(json, "source");
+  const platforms = own(json, "platforms");
   if (typeof version !== "string" || !VERSION.test(version)) throw new Error("node-runtime.json names no exact Node version");
   if (source !== `https://nodejs.org/dist/v${version}/`) throw new Error(`node-runtime.json's source is not https://nodejs.org/dist/v${version}/`);
   if (!isRecord(platforms)) throw new Error("node-runtime.json has no platforms");
   const keys = Object.keys(platforms);
   const unknown = keys.filter((key) => !PLATFORMS.includes(key));
-  if (unknown.length > 0) throw new Error(`node-runtime.json names a platform Desk does not build for: ${unknown.map(quoted).join(", ")}`);
+  if (unknown.length > 0) throw new Error(`node-runtime.json names a platform Desk does not build for: ${named(unknown)}`);
   /** @type {Record<string, NodePin>} */
   const checked = {};
   for (const key of PLATFORMS) {
@@ -57,8 +71,10 @@ export function parseNodeRuntime(json) {
     const pin = platforms[key];
     if (!isRecord(pin)) throw new Error(`node-runtime.json's ${key} entry is malformed`);
     const extraInEntry = Object.keys(pin).filter((name) => !ENTRY_KEYS.includes(name));
-    if (extraInEntry.length > 0) throw new Error(`node-runtime.json's ${key} entry has an unknown key ${extraInEntry.map(quoted).join(", ")}`);
-    const { archive, archiveSha256, binarySha256 } = pin;
+    if (extraInEntry.length > 0) throw new Error(`node-runtime.json's ${key} entry has an unknown key ${named(extraInEntry)}`);
+    const archive = own(pin, "archive");
+    const archiveSha256 = own(pin, "archiveSha256");
+    const binarySha256 = own(pin, "binarySha256");
     if (archive !== `node-v${version}-${key}.tar.gz` && archive !== `node-v${version}-${key}.tar.xz`) {
       throw new Error(`node-runtime.json's ${key} archive is not nodejs.org's node-v${version}-${key} tarball`);
     }
@@ -90,6 +106,11 @@ export async function readNodeRuntime(root) {
     json = JSON.parse(text);
   } catch {
     throw new Error("node-runtime.json is not JSON");
+  }
+  // One form only: a duplicate key (whose last value wins), a byte-order mark or other spacing would let a diff show one
+  // value while another is read (the reviews of PR #29).
+  if (`${JSON.stringify(json, null, 2)}\n` !== text) {
+    throw new Error("node-runtime.json is not in its canonical form (2-space JSON, one trailing newline, no duplicate keys)");
   }
   return parseNodeRuntime(json);
 }

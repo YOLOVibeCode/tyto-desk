@@ -112,6 +112,17 @@ describe("the stamp", () => {
     expect(result.stderr).toContain("never into the repository");
   });
 
+  it("a build of another channel than the workflow asked for, with a refused Node pin, names both", async () => {
+    const { root } = await gitCheckout({ ...project, "scripts/delivery/node-runtime.json": "not json" });
+    const env = { ...gitEnv, ...ci, GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", GITHUB_REF_TYPE: "branch" };
+
+    const result = await runScript(stamp, ["--plan", "--expect-channel", "stable"], { cwd: root, env });
+
+    expect(result.code).toBe(65);
+    expect(result.stderr).toContain("expected a stable build, but this is an edge build");
+    expect(result.stderr).toContain("node-pin: node-runtime.json is not JSON");
+  });
+
   it("the plan on a refused Node pin writes nothing to GITHUB_OUTPUT", async () => {
     const { root } = await gitCheckout({ ...project, "scripts/delivery/node-runtime.json": "not json" });
     const output = join(await mkdtemp(join(tmpdir(), "output-")), "github-output");

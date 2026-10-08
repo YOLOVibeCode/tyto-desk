@@ -83,7 +83,9 @@ if (!build.ok) {
 const article = (word) => (/^[aeiou]/.test(word) ? `an ${word}` : `a ${word}`);
 const expected = options["expect-channel"];
 if (expected !== undefined && expected !== build.channel) {
-  fail(`stamp: expected ${article(expected)} build, but this is ${article(build.channel)} build (${build.version})`, 65);
+  console.error(`stamp: expected ${article(expected)} build, but this is ${article(build.channel)} build (${build.version})`);
+  if (!pin.ok) console.error(`  node-pin: ${pin.reason}`);
+  process.exit(65);
 }
 
 // A bad --out (64) is named before a refused pin, which alone would otherwise hide it.

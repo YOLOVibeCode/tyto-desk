@@ -2400,8 +2400,11 @@ verified with (`--version`), checks that release's tarball and `SHA256SUMS` as `
   `com.noctusoft.desk.terminal` on the runner (§15.1, D49). The pin is refused unless it holds exactly `version`
   (`X.Y.Z`), `source` (`https://nodejs.org/dist/vX.Y.Z/`) and `platforms`, with exactly the darwin-arm64 and
   linux-arm64 entries as its own keys, each holding only nodejs.org's archive name for that version and platform and
-  two lowercase sha256 digests. A refusal is one line, with any name from the file JSON-quoted. The stamp, the pack
-  and `npm run deploy` each exit 65 on it, and a refused build names it among its other refusals.
+  two lowercase sha256 digests, read only as the file's own fields. The file must be in its canonical form (2-space
+  JSON, one trailing newline), so a duplicate key cannot hide behind the line a reviewer reads. A refusal is one line
+  of printable ASCII: at most three names from the file, JSON-quoted with every other character escaped, then how many
+  more. The stamp, the pack and `npm run deploy` each exit 65 on it, and a refused build (or one of another channel
+  than the workflow asked for) names it among its other refusals.
 - Attestations: build provenance from `release.yml` for every file in `SHA256SUMS` (`actions/attest` with
   `subject-checksums`), and GitHub's own release attestation for the immutable release (`gh release verify`,
   `gh release verify-asset`).
