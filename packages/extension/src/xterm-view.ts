@@ -1,30 +1,65 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "@desk/core";
+import type { BannerAction, LayoutNode, LayoutShown, LayoutView, SplitPath, TerminalPane, TerminalSize, TerminalView } from "@desk/core";
 
 export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
 
 /** What the live suite reads in a test build (docs/IMPLEMENTATION.md §17.3); production builds drop it. */
-type TestHooks = { screen(paneId: string): string; panes(): string[]; banner(): string; alert(): string; calls(paneId: string): string[] };
+type TestHooks = {
+  screen(paneId: string): string;
+  panes(): string[];
+  banner(): string;
+  alert(): string;
+  calls(paneId: string): string[];
+  /** What the panel shows: its tabs and the active tab's splits. */
+  layout(): LayoutShown | null;
+  /** The pane the keyboard is in, if any. */
+  focused(): string | null;
+  /** The note line's text. */
+  note(): string;
+};
+
+/** How long a note stays. */
+const NOTE_MS = 4_000;
+
+export type PanelElements = { stage: HTMLElement; tabs: HTMLElement; banner: HTMLElement; alert: HTMLElement; note: HTMLElement };
 
 /**
  * The panel's terminals (§10's xterm options, slice 1c's subset): `convertEol` false, the scrollback the mirror keeps,
- * Option as Option (not Meta), and Option-click forcing a selection; each fills its element and follows its size. The
- * banner shows text only, never markup.
+ * Option as Option (not Meta), and Option-click forcing a selection; each fills its element and follows its size. And
+ * its tabs and splits (§10): a tab strip of text titles, the active tab's split tree as nested flex boxes with draggable
+ * dividers, a zoomed pane alone; panes of other tabs wait, still attached, in a hidden box. The banner, the note and the
+ * titles show text only, never markup.
  */
-export class XtermView implements TerminalView {
-  private readonly container: HTMLElement;
+export class XtermView implements TerminalView, LayoutView {
+  private readonly stage: HTMLElement;
+  private readonly tabsElement: HTMLElement;
   private readonly bannerElement: HTMLElement;
   private readonly alertElement: HTMLElement;
+  private readonly noteElement: HTMLElement;
+  /** Where the panes of other tabs wait: in the page, so their terminals keep parsing output, but not laid out. */
+  private readonly parking: HTMLElement;
   private readonly options: XtermOptions;
   private readonly terminals = new Map<string, Terminal>();
+  private readonly elements = new Map<string, HTMLElement>();
+  private shown: LayoutShown | null = null;
+  /** The structure last built: the active tab, its zoom and its tree without ratios. */
+  private built = "";
+  private noteTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly selectListeners: ((tab: string) => void)[] = [];
+  private readonly dragListeners: ((tab: string, path: SplitPath, ratio: number) => void)[] = [];
   /** In a test build, each pane's last 200 resets, writes (their length) and resizes, for the live suite's reports. */
   private readonly calls = new Map<string, string[]>();
 
-  constructor(container: HTMLElement, bannerElement: HTMLElement, alertElement: HTMLElement, options: XtermOptions) {
-    this.container = container;
-    this.bannerElement = bannerElement;
-    this.alertElement = alertElement;
+  constructor(elements: PanelElements, options: XtermOptions) {
+    this.stage = elements.stage;
+    this.tabsElement = elements.tabs;
+    this.bannerElement = elements.banner;
+    this.alertElement = elements.alert;
+    this.noteElement = elements.note;
+    this.parking = document.createElement("div");
+    this.parking.className = "parking";
+    document.body.append(this.parking);
     this.options = options;
     if (DESK_TEST) {
       const hooks: TestHooks = {
@@ -39,6 +74,12 @@ export class XtermView implements TerminalView {
         banner: () => (this.bannerElement.hidden ? "" : (this.bannerElement.textContent ?? "")),
         calls: (paneId) => [...(this.calls.get(paneId) ?? [])],
         alert: () => (this.alertElement.hidden ? "" : (this.alertElement.textContent ?? "")),
+        layout: () => this.shown,
+        focused: () => {
+          for (const [paneId, element] of this.elements) if (element.contains(document.activeElement)) return paneId;
+          return null;
+        },
+        note: () => (this.noteElement.hidden ? "" : (this.noteElement.textContent ?? "")),
       };
       (globalThis as { deskTest?: TestHooks }).deskTest = hooks;
     }
@@ -46,7 +87,9 @@ export class XtermView implements TerminalView {
 
   create(paneId: string): TerminalPane {
     const element = document.createElement("div");
-    this.container.append(element);
+    element.className = "pane";
+    this.parking.append(element);
+    this.elements.set(paneId, element);
     const term = new Terminal({
       convertEol: false,
       scrollback: this.options.scrollback,
@@ -69,6 +112,10 @@ export class XtermView implements TerminalView {
     observer.observe(element);
     this.terminals.set(paneId, term);
     const pasteListeners: ((text: string) => void)[] = [];
+    const focusListeners: (() => void)[] = [];
+    element.addEventListener("focusin", () => {
+      for (const listener of focusListeners) listener();
+    });
     // The panel takes paste and drop before xterm (§10): text is sanitized by the panel; dropped files are ignored.
     const intercept = (event: ClipboardEvent | DragEvent, text: string | undefined) => {
       event.preventDefault();
@@ -107,14 +154,125 @@ export class XtermView implements TerminalView {
       onResize: (listener) => {
         term.onResize((size) => listener({ cols: size.cols, rows: size.rows }));
       },
+      onFocus: (listener) => {
+        focusListeners.push(listener);
+      },
       focus: () => term.focus(),
       dispose: () => {
         observer.disconnect();
         this.terminals.delete(paneId);
+        this.elements.delete(paneId);
         term.dispose();
         element.remove();
       },
     };
+  }
+
+  show(shown: LayoutShown): void {
+    this.shown = shown;
+    this.showTabs(shown);
+    const structure = JSON.stringify([shown.active, shown.zoomed, shown.root === null ? null : shape(shown.root)]);
+    if (structure !== this.built) {
+      this.built = structure;
+      // Moving a pane's element takes the keyboard out of it: give it back to the element that had it.
+      const had = document.activeElement;
+      const root = shown.zoomed !== null ? (this.elements.get(shown.zoomed) ?? null) : shown.root === null ? null : this.build(shown.root, [], shown.active ?? "");
+      const placed = new Set<HTMLElement>();
+      if (root !== null) for (const element of [root, ...root.querySelectorAll<HTMLElement>(".pane")]) placed.add(element);
+      for (const element of this.elements.values()) if (!placed.has(element)) this.parking.append(element);
+      this.stage.replaceChildren(...(root === null ? [] : [root]));
+      if (had instanceof HTMLElement && had.isConnected && had !== document.activeElement) had.focus();
+    } else if (shown.root !== null) {
+      this.ratios(shown.root, this.stage.firstElementChild);
+    }
+    for (const [paneId, element] of this.elements) element.classList.toggle("focused", paneId === shown.focus);
+  }
+
+  note(text: string): void {
+    this.noteElement.textContent = text;
+    this.noteElement.hidden = false;
+    if (this.noteTimer !== null) clearTimeout(this.noteTimer);
+    this.noteTimer = setTimeout(() => {
+      this.noteElement.hidden = true;
+    }, NOTE_MS);
+  }
+
+  onSelectTab(listener: (tab: string) => void): void {
+    this.selectListeners.push(listener);
+  }
+
+  onDrag(listener: (tab: string, path: SplitPath, ratio: number) => void): void {
+    this.dragListeners.push(listener);
+  }
+
+  /** The strip: one button per tab, its title as text; hidden while there is one tab. */
+  private showTabs(shown: LayoutShown): void {
+    const buttons = shown.tabs.map((tab) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tab";
+      button.textContent = tab.title;
+      button.classList.toggle("active", tab.id === shown.active);
+      button.classList.toggle("marked", tab.marked);
+      button.addEventListener("click", () => {
+        for (const listener of this.selectListeners) listener(tab.id);
+      });
+      return button;
+    });
+    this.tabsElement.replaceChildren(...buttons);
+    this.tabsElement.hidden = shown.tabs.length <= 1;
+  }
+
+  /** A split tree as nested flex boxes: each split a box of two parts and a divider between them. */
+  private build(node: LayoutNode, path: SplitPath, tab: string): HTMLElement {
+    if ("pane" in node) return this.elements.get(node.pane) ?? document.createElement("div");
+    const box = document.createElement("div");
+    box.className = `split ${node.split}`;
+    const a = this.build(node.a, [...path, "a"], tab);
+    const b = this.build(node.b, [...path, "b"], tab);
+    a.style.flex = `${node.ratio} 1 0`;
+    b.style.flex = `${1 - node.ratio} 1 0`;
+    const divider = document.createElement("div");
+    divider.className = "divider";
+    divider.addEventListener("pointerdown", (event) => this.drag(event, box, a, b, node.split, tab, path));
+    box.append(a, divider, b);
+    return box;
+  }
+
+  /** The ratios of an unchanged structure, set on the boxes already built. */
+  private ratios(node: LayoutNode, element: Element | null): void {
+    if ("pane" in node || !(element instanceof HTMLElement)) return;
+    const [a, , b] = [...element.children];
+    if (!(a instanceof HTMLElement) || !(b instanceof HTMLElement)) return;
+    a.style.flex = `${node.ratio} 1 0`;
+    b.style.flex = `${1 - node.ratio} 1 0`;
+    this.ratios(node.a, a);
+    this.ratios(node.b, b);
+  }
+
+  /** Dragging a divider resizes the two parts as the pointer moves; the ratio is reported when it is let go. */
+  private drag(start: PointerEvent, box: HTMLElement, a: HTMLElement, b: HTMLElement, split: "row" | "col", tab: string, path: SplitPath): void {
+    start.preventDefault();
+    const divider = start.currentTarget;
+    if (!(divider instanceof HTMLElement)) return;
+    divider.setPointerCapture(start.pointerId);
+    let ratio: number | null = null;
+    const move = (event: PointerEvent) => {
+      const rect = box.getBoundingClientRect();
+      const at = split === "row" ? (event.clientX - rect.left) / rect.width : (event.clientY - rect.top) / rect.height;
+      ratio = Math.min(0.9, Math.max(0.1, at));
+      a.style.flex = `${ratio} 1 0`;
+      b.style.flex = `${1 - ratio} 1 0`;
+    };
+    const end = () => {
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", end);
+      divider.removeEventListener("pointercancel", end);
+      if (ratio !== null) for (const listener of this.dragListeners) listener(tab, path, ratio);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", end);
+    divider.addEventListener("pointercancel", end);
   }
 
   /** Asks in the banner, with Paste and Cancel buttons; Escape or Cancel is no. */
@@ -157,4 +315,9 @@ export class XtermView implements TerminalView {
     }
     this.bannerElement.hidden = text === null;
   }
+}
+
+/** A tree's shape without its ratios: a drag changes ratios, not what is built. */
+function shape(node: LayoutNode): unknown {
+  return "pane" in node ? node.pane : [node.split, shape(node.a), shape(node.b)];
 }

@@ -16,6 +16,8 @@ export type TerminalPane = {
   size(): TerminalSize;
   onInput(listener: (data: string) => void): void;
   onResize(listener: (size: TerminalSize) => void): void;
+  /** The user moved the keyboard into this pane (a click, or Tab into it). */
+  onFocus(listener: () => void): void;
   focus(): void;
   dispose(): void;
 };

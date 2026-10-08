@@ -13,6 +13,7 @@ export class FakeTerminalPane implements TerminalPane {
   private readonly pasteListeners: ((text: string) => void)[] = [];
   private readonly inputListeners: ((data: string) => void)[] = [];
   private readonly resizeListeners: ((size: TerminalSize) => void)[] = [];
+  private readonly focusListeners: (() => void)[] = [];
 
   constructor(id: string, size: TerminalSize) {
     this.id = id;
@@ -58,8 +59,17 @@ export class FakeTerminalPane implements TerminalPane {
     this.resizeListeners.push(listener);
   }
 
+  onFocus(listener: () => void): void {
+    this.focusListeners.push(listener);
+  }
+
   focus(): void {
     this.focuses += 1;
+  }
+
+  /** The user clicks into this pane. */
+  userFocuses(): void {
+    for (const listener of this.focusListeners) listener();
   }
 
   dispose(): void {
@@ -111,6 +121,13 @@ export class FakeTerminalView implements TerminalView {
   async confirm(question: string): Promise<boolean> {
     this.questions.push(question);
     return this.answers.shift() ?? false;
+  }
+
+  /** The live terminal of `paneId`, failing the test when there is none. */
+  of(paneId: string): FakeTerminalPane {
+    const pane = this.panes.filter((p) => p.id === paneId && !p.disposed).at(-1);
+    if (pane === undefined) throw new Error(`the panel has no terminal for ${paneId}`);
+    return pane;
   }
 
   /** The latest pane, failing the test when there is none. */

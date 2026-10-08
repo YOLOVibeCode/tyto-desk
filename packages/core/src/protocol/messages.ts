@@ -27,7 +27,8 @@ export type Hello = {
   /** A panel's window (the extension's window id). */
   window?: number;
 };
-export type Open = { type: "open"; id: string; pane: string; cols: number; rows: number };
+/** `cwdFrom`: a new pane starts in that pane's directory (new splits and tabs, §10). */
+export type Open = { type: "open"; id: string; pane: string; cols: number; rows: number; cwdFrom?: string };
 export type In = { type: "in"; pane: string; data: string };
 export type Resize = { type: "resize"; pane: string; cols: number; rows: number };
 export type List = { type: "list"; id: string };
@@ -74,6 +75,8 @@ export type HelloReply = {
   notices: string[];
   /** `terminal.closeOnExit`: a pane whose shell exits is removed (§7.3). */
   closeOnExit?: boolean;
+  /** To a panel: the layout, as `layout.get` would give it, so the panel lays out its panes without asking (§10). */
+  layout?: Record<string, unknown>;
 };
 export type Snapshot = { type: "snapshot"; pane: string; part: number; last: boolean; cols: number; rows: number; data: string };
 export type Out = { type: "out"; pane: string; data: string };
@@ -194,7 +197,7 @@ const CLIENT_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
     required: { type: isType("hello"), vMin: isWhole(1, 1000), vMax: isWhole(1, 1000), client: isOneOf(KINDS), build: isText(128) },
     optional: { window: windowId },
   },
-  open: { required: { type: isType("open"), id: isRequestId, pane: isPaneId, ...size } },
+  open: { required: { type: isType("open"), id: isRequestId, pane: isPaneId, ...size }, optional: { cwdFrom: isPaneId } },
   in: { required: { type: isType("in"), pane: isPaneId, data: isInput } },
   resize: { required: { type: isType("resize"), pane: isPaneId, ...size } },
   list: { required: { type: isType("list"), id: isRequestId } },
@@ -227,7 +230,7 @@ const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
       panes: isListOf(isPaneSummary, 64),
       notices: isListOf(isText(64), 16),
     },
-    optional: { closeOnExit: isBoolean },
+    optional: { closeOnExit: isBoolean, layout: isRecord },
   },
   snapshot: {
     required: { type: isType("snapshot"), pane: isPaneId, part: isWhole(0, 10_000), last: isBoolean, ...size, data: isText(2 ** 20) },

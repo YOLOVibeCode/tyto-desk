@@ -92,7 +92,26 @@ export { SETTINGS_PREFS } from "./ports/chrome-settings.ts";
 export { confirmToQuitOn } from "./chrome/local-state.ts";
 export { filterTargetList, guardedVersion, routeGatewayHttp, type GatewayRoute } from "./gateway/http.ts";
 export { GatewayConnection, HiddenTargets, focusGuardOn, isDeskUrl, type FocusCheck, type GatewayStep, type TargetFacts } from "./gateway/policy.ts";
-export { LAYOUT_BYTES_MAX, LAYOUT_DEPTH_MAX, LAYOUT_VERSION, TABS_MAX, checkLayout, defaultLayout, parseStoredLayout, type Layout, type LayoutNode, type LayoutTab } from "./layout/layout.ts";
+export { LAYOUT_BYTES_MAX, LAYOUT_DEPTH_MAX, LAYOUT_VERSION, TABS_MAX, checkLayout, defaultLayout, parseStoredLayout, type Layout, type LayoutNode, type LayoutTab, type SplitPath } from "./layout/layout.ts";
+export {
+  SPLIT_RIGHT_MIN_COLS,
+  activeTab,
+  addTab,
+  closePane,
+  cyclePane,
+  focusPane,
+  layoutPanes,
+  nodePanes,
+  reconcileLayout,
+  resizeFocused,
+  selectTab,
+  setRatio,
+  splitPane,
+  tabOf,
+  toggleZoom,
+  type ArrowDirection,
+  type SplitDirection,
+} from "./layout/ops.ts";
 export type { LogEvent } from "./log/events.ts";
 export { SecretRedactor } from "./log/redactor.ts";
 export { EscapeTail } from "./term/escape-tail.ts";

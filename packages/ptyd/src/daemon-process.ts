@@ -1,8 +1,8 @@
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import { Daemon, PROTOCOL_MAX, PROTOCOL_MIN, planPaneShell, type InstanceLock, type LogSink, type PtySpawner } from "@desk/core";
-import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed, findTmux } from "@desk/node";
+import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeProcessCwd, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed, findTmux } from "@desk/node";
 import { NodeLayoutStore } from "./layout-store.ts";
 import { NodeTerminalMirror } from "./terminal-mirror.ts";
 import { UnixMessageServer } from "./message-server.ts";
@@ -92,13 +92,16 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
     spawner: input.spawner,
     clock: new SystemClock(),
     build: version,
-    shellFor: async (pane) => {
+    shellFor: async (pane, cwd) => {
       const config = await store.load();
       if (config === null) throw new Error("no config.json");
       const binary = await findTmux(config.terminal.tmux);
       const tmux = binary === null ? null : new NodeTmux(binary, env);
-      return planPaneShell({ pane, config, deskHome, home, parent: env, version, tmux, files, loginShell: new NodeLoginShell() });
+      // A directory that is gone by now (removed after the split was asked for) leaves the shell in the home directory.
+      const usable = cwd !== null && (await stat(cwd).then((found) => found.isDirectory(), () => false));
+      return planPaneShell({ pane, config, deskHome, home, parent: env, version, tmux, files, loginShell: new NodeLoginShell(), ...(usable ? { cwd } : {}) });
     },
+    cwds: new NodeProcessCwd(),
     layouts: new NodeLayoutStore(deskHome),
     mirror: new NodeTerminalMirror(),
     scrollback: startConfig?.terminal.scrollback ?? 5_000,

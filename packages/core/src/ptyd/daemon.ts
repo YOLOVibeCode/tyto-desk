@@ -1,6 +1,7 @@
 import { checkLayout, defaultLayout, type Layout } from "../layout/layout.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { LayoutStore } from "../ports/layout-store.ts";
+import type { ProcessCwd } from "../ports/process-cwd.ts";
 import type { LogSink } from "../ports/log-sink.ts";
 import type { MirrorScreen, TerminalMirror } from "../ports/terminal-mirror.ts";
 import { EscapeTail } from "../term/escape-tail.ts";
@@ -36,7 +37,9 @@ export type DaemonPorts = {
   clock: Clock;
   /** This daemon's version, for `hello`. */
   build: string;
-  shellFor(pane: string): Promise<PaneShell>;
+  /** The new pane's shell; `cwd` is the directory it should start in (a split's or a new tab's), when there is one. */
+  shellFor(pane: string, cwd: string | null): Promise<PaneShell>;
+  cwds: ProcessCwd;
   /** Called once, after a shutdown was accepted and every running shell got SIGHUP. */
   onShutdown(mode: "stop" | "restart"): void;
   layouts: LayoutStore;
@@ -276,14 +279,19 @@ export class Daemon {
       this.sw = client;
       this.swConnects += 1;
     }
-    this.send(client, {
-      type: "hello",
-      v: Math.min(vMax, PROTOCOL_MAX),
-      build: this.ports.build,
-      panes: [...this.panes.values()].map((pane) => ({ id: pane.id, alive: pane.alive })),
-      notices: [],
-      ...(kind === "panel" && this.ports.closeOnExit !== undefined ? { closeOnExit: this.ports.closeOnExit } : {}),
-    });
+    const greet = (layout: Layout | null) =>
+      this.send(client, {
+        type: "hello",
+        v: Math.min(vMax, PROTOCOL_MAX),
+        build: this.ports.build,
+        panes: [...this.panes.values()].map((pane) => ({ id: pane.id, alive: pane.alive })),
+        notices: [],
+        ...(kind === "panel" && this.ports.closeOnExit !== undefined ? { closeOnExit: this.ports.closeOnExit } : {}),
+        ...(layout === null ? {} : { layout }),
+      });
+    // A panel gets the layout with its hello: it lays out its panes at once, without a layout.get round trip (§10).
+    if (kind === "panel") void this.layoutFor().then(greet);
+    else greet(null);
   }
 
   /** The pane's PTY when `client` owns the live pane, else null after E_NOPANE. */
@@ -347,9 +355,12 @@ export class Daemon {
       ptyPaused: false,
     };
     this.panes.set(pane.id, pane);
+    // A split or a new tab starts where the focused pane's shell is (§10), read from its process.
+    const from = message.cwdFrom === undefined ? undefined : this.panes.get(message.cwdFrom);
+    const cwd = from?.pty === null || from?.pty === undefined || !from.alive ? null : await this.ports.cwds.cwdOf(from.pty.pid).catch(() => null);
     let shell: PaneShell;
     try {
-      shell = await this.ports.shellFor(pane.id);
+      shell = await this.ports.shellFor(pane.id, cwd);
     } catch {
       shell = { file: "", args: [], cwd: "", env: {}, notice: null };
     }
