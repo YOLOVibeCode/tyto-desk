@@ -111,11 +111,15 @@ function setup(
     listeners.images.set(5100, { exe: EXE, args: line });
   };
   let loadedAtList = -1;
+  let loadsSeen = 0;
   daemon.onRequest = (request, lists) => {
-    if (extension.loads.length > 0 && loadedAtList < 0) loadedAtList = lists;
+    if (extension.loads.length > loadsSeen) {
+      loadsSeen = extension.loads.length;
+      loadedAtList = lists;
+    }
     if (loadedAtList >= 0 && lists - loadedAtList >= (options.workerAfterLists ?? 2)) {
       daemon.swConnected = true;
-      daemon.swConnects = 1;
+      daemon.swConnects = extension.loads.length;
     }
   };
   extension.loadVersion = "0.3.1.1";
@@ -327,7 +331,10 @@ describe("desk, a fresh launch", () => {
     const opensPanel = desk.panels.onOpen;
     desk.panels.onOpen = (tab) => {
       if (desk.daemon.swConnected) opensPanel(tab);
-      else desk.daemon.swConnected = true;
+      else {
+        desk.daemon.swConnected = true;
+        desk.daemon.swConnects += 1;
+      }
     };
 
     const result = await desk.run();
@@ -614,6 +621,46 @@ describe("desk, reuse and classification (slice 3b, §6.1 step 4, §6.2)", () =>
 
     expect(result).toMatchObject({ ok: true });
     expect(desk.panels.opened.at(-1)).toEqual({ extensionId: keyId, tab: "tab-1" });
+  });
+
+  it("after loading the extension again, desk waits for the reloaded worker's new connection, not the old one that lingers", async () => {
+    const desk = await running();
+    desk.extension.installed.set(keyId, "0.3.0.4");
+    // The old worker stays listed as connected; the new one connects two lists after the load.
+    desk.daemon.swConnected = true;
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.daemon.swConnects).toBe(2);
+  });
+
+  it("after loading the extension again, desk waits for the panels the reload closed to leave the daemon before it opens one", async () => {
+    const desk = await running();
+    desk.extension.installed.set(keyId, "0.3.0.4");
+    // The worker still counts the closed panel as open, and its connection lingers for a few lists after the reload.
+    desk.bridge.windowList = [win(1, { lastFocused: true, focused: true, panelOpen: true })];
+    desk.daemon.panels = [1];
+    let after = -1;
+    const load = desk.extension.load.bind(desk.extension);
+    desk.extension.load = async (path) => {
+      const loaded = await load(path);
+      after = 0;
+      return loaded;
+    };
+    const original = desk.daemon.onRequest;
+    desk.daemon.onRequest = (request, lists) => {
+      original(request, lists);
+      if (after < 0 || request.type !== "list") return;
+      after += 1;
+      if (after === 4) desk.daemon.panels = desk.daemon.panels.filter((id) => id !== 1);
+    };
+    const opened = desk.panels.opened.length;
+
+    await desk.run();
+
+    expect(desk.panels.opened).toHaveLength(opened + 1);
+    expect(desk.bridge.focused).toEqual([]);
   });
 
   it("reuse loads the extension again when Chrome has another version of it", async () => {

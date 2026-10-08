@@ -74,6 +74,8 @@ const LAUNCH_LOCK_MS = 10_000;
 const JSON_VERSION_MS = 20_000;
 const POLL_MS = 100;
 const WORKER_MS = 5_000;
+/** How long the panels an extension reload closed get to leave the daemon's list. */
+const RELOAD_PANELS_MS = 3_000;
 /** §6.1 step 4: how long a Desk Chrome whose port is silent (it is quitting) gets to exit. */
 const QUITTING_MS = 10_000;
 
@@ -192,7 +194,11 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
     session = connected.session;
 
     const expectedId = prepared.extensionId;
+    let reloaded = false;
+    let connectsBefore = 0;
     if ((await session.extension.installedVersion(expectedId)) !== prepared.manifestVersion) {
+      reloaded = true;
+      connectsBefore = (await swState(ports.daemon)).connects;
       const load = await session.extension.load(prepared.extensionDir);
       if (!load.ok) {
         return fail(
@@ -206,13 +212,16 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       }
     }
 
-    if (!(await workerReady(ports, session, expectedId))) {
+    if (!(await workerReady(ports, session, expectedId, reloaded ? connectsBefore : -1))) {
       return fail(70, "the Desk extension's service worker did not reach the terminal daemon; run desk doctor");
     }
 
     const settingsWarning =
       found.decision === "reuse" ? null : await applyChromeSettings(session.settings, { firstRun, setContinuePref: config.chrome.setContinuePref });
 
+    // A reload closes every panel, but their connections leave the daemon a moment later: wait, so a closing panel is
+    // never taken for one that shows.
+    if (reloaded) await pollUntil(ports.clock, RELOAD_PANELS_MS, POLL_MS, async () => ((await panelsConnected(ports.daemon)) === 0 ? true : null));
     const panel = await ensurePanel({ bridge: ports.bridge, panels: session.panels, daemon: ports.daemon, clock: ports.clock, extensionId: expectedId });
     if (!panel.ok) return fail(70, panel.message);
 
@@ -271,13 +280,26 @@ async function findDeskChrome(ports: LaunchPorts, profile: ChromeProfile, config
   return { decision: decision === "reuse" ? "foreign" : decision, clearStale: staleLockToClear({ lock, host, state, users }) };
 }
 
-/** Whether the daemon reports a connected service worker. */
-async function swConnected(daemon: DaemonClient): Promise<boolean> {
+/** How many panels the daemon lists as connected; 0 when it cannot say. */
+async function panelsConnected(daemon: DaemonClient): Promise<number> {
   const opened = await daemon.open("cli");
-  if (!opened.ok) return false;
+  if (!opened.ok) return 0;
   try {
     const reply = await opened.session.request({ type: "list" });
-    return reply?.type === "panes" && reply.sw.connected;
+    return reply?.type === "panes" ? reply.panels.length : 0;
+  } finally {
+    opened.session.close();
+  }
+}
+
+/** Whether the daemon reports a connected service worker. */
+/** Whether the daemon reports a connected service worker, and how many worker connections it has seen. */
+async function swState(daemon: DaemonClient): Promise<{ connected: boolean; connects: number }> {
+  const opened = await daemon.open("cli");
+  if (!opened.ok) return { connected: false, connects: 0 };
+  try {
+    const reply = await opened.session.request({ type: "list" });
+    return reply?.type === "panes" ? reply.sw : { connected: false, connects: 0 };
   } finally {
     opened.session.close();
   }
@@ -285,10 +307,15 @@ async function swConnected(daemon: DaemonClient): Promise<boolean> {
 
 /**
  * Step 10: the worker opens its own native connection at start, which starts the daemon. Wait 5 s for its hello to
- * reach the daemon; if it has not, the toolbar action on any tab wakes the worker, and it gets 5 s more.
+ * reach the daemon; if it has not, the toolbar action on any tab wakes the worker, and it gets 5 s more. After a reload
+ * only a connection newer than `after` counts: the reloaded worker's old one lingers in the daemon a moment.
  */
-async function workerReady(ports: LaunchPorts, session: BrowserSession, extensionId: string): Promise<boolean> {
-  const waitForWorker = () => pollUntil(ports.clock, WORKER_MS, POLL_MS, async () => ((await swConnected(ports.daemon)) ? true : null));
+async function workerReady(ports: LaunchPorts, session: BrowserSession, extensionId: string, after: number): Promise<boolean> {
+  const waitForWorker = () =>
+    pollUntil(ports.clock, WORKER_MS, POLL_MS, async () => {
+      const sw = await swState(ports.daemon);
+      return sw.connected && sw.connects > after ? true : null;
+    });
   if ((await waitForWorker()) !== null) return true;
   const tab = await session.panels.anyTabTarget();
   if (tab !== null) await session.panels.open(extensionId, tab);
