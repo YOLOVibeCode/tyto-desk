@@ -28,4 +28,6 @@ export interface AppVersions {
   use(version: string): Promise<void>;
   /** Whether an installed version's files are exactly what its files.sha256 lists (§15.1: the host checks this). */
   verify(version: string): Promise<boolean>;
+  /** Removes an installed version that is not current (retention, §23.5 rule 7). */
+  remove(version: string): Promise<void>;
 }

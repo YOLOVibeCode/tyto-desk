@@ -84,6 +84,15 @@ describe("the native host", () => {
     expect(spawner.started).toEqual([]);
   });
 
+  it("the host starts the daemon from the current version", async () => {
+    const { spawner, host, commands } = setup([{ ok: false, reason: "dead" }, { ok: true, link }]);
+
+    await host(DESK_EXTENSION_ORIGIN);
+
+    expect(commands()).toBe(1);
+    expect(spawner.started).toEqual([daemon]);
+  });
+
   it("the host refuses to start a daemon whose files do not match files.sha256", async () => {
     const { spawner, host, setVerified } = setup([{ ok: false, reason: "dead" }]);
     setVerified(false);

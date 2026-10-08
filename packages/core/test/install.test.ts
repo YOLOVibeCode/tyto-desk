@@ -106,6 +106,20 @@ describe("desk install --from", () => {
     expect(desk.lock.released).toEqual(["install"]);
   });
 
+  it("an install stages, verifies and then renames the version into place, and a failed one leaves nothing behind", async () => {
+    const good = setup();
+    await good.run();
+    const bad = setup();
+    bad.versions.runtimes.set(from, { ok: false, reason: "mismatch" });
+
+    await bad.run();
+
+    expect(good.versions.committed).toEqual([`${staging} -> ${info.version}`]);
+    expect(bad.versions.committed).toEqual([]);
+    expect(bad.versions.used).toEqual([]);
+    expect(bad.versions.installed).toEqual([]);
+  });
+
   it("install refuses a runtime that does not match its files.sha256 and installs nothing", async () => {
     const desk = setup();
     desk.versions.runtimes.set(from, { ok: false, reason: "mismatch" });

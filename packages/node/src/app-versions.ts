@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, readdir, readFile, readlink, rename, rm, stat, symlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { FILES_SHA256, parseFilesSha256, parseSemver, type AppVersions, type StageResult } from "@desk/core";
@@ -31,21 +31,27 @@ export async function fileSha256(path: string): Promise<string> {
  * Copies a runtime `from` into `to` as plain files and directories, keeping only the execute bits of each file's mode;
  * anything else (a symbolic link, a device) makes the copy fail (null). Returns the copied files' paths, `/`-separated.
  */
-export async function copyRuntime(from: string, to: string): Promise<string[] | null> {
-  return copyTree(from, to, "");
+/**
+ * Copies a runtime into `to`. A file `reuse` names (one identical to the current version's) is cloned from there; every
+ * file is copied with COPYFILE_FICLONE, so on APFS installed versions share their identical files (§23.5 rule 7).
+ */
+export async function copyRuntime(from: string, to: string, reuse: ReadonlyMap<string, string> = new Map()): Promise<string[] | null> {
+  return copyTree(from, to, "", reuse);
 }
 
-async function copyTree(from: string, to: string, rel: string): Promise<string[] | null> {
+async function copyTree(from: string, to: string, rel: string, reuse: ReadonlyMap<string, string>): Promise<string[] | null> {
   const copied: string[] = [];
   for (const entry of await readdir(join(from, rel), { withFileTypes: true })) {
     const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
     if (entry.isDirectory()) {
       await mkdir(join(to, path), { mode: 0o700 });
-      const inner = await copyTree(from, to, path);
+      const inner = await copyTree(from, to, path, reuse);
       if (inner === null) return null;
       copied.push(...inner);
     } else if (entry.isFile()) {
-      await copyFile(join(from, path), join(to, path));
+      const same = reuse.get(path);
+      const cloned = same !== undefined && (await copyFile(same, join(to, path), constants.COPYFILE_FICLONE).then(() => true, () => false));
+      if (!cloned) await copyFile(join(from, path), join(to, path), constants.COPYFILE_FICLONE);
       const mode = (await stat(join(from, path))).mode & 0o111 ? 0o755 : 0o644;
       await chmod(join(to, path), mode);
       copied.push(path);
@@ -74,6 +80,14 @@ async function listTree(dir: string, rel: string): Promise<string[] | null> {
   return found;
 }
 
+/** Makes every directory under `dir` writable by its owner, so the tree can be removed. */
+async function chmodTree(dir: string): Promise<void> {
+  await chmod(dir, 0o700);
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) await chmodTree(join(dir, entry.name));
+  }
+}
+
 /**
  * `~/.desk/app` (docs/IMPLEMENTATION.md §23.5): versions side by side, each complete once installed, and `current`, a
  * relative symlink that changes only by renaming a new link over it. A runtime is copied into `.staging-<id>` and
@@ -81,7 +95,7 @@ async function listTree(dir: string, rel: string): Promise<string[] | null> {
  */
 export class NodeAppVersions implements AppVersions {
   private readonly appDir: string;
-  private readonly copy: (from: string, to: string) => Promise<string[] | null>;
+  private readonly copy: (from: string, to: string, reuse: ReadonlyMap<string, string>) => Promise<string[] | null>;
 
   /** `copy` copies a runtime into a staging directory (`copyRuntime`); a test gives one that also changes the source. */
   constructor(deskHome: string, options: { copy?: (from: string, to: string) => Promise<string[] | null> } = {}) {
@@ -147,7 +161,7 @@ export class NodeAppVersions implements AppVersions {
     const staging = join(this.appDir, `.staging-${randomId()}`);
     await mkdir(staging, { mode: 0o700 });
     try {
-      const copied = await this.copy(from, staging);
+      const copied = await this.copy(from, staging, await this.identicalToCurrent(listed));
       const files = copied?.filter((path) => path !== FILES_SHA256) ?? null;
       if (files === null || files.length !== listed.size) throw new MismatchError();
       for (const path of files) {
@@ -201,6 +215,28 @@ export class NodeAppVersions implements AppVersions {
     this.assertStaging(staging);
     await assertPathAllowed(staging);
     await rm(staging, { recursive: true, force: true });
+  }
+
+  /** Each listed file the current version holds with the same sha256, as the path to clone it from. */
+  private async identicalToCurrent(listed: ReadonlyMap<string, string>): Promise<Map<string, string>> {
+    const reuse = new Map<string, string>();
+    const current = await this.current();
+    if (current === null) return reuse;
+    const dir = this.versionDir(current);
+    const theirs = parseFilesSha256((await readFile(join(dir, FILES_SHA256), "utf8").catch(() => "")) ?? "");
+    if (theirs === null) return reuse;
+    for (const [path, digest] of listed) if (theirs.get(path) === digest) reuse.set(path, join(dir, ...path.split("/")));
+    return reuse;
+  }
+
+  async remove(version: string): Promise<void> {
+    if (!isVersionName(version)) throw new RangeError(`not a version: ${version}`);
+    if ((await this.current()) === version) throw new Error(`${version} is current`);
+    const dir = this.versionDir(version);
+    await assertPathAllowed(dir);
+    // Installed versions are read-only (0500 directories); they become writable only to be removed.
+    await chmodTree(dir).catch(() => undefined);
+    await rm(dir, { recursive: true, force: true });
   }
 
   async use(version: string): Promise<void> {

@@ -13,6 +13,7 @@ export { DESK_SKILL, skillAllowedTools } from "./agents/skill.ts";
 export { addTmuxLine, type TmuxLinePorts } from "./install/tmux-line.ts";
 export { doctor, formatDoctor, type DoctorFinding, type DoctorInput, type DoctorPorts } from "./doctor/doctor.ts";
 export { uninstall, type UninstallPorts, type UninstallResult } from "./install/uninstall.ts";
+export { listVersions, retainVersions, rollbackVersion, useVersion, type VersionsPorts, type VersionsResult } from "./install/versions.ts";
 export { DESK_APP_IDENTIFIER, LOGIN_AGENT_LABEL, WEB_ACCESS_DESK_STEP, installExtras, type ExtrasPorts, type ManagedFile } from "./install/extras.ts";
 export { pauseAgents, policyModeOf, resumeAgents, setAgentPolicy, type AgentControlPorts, type AgentControlResult } from "./agents/controls.ts";
 export { base64Decode } from "./bytes/base64.ts";

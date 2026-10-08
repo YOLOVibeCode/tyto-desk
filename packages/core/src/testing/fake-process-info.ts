@@ -7,6 +7,9 @@ export class FakeProcessInfo implements ProcessInfo {
   /** Each live process's argument line; `argsUnknown` makes the list unreadable. */
   readonly args = new Map<number, string>();
   argsUnknown = false;
+  /** Each live process's executable path. */
+  readonly exes = new Map<number, string>();
+  exesUnknown = false;
 
   constructor(live: Iterable<number> = []) {
     this.live = new Set(live);
@@ -18,6 +21,12 @@ export class FakeProcessInfo implements ProcessInfo {
 
   async startedAt(pid: number): Promise<number | null> {
     return this.live.has(pid) ? (this.started.get(pid) ?? null) : null;
+  }
+
+  async executablesUnder(dir: string): Promise<readonly { pid: number; exe: string }[] | null> {
+    if (this.exesUnknown) return null;
+    const prefix = `${dir.replace(/\/+$/, "")}/`;
+    return [...this.exes].filter(([pid, exe]) => this.live.has(pid) && exe.startsWith(prefix)).map(([pid, exe]) => ({ pid, exe }));
   }
 
   async withArgument(argument: string): Promise<number[] | null> {

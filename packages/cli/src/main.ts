@@ -7,6 +7,7 @@ import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
 import { doctorCommand } from "./doctor.ts";
 import { uninstallCommand } from "./uninstall.ts";
+import { versionsCommand } from "./versions.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
@@ -37,6 +38,7 @@ const USAGE = [
   "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
   "       desk doctor [--fix]        what is wrong and how to fix it; --fix rewrites only what lives in ~/.desk",
   "       desk uninstall [--profile] remove what install added, after you confirm; --profile also the Desk profile",
+  "       desk versions | desk use <version> | desk rollback   the installed versions, and switching between them",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
@@ -97,6 +99,18 @@ export async function main(input: MainInput): Promise<number> {
         channel: version.info.channel,
         env: input.env,
       });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "versions" || command === "use" || command === "rollback") {
+      const prompter = input.prompter ?? new TtyPrompter(input.stdin, stdout);
+      const target = rest[0];
+      if (command === "use" ? rest.length !== 1 || target === undefined : rest.length !== 0) return usage();
+      const result =
+        command === "use" && target !== undefined
+          ? await versionsCommand({ deskHome, prompter, action: "use", version: target })
+          : await versionsCommand({ deskHome, prompter, action: command === "versions" ? "list" : "rollback" });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
       return result.code;
