@@ -412,3 +412,29 @@ describe("the panel's terminal I/O (slice 2b)", () => {
     expect(connector.last().posted.at(-1)).toEqual({ type: "open", id: "o2", pane: PANE, cols: 100, rows: 30 });
   });
 });
+
+describe("the panel's agents notice (slice 4c)", () => {
+  it("desk agents resume clears the paused notice", async () => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello());
+    connector.last().deliver({ type: "notice", kind: "agents-paused" });
+    const paused = view.bannerText;
+
+    connector.last().deliver({ type: "notice", kind: "agents-resumed" });
+
+    expect(paused).toBe("Agents are paused: desk agents resume lets them drive this Desk again");
+    expect(view.bannerText).toBeNull();
+  });
+
+  it("agents resuming leaves any other banner alone", async () => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello([{ id: PANE, alive: true }]));
+    connector.last().deliver({ type: "detached", pane: PANE, reason: "closed" });
+
+    connector.last().deliver({ type: "notice", kind: "agents-resumed" });
+
+    expect(view.bannerText).toBe("The terminal was detached");
+  });
+});

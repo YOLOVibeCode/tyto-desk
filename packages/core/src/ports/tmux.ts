@@ -7,4 +7,6 @@ export interface Tmux {
   serverRunning(): Promise<boolean>;
   /** The names in the running server's global `update-environment`, or `null` when no server runs. */
   updateEnvironment(): Promise<readonly string[] | null>;
+  /** `set-option -ga update-environment " <names>"` on the running server; whether tmux took it. */
+  appendUpdateEnvironment(names: readonly string[]): Promise<boolean>;
 }

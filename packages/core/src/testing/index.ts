@@ -1,3 +1,4 @@
+export { FakeAgentSessions } from "./fake-agent-sessions.ts";
 export { FakeAgentTabs } from "./fake-agent-tabs.ts";
 export { FakeBrowserConnector } from "./fake-browser-connector.ts";
 export { FakeBrowserLifecycle } from "./fake-browser-lifecycle.ts";

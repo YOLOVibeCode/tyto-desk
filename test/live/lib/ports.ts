@@ -16,4 +16,5 @@ export const LIVE_PORTS = {
   terminal: 9507,
   reuse: 9517,
   watch: 9527,
+  agents: 9547,
 } as const;

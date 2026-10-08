@@ -15,4 +15,4 @@ export {
   type GuardEnv,
 } from "./test-guard.ts";
 export { NodeTextFiles } from "./text-files.ts";
-export { NodeTmux } from "./tmux.ts";
+export { NodeTmux, findTmux } from "./tmux.ts";

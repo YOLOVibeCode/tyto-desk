@@ -541,4 +541,20 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
 
     expect(watch.panels.opened).toEqual([]);
   });
+
+  it("desk watch warns when agent-browser saved a file whose name contains -desk-", async () => {
+    const watch = setup();
+    await settle();
+    await watch.files.write(`${home}/.agent-browser/sessions/main-state.json`, "{}", 0o600);
+    await pass(watch.clock, 60_000);
+    const before = [...watch.daemon.notices];
+
+    await watch.files.write(`${home}/.agent-browser/sessions/state-desk-p_0000000001.json`, "{}", 0o600);
+    await pass(watch.clock, 60_000);
+    await pass(watch.clock, 60_000);
+
+    expect(before).toEqual([]);
+    expect(watch.daemon.notices).toEqual([{ type: "alert", kind: "agent-state-saved" }]);
+    expect(watch.sink.events).toContainEqual({ event: "agent-state-saved" });
+  });
 });

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { userInfo } from "node:os";
-import { installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
+import { addTmuxLine, installVersion, loadOrCreateConfig, type PortProbe, type Prompter, type Random } from "@desk/core";
 import { NodeNativeHostDir } from "@desk/chrome";
 import {
   CryptoRandom,
@@ -10,7 +10,9 @@ import {
   NodeInstanceLock,
   NodePortProbe,
   NodeTextFiles,
+  NodeTmux,
   SystemClock,
+  findTmux,
 } from "@desk/node";
 
 export type InstallCommandInput = {
@@ -24,9 +26,12 @@ export type InstallCommandInput = {
   probe?: PortProbe;
   random?: Random;
   codesign?: string;
+  /** The environment tmux is asked in (its socket), and nothing else of it. */
+  env?: NodeJS.ProcessEnv;
 };
 
-export type CommandResult = { code: number; message: string };
+/** A command's exit code and stdout line, and a warning for stderr. */
+export type CommandResult = { code: number; message: string; warning?: string };
 
 /**
  * `desk install --from <dir>` (slice 1c's minimal install, docs/IMPLEMENTATION.md §15.1): the version steps of core's
@@ -61,7 +66,12 @@ export async function installCommand(input: InstallCommandInput): Promise<Comman
       now: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
     },
   );
-  return result.ok ? { code: 0, message: result.message } : { code: result.code, message: result.message };
+  if (!result.ok) return { code: result.code, message: result.message };
+  // The consent steps that follow the version steps (§15.1); slice 4c's is the tmux line.
+  const binary = await findTmux(loaded.config.terminal.tmux);
+  const tmux = binary === null ? null : new NodeTmux(binary, input.env ?? { HOME: input.home });
+  const line = await addTmuxLine({ files: new NodeTextFiles(), tmux, prompter: input.prompter }, { home: input.home });
+  return { code: 0, message: line.note === null ? result.message : `${result.message}. Note: ${line.note}` };
 }
 
 /** Where Desk keeps its state: DESK_HOME, which the launchers set, else ~/.desk. */

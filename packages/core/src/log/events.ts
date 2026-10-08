@@ -20,6 +20,8 @@ export type LogEvent =
   | { event: "relaunch-stopped"; within10Minutes: number }
   | { event: "idle-quit"; minutes: number }
   | { event: "terminal-attached" }
+  /** An agent-browser state file whose name holds `-desk-` appeared (its name is not logged, only that one did). */
+  | { event: "agent-state-saved" }
   /**
    * A Desk panel crashed: how many windows the daemon had panels in, how many lost theirs, and whether the extension was
    * loaded again (a panel crash takes the extension's renderer, and with it the service worker).

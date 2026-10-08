@@ -3,7 +3,7 @@ import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
 import type { PageVisibility } from "../ports/page-visibility.ts";
 import type { Random } from "../ports/random.ts";
-import type { TerminalPane, TerminalView } from "../ports/terminal-view.ts";
+import type { BannerAction, TerminalPane, TerminalView } from "../ports/terminal-view.ts";
 import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type ErrorCode, type PaneSummary } from "../protocol/messages.ts";
 import { sanitizePaste } from "../term/paste.ts";
 import { Backoff } from "../time/backoff.ts";
@@ -84,6 +84,8 @@ export class PanelController {
   private openedAt = 0;
   private greeted = false;
   private quickCloses = 0;
+  /** Whether the banner shows the agents-paused notice, which `agents-resumed` clears. */
+  private pausedShown = false;
   private drops = 0;
   /** Characters written to the terminal since the last ack. */
   private written = 0;
@@ -127,7 +129,7 @@ export class PanelController {
         this.stop(STATES.hostFailed);
         return;
       }
-      if (!this.hostBanner) this.ports.view.banner("Reconnecting to the Desk terminal…");
+      if (!this.hostBanner) this.showBanner("Reconnecting to the Desk terminal…");
       void this.ports.clock.sleep(this.backoff.next()).then(() => this.connect());
     });
     channel.post({
@@ -164,10 +166,17 @@ export class PanelController {
     if (this.term === term) term.paste(clean);
   }
 
+  /** Every banner goes through here, so `agents-resumed` clears only the paused notice it would have replaced. */
+  private showBanner(text: string | null, action?: BannerAction): void {
+    this.pausedShown = false;
+    if (action === undefined) this.ports.view.banner(text);
+    else this.ports.view.banner(text, action);
+  }
+
   /** Stops reconnecting, and says why. */
   private stop(text: string): void {
     this.stopped = true;
-    this.ports.view.banner(text);
+    this.showBanner(text);
   }
 
   private receive(message: DaemonMessage | null): void {
@@ -180,14 +189,14 @@ export class PanelController {
         this.drops = 0;
         this.hostBanner = false;
         this.closeOnExit = message.closeOnExit ?? false;
-        this.ports.view.banner(null);
+        this.showBanner(null);
         this.attach(message.panes);
         return;
       case "host":
         if (message.state === "install-damaged") this.stop(STATES.installDamaged);
         else if (message.state === "no-daemon") {
           this.hostBanner = true;
-          this.ports.view.banner(STATES.noDaemon);
+          this.showBanner(STATES.noDaemon);
         } else {
           this.drops += 1;
           if (this.drops >= TRIES) this.stop(STATES.messageLimit);
@@ -226,10 +235,10 @@ export class PanelController {
         this.attached = false;
         const paneId = message.pane;
         if (message.reason === "taken") {
-          this.ports.view.banner("This terminal is open in another window", {
+          this.showBanner("This terminal is open in another window", {
             label: "Bring it here",
             run: () => {
-              this.ports.view.banner(null);
+              this.showBanner(null);
               this.open(paneId);
             },
           });
@@ -237,19 +246,26 @@ export class PanelController {
           // The daemon gave up waiting for this panel's acks; a fresh snapshot catches up.
           this.open(paneId);
         } else {
-          this.ports.view.banner("The terminal was detached");
+          this.showBanner("The terminal was detached");
         }
         return;
       }
       case "notice": {
+        if (message.kind === "agents-resumed") {
+          if (this.pausedShown) this.showBanner(null);
+          this.pausedShown = false;
+          return;
+        }
         const text = NOTICES[message.kind];
-        if (text !== undefined) this.ports.view.banner(text);
+        if (text === undefined) return;
+        this.showBanner(text);
+        this.pausedShown = message.kind === "agents-paused";
         return;
       }
       case "error": {
         if (message.code === "E_STALE") {
           // Every daemon understands shutdown, even after E_STALE (§7.2); the host starts the current version's next.
-          this.ports.view.banner(STATES.updated, { label: "Restart now", run: () => this.post({ type: "shutdown", mode: "restart" }) });
+          this.showBanner(STATES.updated, { label: "Restart now", run: () => this.post({ type: "shutdown", mode: "restart" }) });
           return;
         }
         const text = PANE_ERRORS[message.code];
@@ -257,7 +273,7 @@ export class PanelController {
         this.exited = true;
         this.attached = false;
         this.failed = true;
-        this.ports.view.banner(text);
+        this.showBanner(text);
         return;
       }
       case "alert": {
@@ -305,7 +321,7 @@ export class PanelController {
         if (!data.includes("\r")) return;
         if (this.failed) {
           this.failed = false;
-          this.ports.view.banner(null);
+          this.showBanner(null);
         }
         // The same pane: the daemon starts its new shell there, so exited shells never pile up as panes.
         this.open(paneId);

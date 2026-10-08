@@ -5,9 +5,13 @@ export type DaemonRequest = { type: "list" } | { type: "ext.call"; op: ExtOp; ar
 
 /**
  * A message the daemon acts on without a reply: `shutdown` ends the daemon, and with it the connection; `alert` (from
- * `desk watch` only) shows a banner in every panel.
+ * `desk watch` only) shows a red line in every panel.
  */
-export type DaemonNotice = { type: "shutdown"; mode: "stop" | "restart" } | { type: "alert"; kind: "terminal-attached" | "agent-state-saved" };
+export type DaemonNotice =
+  | { type: "shutdown"; mode: "stop" | "restart" }
+  | { type: "alert"; kind: "terminal-attached" | "agent-state-saved" }
+  /** From `desk agents pause` and `resume` (a `cli` client): the panels show or clear the paused notice. */
+  | { type: "agents.state"; paused: boolean };
 
 /** An open connection to the daemon, after hello. */
 export type DaemonSession = {
