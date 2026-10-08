@@ -18,3 +18,4 @@ export { NodeTextFiles } from "./text-files.ts";
 export { NodeTmux, findTmux } from "./tmux.ts";
 export { NodeLaunchAgents } from "./launch-agents.ts";
 export { NodePathModes } from "./path-modes.ts";
+export { NodeTreeRemover } from "./tree-remover.ts";

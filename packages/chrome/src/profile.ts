@@ -113,4 +113,10 @@ export class NodeNativeHostDir implements NativeHostDir {
   async write(name: string, text: string): Promise<void> {
     await writePrivate(this.path(name), text);
   }
+
+  async remove(name: string): Promise<void> {
+    const path = this.path(name);
+    await assertPathAllowed(path);
+    await rm(path, { force: true });
+  }
 }

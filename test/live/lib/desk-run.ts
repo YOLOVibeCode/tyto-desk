@@ -58,7 +58,13 @@ export async function runAnswering(file: string, args: string[], env: NodeJS.Pro
 }
 
 /** An installed Desk in a fresh home: its home, its DESK_HOME, and its `desk` launcher run as the operator runs it. */
-export type InstalledDesk = { home: string; deskHome: string; desk(args?: string[], timeoutMs?: number): Promise<Run> };
+export type InstalledDesk = {
+  home: string;
+  deskHome: string;
+  desk(args?: string[], timeoutMs?: number): Promise<Run>;
+  /** Packs this checkout as `version` and installs it with the installed `desk install --from`, answering yes. */
+  installVersion(version: string): Promise<{ code: number; output: string }>;
+};
 
 /**
  * Packs this checkout as a dev runtime with the test hooks, installs it into a fresh home through the packed runtime's
@@ -75,12 +81,37 @@ export async function installDesk(options: { port: number; resultTag: string }):
   await mkdir(deskHome, { recursive: true, mode: 0o700 });
   await writeFile(join(deskHome, "config.json"), serializeDeskConfig({ ...config, chrome: { ...config.chrome, extraArgs: WINDOW } }), { mode: 0o600 });
 
-  const out = await mkdtemp(join(tmpdir(), `${options.resultTag}-dist-`));
+  const packed = await packVersion("0.0.1-dev.live+0000000", options.resultTag);
+
+  const installed = await runAnswering(
+    join(packed.dir, "node", "desk-node"),
+    [join(packed.dir, "desk.mjs"), "install", "--from", packed.dir],
+    { HOME: home, DESK_HOME: deskHome, PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", TMPDIR: tmpdir() },
+    "y",
+  );
+  await saveResult(`${options.resultTag}-install`, installed);
+  if (installed.code !== 0) throw new Error(`desk install exited ${installed.code}`);
+
+  const launcher = join(home, ".local", "bin", "desk");
+  return {
+    home,
+    deskHome,
+    desk: (args = [], timeoutMs = 90_000) => runProgram(launcher, args, userEnv(home), timeoutMs),
+    installVersion: async (version) => {
+      const next = await packVersion(version, `${options.resultTag}-next`);
+      return runAnswering(launcher, ["install", "--from", next.dir], userEnv(home), "y");
+    },
+  };
+}
+
+/** This checkout packed as a linux dev runtime of `version`, with the test hooks. */
+async function packVersion(version: string, tag: string): Promise<{ dir: string }> {
+  const out = await mkdtemp(join(tmpdir(), `${tag}-dist-`));
   const packed = await packRuntime({
     root: repo,
     out,
     version: {
-      version: "0.0.1-dev.live+0000000",
+      version,
       channel: "dev",
       branch: "live",
       commit: "0".repeat(40),
@@ -98,16 +129,5 @@ export async function installDesk(options: { port: number; resultTag: string }):
     testHooks: true,
   });
   if (!packed.ok) throw new Error(`pack failed: ${packed.reason}`);
-
-  const installed = await runAnswering(
-    join(packed.dir, "node", "desk-node"),
-    [join(packed.dir, "desk.mjs"), "install", "--from", packed.dir],
-    { HOME: home, DESK_HOME: deskHome, PATH: "/usr/local/bin:/usr/bin:/bin", LANG: "C.UTF-8", TMPDIR: tmpdir() },
-    "y",
-  );
-  await saveResult(`${options.resultTag}-install`, installed);
-  if (installed.code !== 0) throw new Error(`desk install exited ${installed.code}`);
-
-  const launcher = join(home, ".local", "bin", "desk");
-  return { home, deskHome, desk: (args = [], timeoutMs = 90_000) => runProgram(launcher, args, userEnv(home), timeoutMs) };
+  return { dir: packed.dir };
 }

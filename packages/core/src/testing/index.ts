@@ -35,6 +35,7 @@ export { FakeTargetWatch } from "./fake-target-watch.ts";
 export { FakeTerminalPane, FakeTerminalView } from "./fake-terminal-view.ts";
 export { FakePty, FakePtySpawner } from "./fake-pty-spawner.ts";
 export { FakeTmux } from "./fake-tmux.ts";
+export { FakeTreeRemover } from "./fake-tree-remover.ts";
 export { MemoryAppVersions } from "./memory-app-versions.ts";
 export { MemoryConfigStore } from "./memory-config-store.ts";
 export { MemoryLayoutStore } from "./memory-layout-store.ts";

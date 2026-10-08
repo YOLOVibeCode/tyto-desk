@@ -6,6 +6,7 @@ import { runHost } from "@desk/nmhost";
 import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
 import { doctorCommand } from "./doctor.ts";
+import { uninstallCommand } from "./uninstall.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
@@ -35,6 +36,7 @@ const USAGE = [
   "       desk tab current|mine      the tab you are looking at, or this pane's agent tab (made in the background)",
   "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
   "       desk doctor [--fix]        what is wrong and how to fix it; --fix rewrites only what lives in ~/.desk",
+  "       desk uninstall [--profile] remove what install added, after you confirm; --profile also the Desk profile",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
@@ -94,6 +96,19 @@ export async function main(input: MainInput): Promise<number> {
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         channel: version.info.channel,
         env: input.env,
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "uninstall") {
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--profile")) return usage();
+      const result = await uninstallCommand({
+        home,
+        deskHome,
+        version: version.info.version,
+        profile: rest[0] === "--profile",
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);

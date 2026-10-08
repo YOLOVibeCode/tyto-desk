@@ -13,4 +13,8 @@ export class MemoryNativeHostDir implements NativeHostDir {
     this.writes.push(name);
     this.manifests.set(name, text);
   }
+
+  async remove(name: string): Promise<void> {
+    this.manifests.delete(name);
+  }
 }

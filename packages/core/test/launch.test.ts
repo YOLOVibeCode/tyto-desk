@@ -581,12 +581,26 @@ describe("desk, reuse and classification (slice 3b, §6.1 step 4, §6.2)", () =>
   it("reuse focuses the window that already shows the panel", async () => {
     const desk = await running({ windows: [win(1, { lastFocused: true }), win(2)], tabs: [[1, "tab-1"], [2, "tab-2"]] });
     desk.bridge.windowList = [win(1), win(2, { lastFocused: true, focused: true, panelOpen: true })];
+    desk.daemon.panels = [2];
     const opened = desk.panels.opened.length;
 
     await desk.run();
 
     expect(desk.bridge.focused).toEqual([2]);
     expect(desk.panels.opened).toHaveLength(opened);
+  });
+
+  it("reuse opens the panel in a window the worker counts as showing it when no panel there said hello within 2 s", async () => {
+    const desk = await running();
+    desk.daemon.panels = [];
+    desk.bridge.windowList = [win(1, { lastFocused: true, focused: true, panelOpen: true })];
+    const opened = desk.panels.opened.length;
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(desk.panels.opened).toHaveLength(opened + 1);
+    expect(desk.bridge.focused).toEqual([]);
   });
 
   it("reuse wakes a service worker that did not connect with the toolbar action", async () => {

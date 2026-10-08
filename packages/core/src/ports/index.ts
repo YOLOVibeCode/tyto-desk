@@ -45,4 +45,5 @@ export type { FollowedBrowser, TargetWatch, TargetWatchEvent } from "./target-wa
 export type { MirrorScreen, TerminalMirror } from "./terminal-mirror.ts";
 export type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "./terminal-view.ts";
 export type { TextFiles } from "./text-files.ts";
+export type { TreeRemover } from "./tree-remover.ts";
 export type { Tmux } from "./tmux.ts";

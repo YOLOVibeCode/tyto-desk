@@ -6,6 +6,8 @@ import { pollUntil } from "./poll.ts";
 
 const PANEL_HELLO_MS = 5_000;
 const NEW_WINDOW_MS = 5_000;
+/** How long a window the worker says shows the panel gets for that panel's hello. */
+const SHOWN_HELLO_MS = 2_000;
 const POLL_MS = 100;
 
 export type PanelResult = { ok: true; createdWindow: boolean } | { ok: false; message: string };
@@ -51,8 +53,9 @@ export async function ensurePanel(input: {
     });
     if (windows === null) return { ok: false, message: "Chrome's new window did not appear" };
   }
+  // The worker may still count a panel the extension's reload just closed: a panel shows only once it said hello.
   const showing = windows.find((w) => w.panelOpen);
-  if (showing !== undefined) {
+  if (showing !== undefined && (await pollUntil(input.clock, SHOWN_HELLO_MS, POLL_MS, async () => ((await panelIn(input.daemon, showing.id)) ? true : null))) !== null) {
     await input.bridge.focusWindow(showing.id);
     return { ok: true, createdWindow };
   }
