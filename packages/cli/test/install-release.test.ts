@@ -27,6 +27,10 @@ describe("desk install --from with the release install.sh verified (docs/IMPLEME
     });
   });
 
+  it("desk install --release expects a stable build whatever channel the runtime calls itself", () => {
+    expect(releaseInstall({ release: { version: "0.4.0", commit: COMMIT }, channel: "dev", current: null }).expected).toEqual({ version: "0.4.0", channel: "stable", commit: COMMIT });
+  });
+
   it.each([
     ["older than the current version", "0.5.0", true],
     ["newer than the current version", "0.3.0", false],

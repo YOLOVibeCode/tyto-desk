@@ -265,6 +265,17 @@ describe("desk install --from", () => {
     },
   );
 
+  it("an install that expects a verified build refuses an installed copy of its version when installed.json is gone (65)", async () => {
+    const desk = setup({ expected: { version: info.version, channel: info.channel, commit: info.commit } });
+    desk.versions.installed.push(info.version);
+    desk.versions.builds.set(info.version, "b2".repeat(32));
+
+    const result = await desk.run();
+
+    expect(result).toMatchObject({ ok: false, code: 65 });
+    expect(desk.versions.used).toEqual([]);
+  });
+
   it("an install that expects a verified build takes an installed copy recorded as that build", async () => {
     const desk = setup({ expected: { version: info.version, channel: info.channel, commit: info.commit } });
     desk.versions.installed.push(info.version, "0.3.0");
