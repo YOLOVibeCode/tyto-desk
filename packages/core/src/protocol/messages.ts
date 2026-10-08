@@ -67,6 +67,15 @@ export type ClientMessage =
   | GatewayState;
 
 export type PaneSummary = { id: string; alive: boolean };
+/** The terminal settings a panel takes from `config.json` (§10), in the daemon's hello. */
+export type PanelTerminal = {
+  fontFamily: string;
+  fontSize: number;
+  scrollback: number;
+  macOptionIsMeta: boolean;
+  osc52Write: boolean;
+  keymap: Record<string, string>;
+};
 export type HelloReply = {
   type: "hello";
   v: number;
@@ -77,6 +86,8 @@ export type HelloReply = {
   closeOnExit?: boolean;
   /** To a panel: the layout, as `layout.get` would give it, so the panel lays out its panes without asking (§10). */
   layout?: Record<string, unknown>;
+  /** To a panel: its terminal settings from `config.json`. */
+  terminal?: PanelTerminal;
 };
 export type Snapshot = { type: "snapshot"; pane: string; part: number; last: boolean; cols: number; rows: number; data: string };
 export type Out = { type: "out"; pane: string; data: string };
@@ -219,6 +230,17 @@ const CLIENT_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
 };
 
 const isPaneSummary = (value: unknown) => shaped(value, { id: isPaneId, alive: isBoolean });
+const isKeymap = (value: unknown) =>
+  isRecord(value) && Object.keys(value).length <= 64 && Object.entries(value).every(([action, binding]) => action.length <= 32 && typeof binding === "string" && binding.length <= 64);
+const isPanelTerminal = (value: unknown) =>
+  shaped(value, {
+    fontFamily: isText(200),
+    fontSize: (size: unknown) => typeof size === "number" && size >= 6 && size <= 72,
+    scrollback: isWhole(0, 1_000_000),
+    macOptionIsMeta: isBoolean,
+    osc52Write: isBoolean,
+    keymap: isKeymap,
+  });
 const isPaneListEntry = (value: unknown) => shaped(value, { id: isPaneId, alive: isBoolean, owned: isBoolean });
 
 const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fields }>> = {
@@ -230,7 +252,7 @@ const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
       panes: isListOf(isPaneSummary, 64),
       notices: isListOf(isText(64), 16),
     },
-    optional: { closeOnExit: isBoolean, layout: isRecord },
+    optional: { closeOnExit: isBoolean, layout: isRecord, terminal: isPanelTerminal },
   },
   snapshot: {
     required: { type: isType("snapshot"), pane: isPaneId, part: isWhole(0, 10_000), last: isBoolean, ...size, data: isText(2 ** 20) },

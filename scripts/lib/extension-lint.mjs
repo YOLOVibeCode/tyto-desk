@@ -1,9 +1,10 @@
 /**
  * lint:extension (docs/IMPLEMENTATION.md §9): the extension's own source never attaches the debugger (`debugger` is
  * granted only for `chrome.debugger.getTargets()`), never writes markup from strings (`innerHTML`, `outerHTML`,
- * `insertAdjacentHTML`, `document.write`), never builds code from strings (`eval`, `Function`), and imports nothing from
- * Node. It walks the TypeScript syntax tree, so comments and strings never count, and it reports file, line and rule,
- * never the source.
+ * `insertAdjacentHTML`, `document.write`), never builds code from strings (`eval`, `Function`), imports nothing from
+ * Node, and makes every xterm with `convertEol: false` and no `windowOptions` (§10: `true` corrupts output with bare LF,
+ * and window reports such as the title stay off). It walks the TypeScript syntax tree, so comments and strings never
+ * count, and it reports file, line and rule, never the source.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { builtinModules } from "node:module";
@@ -51,6 +52,20 @@ function isNamePosition(node) {
   return ts.isImportSpecifier(parent) || ts.isExportSpecifier(parent);
 }
 
+/**
+ * Whether `new Terminal(…)`'s options are an object literal with `convertEol: false` and no `windowOptions`.
+ * @param {ts.NewExpression} node
+ */
+function xtermOptionsKept(node) {
+  const options = node.arguments?.[0];
+  if (options === undefined || !ts.isObjectLiteralExpression(options)) return false;
+  /** @param {ts.ObjectLiteralElementLike} property */
+  const named = (property) => (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : null);
+  const convertEol = options.properties.find((property) => named(property) === "convertEol");
+  const keepsEol = convertEol !== undefined && ts.isPropertyAssignment(convertEol) && convertEol.initializer.kind === ts.SyntaxKind.FalseKeyword;
+  return keepsEol && !options.properties.some((property) => named(property) === "windowOptions" || ts.isSpreadAssignment(property));
+}
+
 /** @param {string} specifier */
 function isNodeModule(specifier) {
   return specifier.startsWith("node:") || NODE_BUILTINS.has(specifier) || NODE_BUILTINS.has(specifier.split("/")[0] ?? "");
@@ -85,6 +100,9 @@ export function checkExtensionSource(text, file) {
       if ((member === "write" || member === "writeln") && ts.isIdentifier(node.expression) && node.expression.text === "document") {
         report(node, "document.write");
       }
+    }
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Terminal" && !xtermOptionsKept(node)) {
+      report(node, "xterm options");
     }
     if (ts.isIdentifier(node) && !isNamePosition(node)) {
       if (node.text === "eval") report(node, "eval");

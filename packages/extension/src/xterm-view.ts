@@ -1,8 +1,22 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
-import type { BannerAction, LayoutNode, LayoutShown, LayoutView, SplitPath, TerminalPane, TerminalSize, TerminalView } from "@desk/core";
+import type {
+  BannerAction,
+  KeyInput,
+  LayoutNode,
+  LayoutShown,
+  LayoutView,
+  MenuItem,
+  SplitPath,
+  TerminalPane,
+  TerminalSettings,
+  TerminalSize,
+  TerminalView,
+} from "@desk/core";
 
-export type XtermOptions = { fontFamily: string; fontSize: number; scrollback: number };
+/** One pane's xterm and what the view keeps for it. */
+type Held = { term: Terminal; fit: FitAddon; search: SearchAddon; element: HTMLElement; laidOut(): boolean };
 
 /** What the live suite reads in a test build (docs/IMPLEMENTATION.md §17.3); production builds drop it. */
 type TestHooks = {
@@ -22,7 +36,16 @@ type TestHooks = {
 /** How long a note stays. */
 const NOTE_MS = 4_000;
 
-export type PanelElements = { stage: HTMLElement; tabs: HTMLElement; banner: HTMLElement; alert: HTMLElement; note: HTMLElement };
+export type PanelElements = {
+  stage: HTMLElement;
+  tabs: HTMLElement;
+  banner: HTMLElement;
+  alert: HTMLElement;
+  note: HTMLElement;
+  /** The find bar: its input, and the pane it searches. */
+  find: HTMLElement;
+  findInput: HTMLInputElement;
+};
 
 /**
  * The panel's terminals (§10's xterm options, slice 1c's subset): `convertEol` false, the scrollback the mirror keeps,
@@ -39,8 +62,14 @@ export class XtermView implements TerminalView, LayoutView {
   private readonly noteElement: HTMLElement;
   /** Where the panes of other tabs wait: in the page, so their terminals keep parsing output, but not laid out. */
   private readonly parking: HTMLElement;
-  private readonly options: XtermOptions;
+  private settings: TerminalSettings;
   private readonly terminals = new Map<string, Terminal>();
+  private readonly held = new Map<string, Held>();
+  private readonly findElement: HTMLElement;
+  private readonly findInput: HTMLInputElement;
+  /** The pane the find bar searches. */
+  private finding: string | null = null;
+  private menuElement: HTMLElement | null = null;
   private readonly elements = new Map<string, HTMLElement>();
   private shown: LayoutShown | null = null;
   /** The structure last built: the active tab, its zoom and its tree without ratios. */
@@ -51,7 +80,7 @@ export class XtermView implements TerminalView, LayoutView {
   /** In a test build, each pane's last 200 resets, writes (their length) and resizes, for the live suite's reports. */
   private readonly calls = new Map<string, string[]>();
 
-  constructor(elements: PanelElements, options: XtermOptions) {
+  constructor(elements: PanelElements, settings: TerminalSettings) {
     this.stage = elements.stage;
     this.tabsElement = elements.tabs;
     this.bannerElement = elements.banner;
@@ -60,7 +89,22 @@ export class XtermView implements TerminalView, LayoutView {
     this.parking = document.createElement("div");
     this.parking.className = "parking";
     document.body.append(this.parking);
-    this.options = options;
+    this.settings = settings;
+    this.findElement = elements.find;
+    this.findInput = elements.findInput;
+    this.findInput.addEventListener("input", () => this.search("incremental"));
+    this.findInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.search(event.shiftKey ? "previous" : "next");
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        this.closeFind();
+      }
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (this.menuElement !== null && !(event.target instanceof Node && this.menuElement.contains(event.target))) this.closeMenu();
+    });
     if (DESK_TEST) {
       const hooks: TestHooks = {
         screen: (paneId) => {
@@ -92,15 +136,17 @@ export class XtermView implements TerminalView, LayoutView {
     this.elements.set(paneId, element);
     const term = new Terminal({
       convertEol: false,
-      scrollback: this.options.scrollback,
-      fontFamily: this.options.fontFamily,
-      fontSize: this.options.fontSize,
-      macOptionIsMeta: false,
+      scrollback: this.settings.scrollback,
+      fontFamily: this.settings.fontFamily,
+      fontSize: this.settings.fontSize,
+      macOptionIsMeta: this.settings.macOptionIsMeta,
       macOptionClickForcesSelection: true,
       cursorBlink: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
+    const search = new SearchAddon();
+    term.loadAddon(search);
     term.open(element);
     // Fit only a laid-out element: before the side panel lays the page out, fit measures nothing and gives 2×1, and a
     // pane opened at that size reflows its mirror and makes zsh redraw a prompt it believes is six lines tall (D106).
@@ -111,8 +157,34 @@ export class XtermView implements TerminalView, LayoutView {
     });
     observer.observe(element);
     this.terminals.set(paneId, term);
+    this.held.set(paneId, { term, fit, search, element, laidOut });
     const pasteListeners: ((text: string) => void)[] = [];
     const focusListeners: (() => void)[] = [];
+    const keyListeners: ((input: KeyInput) => boolean)[] = [];
+    const menuListeners: ((item: MenuItem) => void)[] = [];
+    // Keys go to the panel first (§10): one it takes never reaches xterm, and nothing else is prevented.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      const input: KeyInput = {
+        code: event.code,
+        meta: event.metaKey,
+        ctrl: event.ctrlKey,
+        alt: event.altKey,
+        shift: event.shiftKey,
+        composing: event.isComposing || event.keyCode === 229,
+      };
+      if (!keyListeners.some((listener) => listener(input))) return true;
+      event.preventDefault();
+      return false;
+    });
+    element.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.openMenu(event.clientX, event.clientY, term, (text) => {
+        for (const listener of pasteListeners) listener(text);
+      }, (item) => {
+        for (const listener of menuListeners) listener(item);
+      });
+    });
     element.addEventListener("focusin", () => {
       for (const listener of focusListeners) listener();
     });
@@ -157,15 +229,106 @@ export class XtermView implements TerminalView, LayoutView {
       onFocus: (listener) => {
         focusListeners.push(listener);
       },
+      onKey: (listener) => {
+        keyListeners.push(listener);
+      },
+      onMenu: (listener) => {
+        menuListeners.push(listener);
+      },
+      find: (command) => {
+        if (command === "open" || this.findInput.value === "" || this.finding !== paneId) this.openFind(paneId);
+        else this.search(command);
+      },
+      clear: () => term.clear(),
       focus: () => term.focus(),
       dispose: () => {
         observer.disconnect();
         this.terminals.delete(paneId);
+        this.held.delete(paneId);
+        if (this.finding === paneId) this.closeFind();
         this.elements.delete(paneId);
         term.dispose();
         element.remove();
       },
     };
+  }
+
+  configure(settings: TerminalSettings): void {
+    this.settings = settings;
+    for (const { term, fit, laidOut } of this.held.values()) {
+      term.options.fontFamily = settings.fontFamily;
+      term.options.fontSize = settings.fontSize;
+      term.options.scrollback = settings.scrollback;
+      term.options.macOptionIsMeta = settings.macOptionIsMeta;
+      if (laidOut()) fit.fit();
+    }
+  }
+
+  /** The find bar on `paneId`, its text selected so typing replaces it. */
+  private openFind(paneId: string): void {
+    this.finding = paneId;
+    this.findElement.hidden = false;
+    this.findInput.focus();
+    this.findInput.select();
+    if (this.findInput.value !== "") this.search("incremental");
+  }
+
+  private closeFind(): void {
+    const paneId = this.finding;
+    this.finding = null;
+    this.findElement.hidden = true;
+    const held = paneId === null ? undefined : this.held.get(paneId);
+    held?.search.clearDecorations();
+    held?.term.focus();
+  }
+
+  private search(how: "incremental" | "next" | "previous"): void {
+    const held = this.finding === null ? undefined : this.held.get(this.finding);
+    const query = this.findInput.value;
+    if (held === undefined || query === "") return;
+    if (how === "previous") held.search.findPrevious(query);
+    else held.search.findNext(query, { incremental: how === "incremental" });
+  }
+
+  /** The pane's context menu (§10): Copy, Paste, Split right, Split down, Clear; text buttons only. */
+  private openMenu(x: number, y: number, term: Terminal, paste: (text: string) => void, pick: (item: MenuItem) => void): void {
+    this.closeMenu();
+    const menu = document.createElement("div");
+    menu.className = "menu";
+    menu.setAttribute("role", "menu");
+    const item = (label: string, run: () => void, enabled = true) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.disabled = !enabled;
+      button.setAttribute("role", "menuitem");
+      button.addEventListener("click", () => {
+        this.closeMenu();
+        run();
+      });
+      menu.append(button);
+    };
+    const selection = term.getSelection();
+    item("Copy", () => void navigator.clipboard.writeText(selection).catch(() => this.note("Desk could not copy to the clipboard")), selection !== "");
+    item("Paste", () => {
+      navigator.clipboard.readText().then(paste, () => this.note("Desk could not read the clipboard: use Cmd+V"));
+    });
+    item("Split right", () => pick("split-right"));
+    item("Split down", () => pick("split-down"));
+    item("Clear", () => pick("clear"));
+    menu.style.left = `${Math.min(x, window.innerWidth - 160)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 170)}px`;
+    menu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") this.closeMenu();
+    });
+    document.body.append(menu);
+    this.menuElement = menu;
+    menu.querySelector<HTMLButtonElement>("button:not([disabled])")?.focus();
+  }
+
+  private closeMenu(): void {
+    this.menuElement?.remove();
+    this.menuElement = null;
   }
 
   show(shown: LayoutShown): void {

@@ -3,7 +3,8 @@ import { BrowserClock, ChromeHostConnector, DocumentVisibility, FOCUS_QUESTION, 
 import { deskBuild } from "./desk-build.ts";
 import { XtermView } from "./xterm-view.ts";
 
-const TERMINAL = { fontFamily: "Menlo, 'SF Mono', 'DejaVu Sans Mono', monospace", fontSize: 13, scrollback: 5_000 };
+/** The settings until the daemon's hello brings config.json's (§10). */
+const TERMINAL = { fontFamily: "Menlo, 'SF Mono', 'DejaVu Sans Mono', monospace", fontSize: 13, scrollback: 5_000, macOptionIsMeta: false };
 
 /**
  * Whether this panel may take the keyboard as it loads: not when it was opened with `focus=0`, nor when the worker says an
@@ -40,7 +41,12 @@ async function start(): Promise<void> {
   }
   const current = await chrome.windows.getCurrent();
   if (typeof current.id !== "number") return;
-  const view = new XtermView({ stage: element("terminal"), tabs: element("tabs"), banner, alert: element("alert"), note: element("note") }, TERMINAL);
+  const findInput = element("find-input");
+  if (!(findInput instanceof HTMLInputElement)) throw new Error("panel.html's #find-input is not an input");
+  const view = new XtermView(
+    { stage: element("terminal"), tabs: element("tabs"), banner, alert: element("alert"), note: element("note"), find: element("find"), findInput },
+    TERMINAL,
+  );
   const panel = new PanelController({
     connector: new ChromeHostConnector(),
     view,

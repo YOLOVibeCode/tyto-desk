@@ -1,4 +1,4 @@
-import type { BannerAction, TerminalPane, TerminalSize, TerminalView } from "../ports/terminal-view.ts";
+import type { BannerAction, KeyInput, MenuItem, TerminalPane, TerminalSettings, TerminalSize, TerminalView } from "../ports/terminal-view.ts";
 
 /** A pane's terminal in memory: what was written since the last reset, and input the test types. */
 export class FakeTerminalPane implements TerminalPane {
@@ -14,6 +14,11 @@ export class FakeTerminalPane implements TerminalPane {
   private readonly inputListeners: ((data: string) => void)[] = [];
   private readonly resizeListeners: ((size: TerminalSize) => void)[] = [];
   private readonly focusListeners: (() => void)[] = [];
+  private readonly keyListeners: ((input: KeyInput) => boolean)[] = [];
+  private readonly menuListeners: ((item: MenuItem) => void)[] = [];
+  /** The find bar commands the panel gave this pane. */
+  readonly finds: string[] = [];
+  clears = 0;
 
   constructor(id: string, size: TerminalSize) {
     this.id = id;
@@ -63,6 +68,33 @@ export class FakeTerminalPane implements TerminalPane {
     this.focusListeners.push(listener);
   }
 
+  onKey(listener: (input: KeyInput) => boolean): void {
+    this.keyListeners.push(listener);
+  }
+
+  onMenu(listener: (item: MenuItem) => void): void {
+    this.menuListeners.push(listener);
+  }
+
+  find(command: "open" | "next" | "previous"): void {
+    this.finds.push(command);
+  }
+
+  clear(): void {
+    this.clears += 1;
+  }
+
+  /** The user presses a key; true when the panel took it, so the terminal never sees it. */
+  presses(input: Partial<KeyInput> & { code: string }): boolean {
+    const full: KeyInput = { meta: false, ctrl: false, alt: false, shift: false, composing: false, ...input };
+    return this.keyListeners.some((listener) => listener(full));
+  }
+
+  /** The user picks an item from this pane's context menu. */
+  picks(item: MenuItem): void {
+    for (const listener of this.menuListeners) listener(item);
+  }
+
   focus(): void {
     this.focuses += 1;
   }
@@ -97,10 +129,16 @@ export class FakeTerminalView implements TerminalView {
   readonly questions: string[] = [];
   readonly answers: boolean[] = [];
   alertText: string | null = null;
+  /** Every configure, in order. */
+  readonly settings: TerminalSettings[] = [];
   private readonly size: TerminalSize;
 
   constructor(size: TerminalSize = { cols: 100, rows: 30 }) {
     this.size = size;
+  }
+
+  configure(settings: TerminalSettings): void {
+    this.settings.push(settings);
   }
 
   create(paneId: string): FakeTerminalPane {

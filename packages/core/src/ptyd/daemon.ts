@@ -18,6 +18,7 @@ import {
   type DaemonMessage,
   type ErrorCode,
   type ExtCall,
+  type PanelTerminal,
   type ExtResult,
   type Open,
 } from "../protocol/messages.ts";
@@ -50,6 +51,8 @@ export type DaemonPorts = {
   scrollback: number;
   /** `terminal.closeOnExit`, which panels learn in `hello`. */
   closeOnExit?: boolean;
+  /** The terminal settings panels learn in `hello` (§10). */
+  terminal?: PanelTerminal;
 };
 
 /** The panes Desk keeps at most (§7.2). */
@@ -287,6 +290,7 @@ export class Daemon {
         panes: [...this.panes.values()].map((pane) => ({ id: pane.id, alive: pane.alive })),
         notices: [],
         ...(kind === "panel" && this.ports.closeOnExit !== undefined ? { closeOnExit: this.ports.closeOnExit } : {}),
+        ...(kind === "panel" && this.ports.terminal !== undefined ? { terminal: this.ports.terminal } : {}),
         ...(layout === null ? {} : { layout }),
       });
     // A panel gets the layout with its hello: it lays out its panes at once, without a layout.get round trip (§10).

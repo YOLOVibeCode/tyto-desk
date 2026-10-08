@@ -149,6 +149,7 @@ export {
   type Out,
   type PaneListEntry,
   type PaneSummary,
+  type PanelTerminal,
   type Panes,
   type Resize,
   type Shutdown,
@@ -203,3 +204,4 @@ export { Backoff } from "./time/backoff.ts";
 export { parseVersionInfo, versionLine, type VersionInfo } from "./version/version-info.ts";
 export { WorkerController, type WorkerPorts } from "./worker/worker-controller.ts";
 export { parseSha256Sums, update, type UpdateInput, type UpdatePorts, type UpdateResult } from "./update/update.ts";
+export { DEFAULT_BINDINGS, PANEL_ACTIONS, bindingProblem, buildKeymap, keyDecision, type PanelAction } from "./term/keymap.ts";

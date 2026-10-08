@@ -20,4 +20,5 @@ export const LIVE_PORTS = {
   install: 9557,
   update: 9567,
   layout: 9577,
+  keys: 9587,
 } as const;

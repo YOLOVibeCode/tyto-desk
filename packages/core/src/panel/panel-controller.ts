@@ -21,8 +21,9 @@ import type { HostConnector } from "../ports/host-connector.ts";
 import type { LayoutView } from "../ports/layout-view.ts";
 import type { PageVisibility } from "../ports/page-visibility.ts";
 import type { Random } from "../ports/random.ts";
-import type { BannerAction, TerminalPane, TerminalView } from "../ports/terminal-view.ts";
-import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type ErrorCode, type PaneSummary } from "../protocol/messages.ts";
+import type { BannerAction, KeyInput, MenuItem, TerminalPane, TerminalView } from "../ports/terminal-view.ts";
+import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type ErrorCode, type PaneSummary, type PanelTerminal } from "../protocol/messages.ts";
+import { buildKeymap, keyDecision, type PanelAction } from "../term/keymap.ts";
 import { sanitizePaste } from "../term/paste.ts";
 import { Backoff } from "../time/backoff.ts";
 
@@ -75,6 +76,17 @@ const TRIES = 3;
 const ACK_EVERY = 5_000;
 /** How many of its own recent layouts the panel remembers, to know their broadcasts as echoes. */
 const ECHOES = 16;
+/** The terminal settings when the daemon's hello has none (an older daemon): `config.json`'s defaults. */
+const DEFAULT_TERMINAL: PanelTerminal = {
+  fontFamily: "Menlo, 'SF Mono', 'DejaVu Sans Mono', monospace",
+  fontSize: 13,
+  scrollback: 5_000,
+  macOptionIsMeta: false,
+  osc52Write: false,
+  keymap: {},
+};
+const FONT_MIN = 6;
+const FONT_MAX = 72;
 
 /** What the banner says when the daemon cannot give a pane a shell; Enter tries again. */
 const PANE_ERRORS: Readonly<Partial<Record<ErrorCode, string>>> = {
@@ -130,6 +142,10 @@ export class PanelController {
   private drops = 0;
   private closeOnExit = false;
   private closes = 0;
+  private settings: PanelTerminal = DEFAULT_TERMINAL;
+  private keymap = buildKeymap({}).keymap;
+  /** The font size every terminal has now; `null` before the first configure. */
+  private fontApplied: number | null = null;
 
   constructor(ports: PanelPorts) {
     this.ports = ports;
@@ -216,6 +232,115 @@ export class PanelController {
     if (this.layout !== null) this.change(resizeFocused(this.layout, arrow));
   }
 
+  /** A keymap action (§10's table), on the pane it was pressed in. */
+  private run(action: PanelAction, pane: PaneState): void {
+    switch (action) {
+      case "new-tab":
+        return this.newTab();
+      case "close":
+        return this.closeFocused();
+      case "split-right":
+        return this.split("right");
+      case "split-down":
+        return this.split("down");
+      case "previous":
+        return this.focusPrevious();
+      case "next":
+        return this.focusNext();
+      case "zoom":
+        return this.zoom();
+      case "resize-left":
+        return this.resize("left");
+      case "resize-right":
+        return this.resize("right");
+      case "resize-up":
+        return this.resize("up");
+      case "resize-down":
+        return this.resize("down");
+      case "tab-1":
+      case "tab-2":
+      case "tab-3":
+      case "tab-4":
+      case "tab-5":
+      case "tab-6":
+      case "tab-7":
+      case "tab-8":
+      case "tab-9":
+        return this.selectTab(Number(action.slice(4)));
+      case "find":
+        return pane.term.find("open");
+      case "find-next":
+        return pane.term.find("next");
+      case "find-previous":
+        return pane.term.find("previous");
+      case "clear":
+        return pane.term.clear();
+      case "font-larger":
+        return this.setFont(this.fontOf(this.layout) + 1);
+      case "font-smaller":
+        return this.setFont(this.fontOf(this.layout) - 1);
+      case "font-reset":
+        return this.setFont(null);
+      default: {
+        const never: never = action;
+        throw new Error(`unhandled action ${String(never)}`);
+      }
+    }
+  }
+
+  /** A keydown in a pane: a bound action, or a sequence for its shell; false leaves it to the terminal. */
+  private key(pane: PaneState, input: KeyInput): boolean {
+    const decision = keyDecision(input, this.keymap);
+    if (decision === null) return false;
+    if ("send" in decision) {
+      if (pane.attached && !pane.exited) this.post({ type: "in", pane: pane.id, data: decision.send });
+      return true;
+    }
+    this.run(decision.action, pane);
+    return true;
+  }
+
+  /** The context menu acts on the pane it was opened on. */
+  private menu(pane: PaneState, item: MenuItem): void {
+    if (item === "clear") {
+      pane.term.clear();
+      return;
+    }
+    if (this.layout !== null && this.focusedPane() !== pane) this.change(focusPane(this.layout, pane.id));
+    this.split(item === "split-right" ? "right" : "down");
+  }
+
+  /** The hello's terminal settings, and the keymap they give; a binding that cannot be one is named in a note. */
+  private takeSettings(settings: PanelTerminal): void {
+    this.settings = settings;
+    const built = buildKeymap(settings.keymap);
+    this.keymap = built.keymap;
+    if (built.refused.length > 0) this.ports.layout.note(`terminal.keymap: ${built.refused.join("; ")}`);
+  }
+
+  /** The font size a layout asks for (`ui.fontSize`), else `config.json`'s. */
+  private fontOf(layout: Layout | null): number {
+    const saved = layout?.ui.fontSize;
+    return typeof saved === "number" && saved >= FONT_MIN && saved <= FONT_MAX ? saved : this.settings.fontSize;
+  }
+
+  /** A new font size (or `null`: back to `config.json`'s), saved in `layout.json` `ui` (§10). */
+  private setFont(size: number | null): void {
+    if (this.layout === null) return;
+    const { fontSize: _dropped, ...ui } = this.layout.ui;
+    const next = size === null ? ui : { ...ui, fontSize: Math.min(FONT_MAX, Math.max(FONT_MIN, size)) };
+    this.change({ ...this.layout, ui: next });
+  }
+
+  /** Every terminal at the layout's font size, configured again only when it changed. */
+  private applyFont(force = false): void {
+    const size = this.fontOf(this.layout);
+    if (!force && size === this.fontApplied) return;
+    this.fontApplied = size;
+    const { fontFamily, scrollback, macOptionIsMeta } = this.settings;
+    this.ports.view.configure({ fontFamily, fontSize: size, scrollback, macOptionIsMeta });
+  }
+
   // ---- The layout ----
 
   private focusedPane(): PaneState | null {
@@ -238,6 +363,7 @@ export class PanelController {
   private change(next: Layout): void {
     if (next === this.layout) return;
     this.layout = next;
+    this.applyFont();
     this.show();
     this.puts += 1;
     const text = JSON.stringify(next);
@@ -277,6 +403,7 @@ export class PanelController {
     const layout = this.fromWire(value);
     if (layout === null) return;
     this.layout = layout;
+    this.applyFont();
     const held = new Set(layoutPanes(layout));
     for (const [id, pane] of this.panes) {
       if (held.has(id)) continue;
@@ -297,6 +424,10 @@ export class PanelController {
       layout = addTab(layout, { pane: this.ports.random.id("p"), tab: this.ports.random.id("t") });
       changed = true;
     }
+    // The terminals take their settings before any of them is made.
+    this.fontApplied = this.fontOf(layout);
+    const { fontFamily, scrollback, macOptionIsMeta } = this.settings;
+    this.ports.view.configure({ fontFamily, fontSize: this.fontApplied, scrollback, macOptionIsMeta });
     const held = new Set(layoutPanes(layout));
     for (const [id, pane] of this.panes) {
       if (held.has(id)) continue;
@@ -426,6 +557,7 @@ export class PanelController {
         this.drops = 0;
         this.hostBanner = false;
         this.closeOnExit = message.closeOnExit ?? false;
+        this.takeSettings(message.terminal ?? DEFAULT_TERMINAL);
         this.showBanner(null);
         this.greet(livePanes(message.panes), message.layout);
         return;
@@ -569,6 +701,10 @@ export class PanelController {
     term.onFocus(() => {
       if (this.layout === null || this.focusedPane() === pane) return;
       this.change(focusPane(this.layout, paneId));
+    });
+    term.onKey((input) => this.panes.get(paneId) === pane && this.key(pane, input));
+    term.onMenu((item) => {
+      if (this.panes.get(paneId) === pane) this.menu(pane, item);
     });
     return pane;
   }
