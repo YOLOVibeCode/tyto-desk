@@ -101,6 +101,15 @@ export async function installVersion(ports: InstallPorts, input: InstallInput): 
       return { ok: false, code: 65, message: `${tooNew}; nothing was installed` };
     }
     const alreadyInstalled = (await ports.versions.list()).includes(info.version);
+    if (alreadyInstalled && expected !== undefined) {
+      // A verified build never stands in for another one installed under its name: the installed copy must be recorded as
+      // that commit and channel, as desk update requires (§23.5, D114).
+      const recorded = previous?.versions[info.version];
+      if (recorded?.commit !== expected.commit || recorded.channel !== expected.channel) {
+        await ports.versions.discard(staged.staging);
+        return { ok: false, code: 65, message: `another build of Desk ${info.version} is installed, not ${expected.channel} at ${expected.commit}; nothing changed` };
+      }
+    }
     let build = staged.build;
     if (alreadyInstalled) {
       await ports.versions.discard(staged.staging);

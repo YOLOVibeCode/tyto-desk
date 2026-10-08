@@ -97,9 +97,17 @@ export async function main(input: MainInput): Promise<number> {
       return await daemon.runDaemon({ deskHome, env: input.env, version: version.info.version });
     }
     if (command === "install") {
-      if (rest.length !== 2 || rest[0] !== "--from" || rest[1] === undefined) return usage();
+      // install.sh adds the release it verified: `--release X.Y.Z --commit <sha>`, both or neither.
+      const [fromFlag, from, releaseFlag, release, commitFlag, commit] = rest;
+      if (fromFlag !== "--from" || from === undefined) return usage();
+      const verified =
+        rest.length === 6 && releaseFlag === "--release" && commitFlag === "--commit" && release !== undefined && commit !== undefined
+          ? { version: release, commit }
+          : null;
+      if (rest.length !== 2 && (verified === null || !/^\d+\.\d+\.\d+$/.test(verified.version) || !/^[0-9a-f]{40}$/.test(verified.commit))) return usage();
       const result = await installCommand({
-        from: rest[1],
+        from,
+        ...(verified === null ? {} : { release: verified }),
         deskHome,
         home,
         platform: input.platform,
