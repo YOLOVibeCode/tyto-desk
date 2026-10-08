@@ -133,6 +133,7 @@ export class ChromeWatch {
     void this.follow().catch((err: unknown) => this.warn(err));
     void this.idle().catch((err: unknown) => this.warn(err));
     void this.health().catch((err: unknown) => this.warn(err));
+    void this.agentState().catch((err: unknown) => this.warn(err));
   }
 
   stop(): void {
@@ -466,6 +467,25 @@ export class ChromeWatch {
       if (confirmed.length === 0) continue;
       dead.clear();
       await this.recover(new Set(confirmed), "panel-crashed").catch((err: unknown) => this.warn(err));
+    }
+  }
+
+  /**
+   * Every 60 s (§6.4, D22's alarm): a file in `~/.agent-browser/sessions` whose name holds `-desk-` means a Desk agent
+   * session saved browser state into your agent-browser files, which Desk's config never does. Each name is alerted
+   * once; names are read, never contents.
+   */
+  private async agentState(): Promise<void> {
+    const dir = `${this.input.home.replace(/\/+$/, "")}/.agent-browser/sessions`;
+    const alerted = new Set<string>();
+    while (!this.stopped) {
+      const saved = (await this.ports.files.names(dir)).filter((name) => name.includes("-desk-") && !alerted.has(name));
+      if (saved.length > 0) {
+        for (const name of saved) alerted.add(name);
+        this.ports.log.write({ event: "agent-state-saved" });
+        await this.notify({ type: "alert", kind: "agent-state-saved" });
+      }
+      await this.ports.clock.sleep(IDLE_CHECK_MS);
     }
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NodeTmux } from "../src/index.ts";
+import { NodeTmux, findTmux } from "../src/index.ts";
 import { fakeExecutable } from "../../../test/fixtures/fake-exec.ts";
 
 const LISTING =
@@ -43,5 +43,28 @@ describe("NodeTmux", () => {
     await adapter.updateEnvironment();
 
     expect((await tmux.calls()).filter((call) => call.argv.includes("show-environment"))).toEqual([]);
+  });
+
+  it("Tmux appends names to the running server's update-environment as one argv entry", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["set-option"], stdout: "" }]);
+
+    const ok = await new NodeTmux(tmux.path, { HOME: "/Users/alex", PATH: "/usr/bin:/bin" }).appendUpdateEnvironment(["AGENT_BROWSER_CONFIG", "DESK_PANE"]);
+
+    expect(ok).toBe(true);
+    expect((await tmux.calls()).map((call) => call.argv)).toEqual([["set-option", "-ga", "update-environment", " AGENT_BROWSER_CONFIG DESK_PANE"]]);
+  });
+
+  it("Tmux refuses to append a name that is not an environment variable name", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["set-option"], stdout: "" }]);
+
+    expect(await new NodeTmux(tmux.path, { HOME: "/Users/alex" }).appendUpdateEnvironment(["DESK_PANE; run-shell x"])).toBe(false);
+    expect(await tmux.calls()).toEqual([]);
+  });
+
+  it("under Vitest Desk never finds the operator's own tmux, only one a test names", async () => {
+    const tmux = await fakeExecutable("tmux", []);
+
+    expect(await findTmux(null, { VITEST: "true" })).toBeNull();
+    expect(await findTmux(tmux.path, { VITEST: "true" })).toBe(tmux.path);
   });
 });

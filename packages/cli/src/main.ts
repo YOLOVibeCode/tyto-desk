@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { parseVersionInfo, versionLine, type Prompter, type VersionInfo } from "@desk/core";
 import { ConfigFileError, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
+import { agentPolicyCommand, agentsCommand } from "./agents.ts";
 import { cdpCommand } from "./cdp.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
@@ -34,6 +35,8 @@ const USAGE = [
   "       desk status                Chrome, desk watch, the terminal daemon, panes alive or exited, the agents",
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
+  "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
+  "       desk agents [pause|resume|detach]       Desk's agent sessions; pause refuses every command but close",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
 ].join("\n");
 
@@ -88,6 +91,7 @@ export async function main(input: MainInput): Promise<number> {
         platform: input.platform,
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         channel: version.info.channel,
+        env: input.env,
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
@@ -118,6 +122,36 @@ export async function main(input: MainInput): Promise<number> {
       });
       return await watchCommand({ env: input.env, platform: input.platform, deskHome, version: version.info.version, until, log: watchLog });
     }
+    if (command === "agents") {
+      const action = rest[0] ?? "list";
+      if (rest.length > 1 || (action !== "list" && action !== "pause" && action !== "resume" && action !== "detach")) return usage();
+      const result = await agentsCommand({
+        env: input.env,
+        home,
+        deskHome,
+        version: version.info.version,
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
+        action,
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "config" && rest[0] === "agent-policy") {
+      const mode = rest[1];
+      if (rest.length !== 2 || (mode !== "strict" && mode !== "open")) return usage();
+      const result = await agentPolicyCommand({
+        env: input.env,
+        home,
+        deskHome,
+        version: version.info.version,
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
+        mode,
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
     if (command === "config") {
       if (rest.length !== 1 || rest[0] !== "new-port") return usage();
       const result = await newPortCommand({ env: input.env, platform: input.platform, deskHome, version: version.info.version, appDir: input.runtimeDir });
@@ -128,7 +162,8 @@ export async function main(input: MainInput): Promise<number> {
     if (command === "cdp") {
       const flags = new Set(rest);
       if (flags.size !== rest.length || rest.some((flag) => flag !== "--raw" && flag !== "--ws")) return usage();
-      const result = await cdpCommand({ deskHome, raw: flags.has("--raw"), ws: flags.has("--ws") });
+      const result = await cdpCommand({ deskHome, home, env: input.env, raw: flags.has("--raw"), ws: flags.has("--ws") });
+      if (result.warning !== undefined) stderr.write(`desk: ${result.warning}\n`);
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);
       return result.code;

@@ -1,3 +1,4 @@
+export type { AgentSession, AgentSessions } from "./agent-sessions.ts";
 export type { AgentTabs } from "./agent-tabs.ts";
 export type { AppVersions, StageResult } from "./app-versions.ts";
 export type { BrowserConnector, BrowserSession } from "./browser-connector.ts";

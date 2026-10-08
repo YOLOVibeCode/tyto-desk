@@ -1,16 +1,13 @@
-import { access, lstat, mkdir } from "node:fs/promises";
-import { constants } from "node:fs";
+import { lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import { Daemon, PROTOCOL_MAX, PROTOCOL_MIN, planPaneShell, type InstanceLock, type LogSink, type PtySpawner } from "@desk/core";
-import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed } from "@desk/node";
+import { FileConfigStore, FileLogSink, NodeInstanceLock, NodeLoginShell, NodeTextFiles, NodeTmux, SystemClock, assertPathAllowed, findTmux } from "@desk/node";
 import { NodeLayoutStore } from "./layout-store.ts";
 import { NodeTerminalMirror } from "./terminal-mirror.ts";
 import { UnixMessageServer } from "./message-server.ts";
 
 /** Where tmux usually is, when the config names none (§7.4). */
-const TMUX_CANDIDATES = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"];
-
 /** Where the signals that end the daemon arrive: `process` in production. */
 export type DaemonSignals = { once(signal: "SIGTERM" | "SIGHUP", listener: () => void): unknown };
 
@@ -33,13 +30,6 @@ export type ServeDaemonInput = {
 
 function errorCode(err: unknown): string | undefined {
   return err instanceof Error && "code" in err && typeof err.code === "string" ? err.code : undefined;
-}
-
-async function executable(path: string): Promise<boolean> {
-  return access(path, constants.X_OK).then(
-    () => true,
-    () => false,
-  );
 }
 
 /** Whether `dir` is a directory the daemon may trust (§4.1, §7.1): not a symlink, owned by `uid`, no group or other bits. */
@@ -105,13 +95,8 @@ export async function serveDaemon(input: ServeDaemonInput): Promise<number> {
     shellFor: async (pane) => {
       const config = await store.load();
       if (config === null) throw new Error("no config.json");
-      let tmux: NodeTmux | null = null;
-      for (const candidate of config.terminal.tmux === null ? TMUX_CANDIDATES : [config.terminal.tmux]) {
-        if (await executable(candidate)) {
-          tmux = new NodeTmux(candidate, env);
-          break;
-        }
-      }
+      const binary = await findTmux(config.terminal.tmux);
+      const tmux = binary === null ? null : new NodeTmux(binary, env);
       return planPaneShell({ pane, config, deskHome, home, parent: env, version, tmux, files, loginShell: new NodeLoginShell() });
     },
     layouts: new NodeLayoutStore(deskHome),

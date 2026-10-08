@@ -7,6 +7,11 @@ export {
   cdpUrl,
   type AgentPolicy,
 } from "./agents/agent-browser.ts";
+export { detachAgents, detachEnvironment, listAgents } from "./agents/sessions.ts";
+export { restoreKeyWarning } from "./agents/restore-warning.ts";
+export { DESK_SKILL, skillAllowedTools } from "./agents/skill.ts";
+export { addTmuxLine, type TmuxLinePorts } from "./install/tmux-line.ts";
+export { pauseAgents, policyModeOf, resumeAgents, setAgentPolicy, type AgentControlPorts, type AgentControlResult } from "./agents/controls.ts";
 export { base64Decode } from "./bytes/base64.ts";
 export { sha256 } from "./bytes/sha256.ts";
 export {

@@ -20,4 +20,13 @@ export class FakeTmux implements Tmux {
     this.calls += 1;
     return this.running ? this.names : null;
   }
+
+  readonly appended: (readonly string[])[] = [];
+
+  async appendUpdateEnvironment(names: readonly string[]): Promise<boolean> {
+    if (!this.running) return false;
+    this.appended.push(names);
+    this.names = [...this.names, ...names];
+    return true;
+  }
 }
