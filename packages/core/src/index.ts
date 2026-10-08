@@ -205,3 +205,5 @@ export { parseVersionInfo, versionLine, type VersionInfo } from "./version/versi
 export { WorkerController, type WorkerPorts } from "./worker/worker-controller.ts";
 export { parseSha256Sums, update, type UpdateInput, type UpdatePorts, type UpdateResult } from "./update/update.ts";
 export { DEFAULT_BINDINGS, PANEL_ACTIONS, bindingProblem, buildKeymap, keyDecision, type PanelAction } from "./term/keymap.ts";
+export { TITLE_MAX, linkTarget, osc52Write, tabTitle } from "./term/osc.ts";
+export { setToggleKey } from "./config/toggle-key.ts";

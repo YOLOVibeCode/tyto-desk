@@ -28,11 +28,19 @@ declare namespace chrome {
   export namespace sidePanel {
     function setPanelBehavior(behavior: { openPanelOnActionClick: boolean }): Promise<void>;
     function setOptions(options: { path?: string; enabled?: boolean }): Promise<void>;
+    /** Only inside a user gesture, such as a command's. */
+    function open(options: { windowId: number }): Promise<void>;
     /** Chrome 141 and later. */
     function close(options: { windowId: number }): Promise<void>;
     /** Chrome 141 and later. */
     const onOpened: { addListener(listener: (info: { windowId: number }) => void): void } | undefined;
     const onClosed: { addListener(listener: (info: { windowId: number }) => void): void } | undefined;
+  }
+  export namespace commands {
+    const onCommand: { addListener(listener: (command: string, tab?: { windowId: number }) => void): void };
+  }
+  export namespace action {
+    function setBadgeText(details: { text: string }): Promise<void>;
   }
   export namespace windows {
     interface Window {

@@ -6,6 +6,8 @@ export class FakeSidePanelApi implements SidePanelApi {
   open: number[];
   readonly paths: string[] = [];
   readonly closes: number[] = [];
+  /** Each `openInGesture`, in order. */
+  readonly gestureOpens: number[] = [];
   private readonly opened: ((windowId: number) => void)[] = [];
   private readonly closed: ((windowId: number) => void)[] = [];
 
@@ -23,6 +25,10 @@ export class FakeSidePanelApi implements SidePanelApi {
 
   async setPath(path: string): Promise<void> {
     this.paths.push(path);
+  }
+
+  openInGesture(windowId: number): void {
+    this.gestureOpens.push(windowId);
   }
 
   async close(windowId: number): Promise<void> {

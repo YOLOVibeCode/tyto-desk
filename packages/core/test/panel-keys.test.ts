@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PanelController, type Layout, type PanelTerminal } from "../src/index.ts";
-import { FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
+import { FakeBadge, FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom, FakeTabOpener } from "../src/testing/index.ts";
 
 const P1 = "p_k2m9q3x7ab";
 const P2 = "p_m9x1d4f6hz";
@@ -17,6 +17,8 @@ function setup() {
     connector,
     view,
     layout: layoutView,
+    badge: new FakeBadge(),
+    tabs: new FakeTabOpener(),
     random: new SeqRandom([]),
     clock: new FakeClock(),
     build: "0.3.0",
@@ -85,7 +87,7 @@ describe("the panel's keys (docs/IMPLEMENTATION.md §10, slice 6b)", () => {
   it("the hello's terminal settings set every terminal's font and scrollback, the saved font size first", () => {
     const { view } = attached(one({ fontSize: 16 }));
 
-    expect(view.settings.at(-1)).toEqual({ fontFamily: "Menlo", fontSize: 16, scrollback: 5000, macOptionIsMeta: false });
+    expect(view.settings.at(-1)).toEqual({ fontFamily: "Menlo", fontSize: 16, scrollback: 5000, macOptionIsMeta: false, osc52Write: false });
   });
 
   it("font size changes are saved in layout.json", () => {

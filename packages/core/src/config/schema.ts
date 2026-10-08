@@ -146,6 +146,11 @@ const isChromeAccelerator: Check = (value) => {
   return ctrl || alt || command;
 };
 
+/** Whether Chrome accepts `key` as the toggle command's `suggested_key` (`panel.toggleKey`). */
+export function chromeAcceptsShortcut(key: string): boolean {
+  return isChromeAccelerator(key);
+}
+
 const SCHEMA: Shape<DeskConfig> = {
   version: (value) => value === 1,
   chrome: {

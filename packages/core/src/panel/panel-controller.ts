@@ -11,19 +11,23 @@ import {
   selectTab,
   setRatio,
   splitPane,
+  tabOf,
   toggleZoom,
   type ArrowDirection,
   type SplitDirection,
 } from "../layout/ops.ts";
+import type { Badge } from "../ports/badge.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
 import type { LayoutView } from "../ports/layout-view.ts";
 import type { PageVisibility } from "../ports/page-visibility.ts";
 import type { Random } from "../ports/random.ts";
+import type { TabOpener } from "../ports/tab-opener.ts";
 import type { BannerAction, KeyInput, MenuItem, TerminalPane, TerminalView } from "../ports/terminal-view.ts";
 import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type DaemonMessage, type ErrorCode, type PaneSummary, type PanelTerminal } from "../protocol/messages.ts";
 import { buildKeymap, keyDecision, type PanelAction } from "../term/keymap.ts";
+import { linkTarget, tabTitle } from "../term/osc.ts";
 import { sanitizePaste } from "../term/paste.ts";
 import { Backoff } from "../time/backoff.ts";
 
@@ -31,6 +35,8 @@ export type PanelPorts = {
   connector: HostConnector;
   view: TerminalView;
   layout: LayoutView;
+  badge: Badge;
+  tabs: TabOpener;
   random: Random;
   clock: Clock;
   /** The extension's Desk version. */
@@ -146,6 +152,12 @@ export class PanelController {
   private keymap = buildKeymap({}).keymap;
   /** The font size every terminal has now; `null` before the first configure. */
   private fontApplied: number | null = null;
+  /** Each pane's title, as its program set it (OSC 0 or 2), cleaned. */
+  private readonly titles = new Map<string, string>();
+  /** The tabs a bell marked since they were last shown (§10). */
+  private readonly marked = new Set<string>();
+  private hidden = false;
+  private badged = false;
 
   constructor(ports: PanelPorts) {
     this.ports = ports;
@@ -154,6 +166,8 @@ export class PanelController {
   start(): void {
     this.ports.visibility.onChange((state) => {
       this.post({ type: "visibility", state });
+      this.hidden = state === "hidden";
+      if (!this.hidden) this.seen();
       // A hidden owner got no output (§7.3): shown again, the panel opens its panes for fresh snapshots.
       if (state === "visible" && this.channel !== null) {
         for (const pane of this.panes.values()) if (pane.owned && !pane.exited) this.open(pane.id);
@@ -180,9 +194,8 @@ export class PanelController {
     const split = splitPane(layout, { pane: focused.id, added, direction, cols: focused.term.size().cols });
     if (split.direction !== direction) this.ports.layout.note(NARROW);
     this.ensure(added);
-    this.change(split.layout);
-    this.open(added, focused.id);
-    this.focusTerminal(added);
+    this.change(split.layout, () => this.open(added, focused.id));
+    this.focusPaneTerminal(added);
   }
 
   /** A new tab after the active one, its pane in the focused pane's directory. */
@@ -197,9 +210,8 @@ export class PanelController {
     const pane = this.ports.random.id("p");
     const tab = this.ports.random.id("t");
     this.ensure(pane);
-    this.change(addTab(layout, { tab, pane }));
-    this.open(pane, from);
-    this.focusTerminal(pane);
+    this.change(addTab(layout, { tab, pane }), () => this.open(pane, from));
+    this.focusPaneTerminal(pane);
   }
 
   /** Closes the focused pane (its shell ends); the last pane of the last tab leaves a fresh one. */
@@ -216,12 +228,43 @@ export class PanelController {
     this.moveFocus(-1);
   }
 
-  /** Terminal tab `n` (1–9); past the last tab, the last. */
+  /** The worker asks this panel to take the keyboard (the toggle on a shown panel, §10). */
+  focusTerminal(): void {
+    this.focusedPane()?.term.focus();
+  }
+
+  /** Terminal tab `n` (1–9); past the last tab, the last. Showing a tab clears its bell mark. */
   selectTab(n: number): void {
     if (this.layout === null) return;
-    this.change(selectTab(this.layout, n));
+    const next = selectTab(this.layout, n);
+    const unmarked = next.activeTab !== null && this.marked.delete(next.activeTab);
+    if (next !== this.layout) this.change(next);
+    else if (unmarked) this.show();
     const focus = this.focusedPane();
     if (focus !== null) focus.term.focus();
+  }
+
+  /** The panel is seen again: the badge goes, and so does the shown tab's mark. */
+  private seen(): void {
+    if (this.badged) {
+      this.badged = false;
+      this.ports.badge.set(null);
+    }
+    const active = this.layout === null ? undefined : activeTab(this.layout);
+    if (active !== undefined && this.marked.delete(active.id)) this.show();
+  }
+
+  /** A bell (or OSC 9 or 777): it marks its tab unless the tab is shown in a visible panel; hidden, it sets the badge. */
+  private bell(pane: PaneState): void {
+    const tab = this.layout === null ? undefined : tabOf(this.layout, pane.id);
+    if (tab === undefined) return;
+    if (this.hidden && !this.badged) {
+      this.badged = true;
+      this.ports.badge.set("•");
+    }
+    if (!this.hidden && tab.id === this.layout?.activeTab) return;
+    this.marked.add(tab.id);
+    this.show();
   }
 
   zoom(): void {
@@ -337,8 +380,8 @@ export class PanelController {
     const size = this.fontOf(this.layout);
     if (!force && size === this.fontApplied) return;
     this.fontApplied = size;
-    const { fontFamily, scrollback, macOptionIsMeta } = this.settings;
-    this.ports.view.configure({ fontFamily, fontSize: size, scrollback, macOptionIsMeta });
+    const { fontFamily, scrollback, macOptionIsMeta, osc52Write } = this.settings;
+    this.ports.view.configure({ fontFamily, fontSize: size, scrollback, macOptionIsMeta, osc52Write });
   }
 
   // ---- The layout ----
@@ -355,16 +398,21 @@ export class PanelController {
     this.focusedPane()?.term.focus();
   }
 
-  private focusTerminal(paneId: string): void {
+  private focusPaneTerminal(paneId: string): void {
     this.panes.get(paneId)?.term.focus();
   }
 
-  /** A change this panel made: shown, and sent to the daemon, which writes and broadcasts it. */
-  private change(next: Layout): void {
+  /**
+   * A change this panel made: shown, and sent to the daemon, which writes and broadcasts it. `opening` opens the panes
+   * the change adds after it is shown (their terminals laid out) and before it is sent: the daemon accepts a layout only
+   * when it knows every pane it names.
+   */
+  private change(next: Layout, opening?: () => void): void {
     if (next === this.layout) return;
     this.layout = next;
     this.applyFont();
     this.show();
+    opening?.();
     this.puts += 1;
     const text = JSON.stringify(next);
     this.sent.push(text);
@@ -376,8 +424,12 @@ export class PanelController {
     const layout = this.layout;
     if (layout === null) return;
     const tab = activeTab(layout);
+    for (const id of this.marked) if (!layout.tabs.some((t) => t.id === id)) this.marked.delete(id);
     this.ports.layout.show({
-      tabs: layout.tabs.map((t, index) => ({ id: t.id, title: `Terminal ${index + 1}`, marked: false })),
+      tabs: layout.tabs.map((t, index) => {
+        const named = t.focus === null ? undefined : this.titles.get(t.focus);
+        return { id: t.id, title: named ?? `Terminal ${index + 1}`, marked: this.marked.has(t.id) };
+      }),
       active: tab?.id ?? null,
       root: tab?.root ?? null,
       zoomed: tab?.zoomed ?? null,
@@ -409,6 +461,7 @@ export class PanelController {
       if (held.has(id)) continue;
       pane.term.dispose();
       this.panes.delete(id);
+      this.titles.delete(id);
     }
     for (const id of held) this.ensure(id);
     this.show();
@@ -426,21 +479,25 @@ export class PanelController {
     }
     // The terminals take their settings before any of them is made.
     this.fontApplied = this.fontOf(layout);
-    const { fontFamily, scrollback, macOptionIsMeta } = this.settings;
-    this.ports.view.configure({ fontFamily, fontSize: this.fontApplied, scrollback, macOptionIsMeta });
+    const { fontFamily, scrollback, macOptionIsMeta, osc52Write } = this.settings;
+    this.ports.view.configure({ fontFamily, fontSize: this.fontApplied, scrollback, macOptionIsMeta, osc52Write });
     const held = new Set(layoutPanes(layout));
     for (const [id, pane] of this.panes) {
       if (held.has(id)) continue;
       pane.term.dispose();
       this.panes.delete(id);
+      this.titles.delete(id);
     }
     for (const id of held) this.ensure(id);
-    if (changed) this.change(layout);
+    const openAll = () => {
+      for (const id of held) this.open(id);
+    };
+    if (changed) this.change(layout, openAll);
     else {
       this.layout = layout;
       this.show();
+      openAll();
     }
-    for (const id of held) this.open(id);
     const focus = this.focusedPane();
     if (focus !== null && this.ports.focusOnLoad && !this.focusedOnce) {
       this.focusedOnce = true;
@@ -456,14 +513,14 @@ export class PanelController {
     const pane = this.panes.get(paneId);
     pane?.term.dispose();
     this.panes.delete(paneId);
+    this.titles.delete(paneId);
     const closed = closePane(layout, paneId);
     if (closed.emptied) {
       // The last pane of the last tab: a fresh pane in a tab of its own, in the home directory.
       const fresh = this.ports.random.id("p");
       this.ensure(fresh);
-      this.change(addTab(closed.layout, { pane: fresh, tab: this.ports.random.id("t") }));
-      this.open(fresh);
-      this.focusTerminal(fresh);
+      this.change(addTab(closed.layout, { pane: fresh, tab: this.ports.random.id("t") }), () => this.open(fresh));
+      this.focusPaneTerminal(fresh);
       return;
     }
     this.change(closed.layout);
@@ -703,6 +760,20 @@ export class PanelController {
       this.change(focusPane(this.layout, paneId));
     });
     term.onKey((input) => this.panes.get(paneId) === pane && this.key(pane, input));
+    term.onTitle((raw) => {
+      if (this.panes.get(paneId) !== pane) return;
+      const title = tabTitle(raw);
+      if (title === null) this.titles.delete(paneId);
+      else this.titles.set(paneId, title);
+      this.show();
+    });
+    term.onBell(() => {
+      if (this.panes.get(paneId) === pane) this.bell(pane);
+    });
+    term.onLink((uri, click) => {
+      const url = linkTarget(uri, click);
+      if (url !== null) this.ports.tabs.open(url);
+    });
     term.onMenu((item) => {
       if (this.panes.get(paneId) === pane) this.menu(pane, item);
     });

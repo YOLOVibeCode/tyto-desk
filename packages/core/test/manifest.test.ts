@@ -56,7 +56,7 @@ describe("the Desk extension's manifest", () => {
   it.each([
     ["darwin", "Command+Shift+Comma", { mac: "Command+Shift+Comma", default: "Ctrl+Shift+Period" }],
     ["linux", "Ctrl+Shift+Comma", { mac: "Command+Shift+Period", default: "Ctrl+Shift+Comma" }],
-  ])("on %s the rendered manifest suggests the configured toggle key %s", (platform, toggleKey, suggested) => {
+  ])("the toggle key from config is written into the manifest's suggested_key (on %s, %s)", (platform, toggleKey, suggested) => {
     const rendered = renderManifest({ template: template(), deskVersion: "0.3.0", serial: 1, toggleKey, platform });
 
     expect(rendered.ok && rendered.manifest.commands).toEqual({

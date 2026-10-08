@@ -1,6 +1,10 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
-import { Terminal } from "@xterm/xterm";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Terminal, type ITheme } from "@xterm/xterm";
+import { osc52Write } from "@desk/core";
 import type {
   BannerAction,
   KeyInput,
@@ -14,6 +18,11 @@ import type {
   TerminalSize,
   TerminalView,
 } from "@desk/core";
+
+/** The terminal's colors in light and dark mode (§10: the theme follows `prefers-color-scheme`). */
+const LIGHT: ITheme = { background: "#ffffff", foreground: "#1d1d1f", cursor: "#1d1d1f", selectionBackground: "#b4d5fe" };
+const DARK: ITheme = { background: "#111111", foreground: "#e5e5e5", cursor: "#e5e5e5", selectionBackground: "#3f638b" };
+const DARK_MODE = "(prefers-color-scheme: dark)";
 
 /** One pane's xterm and what the view keeps for it. */
 type Held = { term: Terminal; fit: FitAddon; search: SearchAddon; element: HTMLElement; laidOut(): boolean };
@@ -102,6 +111,11 @@ export class XtermView implements TerminalView, LayoutView {
         this.closeFind();
       }
     });
+    // The theme follows light and dark mode as they change.
+    const dark = window.matchMedia(DARK_MODE);
+    dark.addEventListener("change", () => {
+      for (const { term } of this.held.values()) term.options.theme = dark.matches ? DARK : LIGHT;
+    });
     document.addEventListener("pointerdown", (event) => {
       if (this.menuElement !== null && !(event.target instanceof Node && this.menuElement.contains(event.target))) this.closeMenu();
     });
@@ -130,6 +144,7 @@ export class XtermView implements TerminalView, LayoutView {
   }
 
   create(paneId: string): TerminalPane {
+    const linkListeners: ((uri: string, click: { meta: boolean }) => void)[] = [];
     const element = document.createElement("div");
     element.className = "pane";
     this.parking.append(element);
@@ -142,12 +157,37 @@ export class XtermView implements TerminalView, LayoutView {
       macOptionIsMeta: this.settings.macOptionIsMeta,
       macOptionClickForcesSelection: true,
       cursorBlink: true,
+      allowProposedApi: true,
+      theme: window.matchMedia(DARK_MODE).matches ? DARK : LIGHT,
+      // OSC 8 links (§10): opened only through the panel's rule; hover shows the real URL.
+      linkHandler: {
+        activate: (event, uri) => {
+          for (const listener of linkListeners) listener(uri, { meta: event.metaKey });
+        },
+        hover: (_event, uri) => this.note(uri),
+      },
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     const search = new SearchAddon();
     term.loadAddon(search);
+    term.loadAddon(new Unicode11Addon());
+    term.unicode.activeVersion = "11";
+    // Plain-text URLs, under the same rule as OSC 8 links.
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        for (const listener of linkListeners) listener(uri, { meta: event.metaKey });
+      }),
+    );
     term.open(element);
+    // WebGL when the page has it, else xterm's DOM renderer; a lost context falls back too.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      // No WebGL2 here (the test VM has none): the DOM renderer stays.
+    }
     // Fit only a laid-out element: before the side panel lays the page out, fit measures nothing and gives 2×1, and a
     // pane opened at that size reflows its mirror and makes zsh redraw a prompt it believes is six lines tall (D106).
     const laidOut = () => element.clientWidth > 0 && element.clientHeight > 0;
@@ -162,6 +202,30 @@ export class XtermView implements TerminalView, LayoutView {
     const focusListeners: (() => void)[] = [];
     const keyListeners: ((input: KeyInput) => boolean)[] = [];
     const menuListeners: ((item: MenuItem) => void)[] = [];
+    const titleListeners: ((title: string) => void)[] = [];
+    const bellListeners: (() => void)[] = [];
+    term.onTitleChange((title) => {
+      for (const listener of titleListeners) listener(title);
+    });
+    const ring = () => {
+      for (const listener of bellListeners) listener();
+    };
+    term.onBell(ring);
+    // OSC 9 and OSC 777 notifications mark the tab as a bell does (§10); their text is not shown.
+    term.parser.registerOscHandler(9, () => {
+      ring();
+      return true;
+    });
+    term.parser.registerOscHandler(777, () => {
+      ring();
+      return true;
+    });
+    // Desk's own OSC 52 (§10): a read is never answered, and a write needs terminal.osc52Write.
+    term.parser.registerOscHandler(52, (data) => {
+      const text = osc52Write(data, this.settings.osc52Write);
+      if (text !== null) void navigator.clipboard.writeText(text).catch(() => undefined);
+      return true;
+    });
     // Keys go to the panel first (§10): one it takes never reaches xterm, and nothing else is prevented.
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
@@ -234,6 +298,15 @@ export class XtermView implements TerminalView, LayoutView {
       },
       onMenu: (listener) => {
         menuListeners.push(listener);
+      },
+      onTitle: (listener) => {
+        titleListeners.push(listener);
+      },
+      onBell: (listener) => {
+        bellListeners.push(listener);
+      },
+      onLink: (listener) => {
+        linkListeners.push(listener);
       },
       find: (command) => {
         if (command === "open" || this.findInput.value === "" || this.finding !== paneId) this.openFind(paneId);

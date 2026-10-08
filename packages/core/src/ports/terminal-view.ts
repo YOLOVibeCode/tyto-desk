@@ -8,7 +8,7 @@ export type KeyInput = { code: string; meta: boolean; ctrl: boolean; alt: boolea
 export type MenuItem = "split-right" | "split-down" | "clear";
 
 /** The settings every terminal takes (§10's xterm options from `config.json`, the font size from `layout.json`). */
-export type TerminalSettings = { fontFamily: string; fontSize: number; scrollback: number; macOptionIsMeta: boolean };
+export type TerminalSettings = { fontFamily: string; fontSize: number; scrollback: number; macOptionIsMeta: boolean; osc52Write: boolean };
 
 /** One pane's terminal on the panel's page. */
 export type TerminalPane = {
@@ -29,6 +29,12 @@ export type TerminalPane = {
   onFocus(listener: () => void): void;
   /** Each keydown before the terminal sees it; a listener that returns true took it (the terminal never sees it). */
   onKey(listener: (input: KeyInput) => boolean): void;
+  /** A title the program set (OSC 0 or 2), raw: the panel cleans it. */
+  onTitle(listener: (title: string) => void): void;
+  /** A bell, or an OSC 9 or OSC 777 notification (§10). */
+  onBell(listener: () => void): void;
+  /** A link the user clicked (OSC 8, or plain text that looks like a URL), and whether Cmd was held. */
+  onLink(listener: (uri: string, click: { meta: boolean }) => void): void;
   /** An item the user picked from the pane's context menu. */
   onMenu(listener: (item: MenuItem) => void): void;
   /** The find bar on this pane: open it, or find the next or previous match of what it holds. */

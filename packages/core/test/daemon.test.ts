@@ -632,6 +632,28 @@ describe("the terminal daemon's protocol and lifecycle (slice 2a)", () => {
     expect(JSON.stringify(answer)).toContain(PANE);
   });
 
+  it("an alert raised while a panel is still connecting reaches it when it says hello", async () => {
+    const { client, clock } = setup();
+    const watch = await client("watch");
+    watch.send({ type: "alert", kind: "terminal-attached" });
+    await clock.advance(5_000);
+
+    const late = await client("panel", { window: 7 });
+
+    expect(late.sent).toContainEqual({ type: "alert", kind: "terminal-attached" });
+  });
+
+  it("an alert older than 30 s is not replayed to a panel that says hello later", async () => {
+    const { client, clock } = setup();
+    const watch = await client("watch");
+    watch.send({ type: "alert", kind: "terminal-attached" });
+    await clock.advance(31_000);
+
+    const late = await client("panel", { window: 7 });
+
+    expect(late.sent.filter((m) => m.type === "alert")).toEqual([]);
+  });
+
   it("alerts from desk watch and the agents' state from desk reach every panel, and list reports them", async () => {
     const { client } = setup();
     const panel = await client("panel", { window: 7 });

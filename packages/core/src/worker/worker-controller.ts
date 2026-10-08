@@ -4,8 +4,10 @@ import type { ExtensionWindows } from "../ports/extension-windows.ts";
 import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
 import type { PanelQuestions } from "../ports/panel-questions.ts";
+import type { PanelFocusLink } from "../ports/panel-focus-link.ts";
 import type { SidePanelApi } from "../ports/side-panel-api.ts";
 import type { TabTargets } from "../ports/tab-targets.ts";
+import type { ToggleCommand } from "../ports/toggle-command.ts";
 import { PROTOCOL_MAX, PROTOCOL_MIN, parseDaemonMessage, type ExtCall } from "../protocol/messages.ts";
 import { Backoff } from "../time/backoff.ts";
 
@@ -17,6 +19,8 @@ export type WorkerPorts = {
   agentTabs: AgentTabs;
   clock: Clock;
   questions: PanelQuestions;
+  toggle: ToggleCommand;
+  panelFocus: PanelFocusLink;
   /** The extension's Desk version. */
   build: string;
 };
@@ -49,6 +53,8 @@ function windowArg(args: unknown): number | null {
 export class WorkerController {
   private readonly ports: WorkerPorts;
   private readonly panels = new Set<number>();
+  /** The windows whose panel has the keyboard, as their panels report. */
+  private readonly focused = new Set<number>();
   private readonly backoff = new Backoff(100, 5_000);
   private channel: HostChannel | null = null;
   /** Bumps with each automatic open, so only the latest one's timer puts the plain path back. */
@@ -62,6 +68,12 @@ export class WorkerController {
   }
 
   async start(): Promise<void> {
+    // Before any await: a worker Chrome woke for the shortcut gets the event only if its listener exists by then.
+    this.ports.toggle.onToggle((windowId) => this.toggle(windowId));
+    this.ports.panelFocus.onReport((windowId, focused) => {
+      if (focused) this.focused.add(windowId);
+      else this.focused.delete(windowId);
+    });
     // A panel asks as it loads whether it may take the keyboard: not the one an automatic open is waiting for.
     this.ports.questions.onFocusAsked(() => {
       if (!this.autoPending) return true;
@@ -74,10 +86,30 @@ export class WorkerController {
       this.panels.add(id);
       if (this.autoPath) void this.plainPath();
     });
-    this.ports.sidePanel.onClosed((id) => this.panels.delete(id));
+    this.ports.sidePanel.onClosed((id) => {
+      this.panels.delete(id);
+      this.focused.delete(id);
+    });
     await this.ports.sidePanel.openOnActionClick();
     for (const id of await this.ports.sidePanel.openWindows()) this.panels.add(id);
     this.connect();
+  }
+
+  /**
+   * The toggle shortcut (§10): a hidden panel opens (and takes the keyboard as it loads), a shown one takes the keyboard,
+   * a focused one hides. `sidePanel.open` needs the shortcut's gesture, so it comes first, before any await.
+   */
+  private toggle(windowId: number): void {
+    if (!this.panels.has(windowId)) {
+      this.ports.sidePanel.openInGesture(windowId);
+      return;
+    }
+    if (this.focused.has(windowId)) {
+      void this.ports.sidePanel.close(windowId);
+      return;
+    }
+    this.ports.sidePanel.openInGesture(windowId);
+    this.ports.panelFocus.focus(windowId);
   }
 
   private connect(): void {

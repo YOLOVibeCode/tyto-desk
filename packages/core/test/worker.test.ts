@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WorkerController } from "../src/index.ts";
-import { FakeAgentTabs, FakeClock, FakeExtensionWindows, FakeHostConnector, FakePanelQuestions, FakeSidePanelApi, FakeTabTargets } from "../src/testing/index.ts";
+import { FakeAgentTabs, FakeClock, FakeExtensionWindows, FakeHostConnector, FakePanelFocusLink, FakePanelQuestions, FakeSidePanelApi, FakeTabTargets, FakeToggleCommand } from "../src/testing/index.ts";
 
 function setup(options: { open?: number[] } = {}) {
   const connector = new FakeHostConnector();
@@ -14,8 +14,10 @@ function setup(options: { open?: number[] } = {}) {
   const agentTabs = new FakeAgentTabs();
   agentTabs.onCreate = (tabId) => tabs.targets.set(tabId, `TAB-${tabId}`);
   const questions = new FakePanelQuestions();
-  const worker = new WorkerController({ connector, sidePanel, windows, tabs, agentTabs, clock, questions, build: "0.3.0" });
-  return { connector, sidePanel, windows, tabs, agentTabs, clock, questions, worker };
+  const toggle = new FakeToggleCommand();
+  const panelFocus = new FakePanelFocusLink();
+  const worker = new WorkerController({ connector, sidePanel, windows, tabs, agentTabs, clock, questions, toggle, panelFocus, build: "0.3.0" });
+  return { connector, sidePanel, windows, tabs, agentTabs, clock, questions, toggle, panelFocus, worker };
 }
 
 /** Lets the worker's pending promises run. */
@@ -24,6 +26,46 @@ async function settle(): Promise<void> {
 }
 
 const hello = { type: "hello", v: 1, build: "0.3.0", panes: [], notices: [] };
+
+describe("the toggle shortcut (docs/IMPLEMENTATION.md §10)", () => {
+  it.each([
+    ["opens and focuses a hidden panel", [] as number[], false, { opens: [7], closes: [], focus: [] }],
+    ["focuses a shown one", [7], false, { opens: [7], closes: [], focus: [7] }],
+    ["hides a focused one", [7], true, { opens: [], closes: [7], focus: [] }],
+  ])("the toggle %s", async (_, open, focused, expected) => {
+    const { sidePanel, toggle, panelFocus, worker } = setup({ open });
+    await worker.start();
+    if (focused) panelFocus.report(7, true);
+
+    toggle.press(7);
+    await settle();
+
+    expect({ opens: sidePanel.gestureOpens, closes: sidePanel.closes, focus: panelFocus.focused }).toEqual(expected);
+  });
+
+  it("the toggle calls sidePanel.open before any await", () => {
+    const { sidePanel, toggle, worker } = setup();
+
+    void worker.start();
+    toggle.press(7);
+
+    expect(sidePanel.gestureOpens).toEqual([7]);
+  });
+
+  it("a panel that closes is no longer counted as focused", async () => {
+    const { sidePanel, toggle, panelFocus, worker } = setup({ open: [7] });
+    await worker.start();
+    panelFocus.report(7, true);
+    sidePanel.hide(7);
+    sidePanel.show(7);
+
+    toggle.press(7);
+    await settle();
+
+    expect(sidePanel.closes).toEqual([]);
+    expect(sidePanel.gestureOpens).toEqual([7]);
+  });
+});
 
 describe("the service worker", () => {
   it("the worker makes the toolbar action open the panel", async () => {

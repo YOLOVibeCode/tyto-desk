@@ -6,6 +6,11 @@ export interface SidePanelApi {
   openWindows(): Promise<readonly number[]>;
   /** The page Chrome opens as the panel from now on (`setOptions({path})`). */
   setPath(path: string): Promise<void>;
+  /**
+   * Opens (or shows) the window's panel (`sidePanel.open`). Chrome allows it only inside a user gesture, so callers make
+   * it their first call, before any await; it returns nothing to wait for.
+   */
+  openInGesture(windowId: number): void;
   /** Closes the window's panel (`sidePanel.close`, which needs no gesture). */
   close(windowId: number): Promise<void>;
   onOpened(listener: (windowId: number) => void): void;

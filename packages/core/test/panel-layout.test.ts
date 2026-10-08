@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PanelController, type Layout } from "../src/index.ts";
-import { FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
+import { FakeBadge, FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom, FakeTabOpener } from "../src/testing/index.ts";
 
 const P1 = "p_k2m9q3x7ab";
 const P2 = "p_m9x1d4f6hz";
@@ -16,6 +16,8 @@ function setup(options: { cols?: number; closeOnExit?: boolean } = {}) {
     connector,
     view,
     layout: layoutView,
+    badge: new FakeBadge(),
+    tabs: new FakeTabOpener(),
     random: new SeqRandom([]),
     clock: new FakeClock(),
     build: "0.3.0",
@@ -64,6 +66,25 @@ describe("the panel's tabs and splits (docs/IMPLEMENTATION.md §10, slice 6)", (
     expect(lastPut(connector)?.tabs[0]).toEqual(tab(T1, added.pane, { split: "row", ratio: 0.5, a: { pane: P1 }, b: { pane: added.pane } }));
     expect(view.of(added.pane).focuses).toBe(1);
     expect(layoutView.last().focus).toBe(added.pane);
+  });
+
+  it.each([
+    ["a fresh panel's first pane", (panel: PanelController) => void panel],
+    ["a split", (panel: PanelController) => panel.split("right")],
+    ["a new tab", (panel: PanelController) => panel.newTab()],
+  ])("%s is opened before the layout that holds it is saved, so the daemon knows it at layout.put", (_, act) => {
+    const { connector, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello([], { version: 1, activeTab: null, ui: {}, tabs: [] }));
+    act(panel);
+
+    const sent = connector.last().posted.map((m) => m as { type: string; pane?: string; layout?: Layout });
+    for (const [index, message] of sent.entries()) {
+      if (message.type !== "layout.put") continue;
+      const named = JSON.stringify(message.layout).match(/p_\w{10}/g) ?? [];
+      const opened = new Set(sent.slice(0, index).filter((m) => m.type === "open").map((m) => m.pane));
+      expect(named.filter((pane) => !opened.has(pane))).toEqual([]);
+    }
   });
 
   it("split right in a panel too narrow for two 80-column panes splits down and says so", () => {
