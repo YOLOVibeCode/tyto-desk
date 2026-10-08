@@ -4,27 +4,33 @@
  * build copies a Node binary only when its sha256 is the pinned one, and the stamp records the pinned version. It lives
  * under scripts/delivery/, an owner-merge path, with the stamp that reads it (D61).
  */
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** @typedef {{ archive: string; archiveSha256: string; binarySha256: string }} NodePin */
 /** @typedef {{ version: string; source: string; platforms: Record<string, NodePin> }} NodeRuntime */
 
 const HEX64 = /^[0-9a-f]{64}$/;
-/** An exact version: no range, no leading zero. */
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+/** An exact version: no range, no leading zero, at most four digits a part. */
+const VERSION = /^(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})$/;
+/** How much of one name from the file a refusal shows. */
+const NAME_SHOWN = 64;
 /** The platforms Desk Terminal ships for (darwin-arm64) and the test container runs (linux-arm64): exactly these. */
 const PLATFORMS = ["darwin-arm64", "linux-arm64"];
 const PIN_KEYS = ["version", "source", "platforms"];
 const ENTRY_KEYS = ["archive", "archiveSha256", "binarySha256"];
 
 /**
- * A name from the file, as it may appear in a refusal: JSON-quoted, and every character outside printable ASCII as a
- * `\uXXXX` escape, so no newline, Unicode line separator, C1 control or bidi override in it reaches a log or terminal
- * (the reviews of PR #29).
+ * A name from the file, as it may appear in a refusal: its first 64 UTF-16 units (then `...`), JSON-quoted, and every
+ * character outside printable ASCII as a `\uXXXX` escape, so no newline, Unicode line separator, C1 control or bidi
+ * override in it reaches a log or terminal (the reviews of PRs #29 and #30).
  * @param {string} name
  */
-const quoted = (name) => JSON.stringify(name).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+const quoted = (name) =>
+  JSON.stringify(name.length > NAME_SHOWN ? `${name.slice(0, NAME_SHOWN)}...` : name).replace(
+    /[^\x20-\x7e]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 
 /** At most three names from the file, quoted, then how many more: a refusal stays short whatever the file holds. */
 const named = (/** @type {string[]} */ names) => `${names.slice(0, 3).map(quoted).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""}`;
@@ -93,10 +99,15 @@ export function parseNodeRuntime(json) {
  * @returns {Promise<NodeRuntime>}
  */
 export async function readNodeRuntime(root) {
+  const path = join(root, "scripts", "delivery", "node-runtime.json");
+  // A regular file only: a symbolic link's diff shows its target, never what is read.
+  const stat = await lstat(path).catch(() => null);
+  if (stat === null) throw new Error("scripts/delivery/node-runtime.json cannot be read");
+  if (!stat.isFile()) throw new Error("scripts/delivery/node-runtime.json is not a regular file");
   /** @type {string} */
   let text;
   try {
-    text = await readFile(join(root, "scripts", "delivery", "node-runtime.json"), "utf8");
+    text = await readFile(path, "utf8");
   } catch {
     throw new Error("scripts/delivery/node-runtime.json cannot be read");
   }
@@ -107,10 +118,17 @@ export async function readNodeRuntime(root) {
   } catch {
     throw new Error("node-runtime.json is not JSON");
   }
-  // One form only: a duplicate key (whose last value wins), a byte-order mark or other spacing would let a diff show one
-  // value while another is read (the reviews of PR #29).
-  if (`${JSON.stringify(json, null, 2)}\n` !== text) {
-    throw new Error("node-runtime.json is not in its canonical form (2-space JSON, one trailing newline, no duplicate keys)");
+  // One form only: a duplicate key (whose last value wins), an escaped key or other spacing would let a diff show one
+  // value while another is read (the reviews of PR #29). A value too deep to write back is not canonical either.
+  /** @type {string | null} */
+  let canonical;
+  try {
+    canonical = `${JSON.stringify(json, null, 2)}\n`;
+  } catch {
+    canonical = null;
+  }
+  if (canonical !== text) {
+    throw new Error("node-runtime.json is not in its canonical form (2-space JSON, LF line endings, one trailing newline, no duplicate or escaped keys)");
   }
   return parseNodeRuntime(json);
 }

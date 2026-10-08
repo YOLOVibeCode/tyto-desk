@@ -1,0 +1,2 @@
+# The Node pin must be byte-exact in its canonical form (docs/IMPLEMENTATION.md §23.6): LF even under core.autocrlf.
+scripts/delivery/node-runtime.json text eol=lf

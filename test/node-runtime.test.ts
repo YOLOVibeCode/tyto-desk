@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +61,7 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     ["a pre-release version", (pin) => (pin.version = "26.10.0-rc.1"), /exact Node version/],
     ["a version with a leading v", (pin) => (pin.version = "v26.10.0"), /exact Node version/],
     ["a version with a trailing newline", (pin) => (pin.version = "26.10.0\n"), /exact Node version/],
+    ["a version part of more than four digits", (pin) => (pin.version = "26.10000.0"), /exact Node version/],
     ["a version that is not a string", (pin) => (pin.version = ["26.10.0"]), /exact Node version/],
     ["a source in another of nodejs.org's directories", (pin) => (pin.source = "https://nodejs.org/dist/v26.9.0/"), /source is not https:\/\/nodejs\.org\/dist\/v26\.10\.0\//],
     ["a key that differs from a known one only in case", (pin) => (pin.Version = "26.10.0"), /unknown key "Version"/],
@@ -111,34 +112,52 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     expect(() => parseNodeRuntime(pin)).toThrow('"x\\n::error title=pin::injected"');
   });
 
-  it.each([
-    ["a line separator", "\u2028"],
-    ["a next-line control", "\u0085"],
-    ["a C1 control sequence introducer", "\u009b"],
-    ["a right-to-left override", "\u202e"],
-    ["a delete", "\u007f"],
-  ])("a refusal shows %s from the file as an escape, so no terminal or log viewer acts on it", async (_, character) => {
-    const pin = await pinWith((p) => (p[`a${character}::error::x`] = 1));
+  /** The three places a name from the file reaches a refusal: a top-level key, a platform, an entry's key. */
+  const SITES: [string, (p: Record<string, unknown> & { platforms: Record<string, Record<string, unknown>> }, name: string) => void][] = [
+    ["a top-level key", (p, name) => (p[name] = 1)],
+    ["a platform", (p, name) => (p.platforms[name] = { ...p.platforms["darwin-arm64"] })],
+    ["an entry's key", (p, name) => ((p.platforms["darwin-arm64"] ?? {})[name] = 1)],
+  ];
+  const escaped = (text: string) => text.replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
-    expect(() => parseNodeRuntime(pin)).toThrow(`"a\\u${character.codePointAt(0)?.toString(16).padStart(4, "0")}::error::x"`);
-    expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/^[\x20-\x7e]+$/) }));
-  });
+  describe.each(SITES)("a name from the file as %s", (_, put) => {
+    it.each([
+      ["a line separator", "a\u2028::error::x"],
+      ["a next-line control", "a\u0085::error::x"],
+      ["a C1 control sequence introducer", "a\u009b2J"],
+      ["a right-to-left override", "a\u202e::error::x"],
+      ["a delete", "a\u007f::error::x"],
+      ["two of them", "a\u2028\u2028::error::x"],
+      ["an astral character", "a\u{1f600}b"],
+    ])("a refusal shows %s from the file as escapes, so no terminal or log viewer acts on it", async (_, name) => {
+      const pin = await pinWith((p) => put(p, name));
 
-  it("a refusal names two unknown platforms both", async () => {
-    const pin = await pinWith((p) => {
-      p.platforms["darwin-x64"] = {};
-      p.platforms["win32-x64"] = {};
+      expect(() => parseNodeRuntime(pin)).toThrow(`"${escaped(name)}"`);
+      expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/^[\x20-\x7e]+$/) }));
     });
 
-    expect(() => parseNodeRuntime(pin)).toThrow('"darwin-x64", "win32-x64"');
-  });
+    it("a refusal names three names all, with no count", async () => {
+      const pin = await pinWith((p) => {
+        for (const name of ["k1", "k2", "k3"]) put(p, name);
+      });
 
-  it("a refusal names at most three unknown names, then how many more there are", async () => {
-    const pin = await pinWith((p) => {
-      for (const key of ["a", "b", "c", "d", "e"]) p[key] = 1;
+      expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/"k1", "k2", "k3"$/) }));
     });
 
-    expect(() => parseNodeRuntime(pin)).toThrow('unknown key "a", "b", "c" and 2 more');
+    it("a refusal names at most three names, then how many more there are", async () => {
+      const pin = await pinWith((p) => {
+        for (const name of ["k1", "k2", "k3", "k4", "k5"]) put(p, name);
+      });
+
+      expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/"k1", "k2", "k3" and 2 more$/) }));
+    });
+
+    it("a refusal cuts a long name to its first 64 characters, so it stays short whatever the file holds", async () => {
+      const pin = await pinWith((p) => put(p, "\u2028".repeat(100_000)));
+
+      expect(() => parseNodeRuntime(pin)).toThrow(`"${"\\u2028".repeat(64)}..."`);
+      expect(() => parseNodeRuntime(pin)).toThrow(expect.objectContaining({ message: expect.stringMatching(/^.{1,600}$/) }));
+    });
   });
 
   it("the pin reads only its own fields, never ones it inherits", async () => {
@@ -152,17 +171,38 @@ describe("the Node pin refuses what it cannot trust (the security reviews of PR 
     expect(() => parseNodeRuntime(inheritedEntry)).toThrow(/darwin-arm64 archive/);
   });
 
-  it.each([
-    ["a duplicate key, whose last value would win", (text: string) => text.replace('"binarySha256": "', '"binarySha256": "' + "f".repeat(64) + '",\n      "binarySha256": "')],
-    ["compact JSON", (text: string) => `${JSON.stringify(JSON.parse(text))}\n`],
-    ["a byte-order mark", (text: string) => `\ufeff${text}`],
-    ["no trailing newline", (text: string) => text.trimEnd()],
-  ])("readNodeRuntime refuses a pin file that is not in its canonical form: %s", async (_, change) => {
+  /** A checkout whose pin file is the repo's, changed by `change`. */
+  async function pinFile(change: (text: string) => string): Promise<string> {
     const root = await mkdtemp(join(tmpdir(), "pin-"));
     await mkdir(join(root, "scripts", "delivery"), { recursive: true });
     await writeFile(join(root, "scripts", "delivery", "node-runtime.json"), change(await readFile(`${repo}scripts/delivery/node-runtime.json`, "utf8")));
+    return root;
+  }
 
-    await expect(readNodeRuntime(root)).rejects.toThrow(/canonical form|is not JSON/);
+  it.each([
+    ["a duplicate key, whose last value would win", (text: string) => text.replace('"binarySha256": "', '"binarySha256": "' + "f".repeat(64) + '",\n      "binarySha256": "')],
+    ["compact JSON", (text: string) => `${JSON.stringify(JSON.parse(text))}\n`],
+    ["no trailing newline", (text: string) => text.trimEnd()],
+    ["CRLF line endings", (text: string) => text.replace(/\n/g, "\r\n")],
+    ["an escaped key", (text: string) => text.replace('"version"', '"\\u0076ersion"')],
+    ["a value nested too deep to write back", (text: string) => text.replace('"version"', `"deep": ${"[".repeat(100_000)}${"]".repeat(100_000)},\n  "version"`)],
+  ])("readNodeRuntime refuses a pin file that is not in its canonical form: %s", async (_, change) => {
+    await expect(readNodeRuntime(await pinFile(change))).rejects.toThrow(
+      /^node-runtime\.json is not in its canonical form \(2-space JSON, LF line endings, one trailing newline, no duplicate or escaped keys\)$/,
+    );
+  });
+
+  it("readNodeRuntime refuses a pin file with a byte-order mark as not JSON", async () => {
+    await expect(readNodeRuntime(await pinFile((text) => `\ufeff${text}`))).rejects.toThrow(/^node-runtime\.json is not JSON$/);
+  });
+
+  it("readNodeRuntime refuses a pin file that is a symbolic link, whose diff would show only its target", async () => {
+    const elsewhere = await pinFile((text) => text);
+    const root = await mkdtemp(join(tmpdir(), "pin-"));
+    await mkdir(join(root, "scripts", "delivery"), { recursive: true });
+    await symlink(join(elsewhere, "scripts", "delivery", "node-runtime.json"), join(root, "scripts", "delivery", "node-runtime.json"));
+
+    await expect(readNodeRuntime(root)).rejects.toThrow(/^scripts\/delivery\/node-runtime\.json is not a regular file$/);
   });
 
   it("a refusal stays one line: a platform name from the file is quoted as JSON, so a newline in it cannot start a line", async () => {
