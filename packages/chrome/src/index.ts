@@ -5,3 +5,5 @@ export { NodeChromeProfile, NodeNativeHostDir } from "./profile.ts";
 export { CdpBrowserConnector, CdpBrowserLifecycle, CdpDeskExtension, CdpPageFocus, CdpPanelOpener } from "./roles.ts";
 export { CdpChromeSettings } from "./settings.ts";
 export { CdpTargetWatch } from "./target-watch.ts";
+export { CdpCookieBrowser, NodeDevToolsPortFile } from "./cookies.ts";
+export { CdpAutofillProbe } from "./autofill-probe.ts";

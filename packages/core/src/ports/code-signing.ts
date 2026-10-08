@@ -4,4 +4,6 @@ export interface CodeSigning {
   adHocSign(bundle: string, identifier: string): Promise<boolean>;
   /** `codesign --verify --strict` on the bundle. */
   verify(bundle: string): Promise<boolean>;
+  /** The Team ID that signed a program, or `null` when no team did (ad hoc, unsigned, or not macOS). */
+  teamId(path: string): Promise<string | null>;
 }

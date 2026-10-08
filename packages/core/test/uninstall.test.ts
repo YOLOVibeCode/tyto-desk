@@ -102,6 +102,27 @@ describe("desk uninstall (docs/IMPLEMENTATION.md §15.4)", () => {
     expect(result).toEqual({ code: 0, message: expect.stringContaining(`kept your edited ${CURSOR_SKILL}`) });
   });
 
+  it("uninstall removes the native hosts desk import copied", async () => {
+    const desk = setup([true, true, true], { recorded: [{ kind: "native-host", name: "com.1password.1password", sha256: "a".repeat(64) }] });
+    await desk.hosts.write("com.1password.1password", "{}");
+    await desk.hosts.write("com.example.mine", "{}");
+
+    await desk.run();
+
+    expect(await desk.hosts.read("com.1password.1password")).toBeNull();
+    expect(await desk.hosts.read("com.example.mine")).toBe("{}");
+  });
+
+  it("uninstall leaves a recorded kind it does not know, as a newer Desk may write one", async () => {
+    const desk = setup([true, true, true], { recorded: [{ kind: "from-the-future", path: `${home}/notes.txt` }, { kind: "skill", path: CLAUDE_SKILL, sha256: sha256Hex(DESK_SKILL) }] });
+
+    const result = await desk.run();
+
+    expect(result.code).toBe(0);
+    expect(await desk.files.read(`${home}/notes.txt`)).toBe("mine");
+    expect(await desk.files.read(CLAUDE_SKILL)).toBeNull();
+  });
+
   it("uninstall leaves files install never recorded", async () => {
     const desk = setup([true, true, true], { recorded: [] });
 

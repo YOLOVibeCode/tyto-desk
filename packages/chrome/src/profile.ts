@@ -1,6 +1,6 @@
-import { mkdir, open, readlink, rm } from "node:fs/promises";
+import { mkdir, open, readdir, readlink, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChromeProfile, NativeHostDir } from "@desk/core";
+import type { ChromeProfile, NativeHostCatalog, NativeHostDir } from "@desk/core";
 import { assertPathAllowed, readIfExists, writePrivate } from "@desk/node";
 
 function errorCode(err: unknown): string | undefined {
@@ -94,7 +94,7 @@ export class NodeChromeProfile implements ChromeProfile {
 }
 
 /** The Desk profile's `NativeMessagingHosts` directory, which only the Desk Chrome reads (§8). */
-export class NodeNativeHostDir implements NativeHostDir {
+export class NodeNativeHostDir implements NativeHostDir, NativeHostCatalog {
   private readonly dir: string;
 
   constructor(userDataDir: string) {
@@ -118,5 +118,16 @@ export class NodeNativeHostDir implements NativeHostDir {
     const path = this.path(name);
     await assertPathAllowed(path);
     await rm(path, { force: true });
+  }
+
+  /** The host names its `*.json` files give, those that are host names only (§14). */
+  async names(): Promise<string[]> {
+    await assertPathAllowed(this.dir);
+    const entries = await readdir(this.dir, { withFileTypes: true }).catch(() => []);
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+      .map((entry) => entry.name.slice(0, -".json".length))
+      .filter((name) => /^[a-z0-9_]+(?:\.[a-z0-9_]+)*$/.test(name))
+      .sort();
   }
 }

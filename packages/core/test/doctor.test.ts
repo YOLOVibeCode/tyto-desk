@@ -12,22 +12,7 @@ import {
   type DoctorFinding,
   type VersionInfo,
 } from "../src/index.ts";
-import {
-  FakeChromeProcess,
-  FakeChromeProfile,
-  FakeDaemonClient,
-  FakeDevToolsHttp,
-  FakeInstanceLock,
-  FakeListenerInfo,
-  FakeLoginShell,
-  FakePathModes,
-  FakeGhVersion,
-  FakeTmux,
-  MemoryAppVersions,
-  MemoryConfigStore,
-  MemoryNativeHostDir,
-  MemoryTextFiles,
-} from "../src/testing/index.ts";
+import { FakeChromeProcess, FakeChromeProfile, FakeDaemonClient, FakeDevToolsHttp, FakeGhVersion, FakeInstanceLock, FakeListenerInfo, FakeLoginShell, FakePathModes, FakeSecurityProbe, FakeTmux, MemoryAppVersions, MemoryConfigStore, MemoryNativeHostDir, MemoryTextFiles } from "../src/testing/index.ts";
 
 const home = "/Users/alex";
 const deskHome = `${home}/.desk`;
@@ -55,6 +40,8 @@ function setup() {
   void hosts.write(NATIVE_HOST_NAME, nativeHostManifest(deskHome));
   const lock = new FakeInstanceLock();
   lock.holders.set("watch", { pid: 6200, build: VERSION });
+  const mainProfile = new FakeChromeProfile();
+  const mainHosts = new MemoryNativeHostDir();
   const shell = new FakeLoginShell("/bin/zsh");
   shell.commands.set("desk", `${home}/.local/bin/desk`);
   const daemon = new FakeDaemonClient();
@@ -71,8 +58,11 @@ function setup() {
     tmux: new FakeTmux({ running: false }),
     shell,
     gh: new FakeGhVersion(),
+    main: { profile: mainProfile, hosts: mainHosts },
+    security: new FakeSecurityProbe(),
   };
-  const run = (fix = false, change: Partial<VersionInfo> = {}) => doctor(ports, { home, deskHome, platform: "darwin", info: { ...info, ...change }, fix });
+  const run = (fix = false, change: Partial<VersionInfo> = {}, autofillProbe = false) =>
+    doctor(ports, { home, deskHome, platform: "darwin", info: { ...info, ...change }, fix, ...(autofillProbe ? { autofillProbe } : {}) });
   return { ...ports, chrome, profile, hosts, run };
 }
 
@@ -80,6 +70,57 @@ type Desk = ReturnType<typeof setup>;
 const problems = (findings: DoctorFinding[]) => findings.filter((f) => f.level === "problem" || f.level === "warning");
 
 describe("desk doctor (docs/IMPLEMENTATION.md §15.2)", () => {
+  it.each([
+    ["held-for-screen-lock", "ok", "asked for your screen lock"],
+    ["filled-without-screen-lock", "warning", "without asking for your screen lock"],
+    ["not-saved", "warning", "nothing was tested"],
+    ["unavailable", "warning", "could not run"],
+  ] as const)("doctor --autofill-probe reports whether Chrome asked for the screen lock before filling: %s", async (verdict, level, says) => {
+    const desk = setup();
+    desk.security.verdict = verdict;
+
+    const result = await desk.run(false, {}, true);
+
+    expect(result.findings.find((f) => f.check === "autofill")).toMatchObject({ level, message: expect.stringContaining(says) });
+  });
+
+  it.each([
+    ["no longer matches", '{"path":"/new"}', '{"path":"/old"}', "no longer matches your main Chrome's", "desk import native-hosts --host com.1password.1password"],
+    ["is gone from the Desk profile", '{"path":"/new"}', null, "is gone from the Desk profile", "desk import native-hosts --host com.1password.1password"],
+    ["is gone from the main Chrome", null, '{"path":"/old"}', "gone from your main Chrome", "desk uninstall"],
+  ])("doctor flags a copied manifest that no longer matches its vendor's: %s", async (_case, vendor, copy, says, fix) => {
+    const desk = setup();
+    const name = "com.1password.1password";
+    if (vendor !== null) desk.main.hosts.manifests.set(name, vendor);
+    if (copy !== null) desk.hosts.manifests.set(name, copy);
+    const installed = { version: 1, current: VERSION, previous: null, versions: {}, files: [{ kind: "native-host", name, sha256: "a".repeat(64) }] };
+    await desk.files.write(`${deskHome}/installed.json`, JSON.stringify(installed), 0o600);
+
+    const result = await desk.run();
+
+    expect(result.findings.find((f) => f.check === "native-host-copy")).toMatchObject({ level: "warning", message: expect.stringContaining(says), fix: expect.stringContaining(fix) });
+  });
+
+  it("doctor says nothing about a copied manifest that still matches its vendor's", async () => {
+    const desk = setup();
+    desk.main.hosts.manifests.set("com.1password.1password", '{"path":"/same"}');
+    desk.hosts.manifests.set("com.1password.1password", '{"path":"/same"}');
+    const installed = { version: 1, current: VERSION, previous: null, versions: {}, files: [{ kind: "native-host", name: "com.1password.1password", sha256: "a".repeat(64) }] };
+    await desk.files.write(`${deskHome}/installed.json`, JSON.stringify(installed), 0o600);
+
+    const result = await desk.run();
+
+    expect(result.findings.some((f) => f.check === "native-host-copy")).toBe(false);
+  });
+
+  it("doctor runs the autofill probe only when asked", async () => {
+    const desk = setup();
+
+    await desk.run();
+
+    expect(desk.security.runs).toBe(0);
+  });
+
   it("doctor finds nothing wrong with a healthy Desk and exits 0", async () => {
     const result = await setup().run();
 
@@ -111,6 +152,8 @@ describe("desk doctor (docs/IMPLEMENTATION.md §15.2)", () => {
     ["background mode on", (desk) => void (desk.profile.localState = { background_mode: { enabled: true } }), "background-mode", "background apps"],
     ["another program on the Desk port", (desk) => void (desk.devTools.answering = true), "desk-port", "quit it"],
     ["gh missing", (desk) => void (desk.gh.status = { ok: false, reason: "missing" }), "gh", "brew install gh"],
+    ["the main Chrome's remote debugging left on", (desk) => void (desk.main.profile.localState = { devtools: { remote_debugging: { "user-enabled": true } } }), "main-remote-debugging", "chrome://inspect/#remote-debugging"],
+
     ["gh older than 2.102.0", (desk) => void (desk.gh.status = { ok: false, reason: "old" }), "gh", "brew upgrade gh"],
   ])("doctor reports %s and names its fix", async (_problem, change, check, fix) => {
     const desk = setup();

@@ -3,6 +3,8 @@ import { policyModeOf } from "../agents/controls.ts";
 import type { DeskConfig } from "../config/schema.ts";
 import { NATIVE_HOST_NAME } from "../extension/desk-extension.ts";
 import { nativeHostLauncher, nativeHostManifest } from "../extension/native-host.ts";
+import { isManagedFile } from "../install/extras.ts";
+import { parseInstalled } from "../install/installed.ts";
 import { deskLauncher, hostLauncher } from "../install/launchers.ts";
 import { listenerIsDesk } from "../launch/classify.ts";
 import type { AppVersions } from "../ports/app-versions.ts";
@@ -14,6 +16,7 @@ import type { DevToolsHttp } from "../ports/dev-tools-http.ts";
 import type { InstanceLock } from "../ports/instance-lock.ts";
 import type { ListenerInfo } from "../ports/listener-info.ts";
 import type { GhVersion } from "../ports/gh-version.ts";
+import type { AutofillVerdict, SecurityProbe } from "../ports/security-probe.ts";
 import type { LoginShell } from "../ports/login-shell.ts";
 import type { NativeHostDir } from "../ports/native-host-dir.ts";
 import type { PathModes } from "../ports/path-modes.ts";
@@ -39,6 +42,9 @@ export type DoctorPorts = {
   tmux: Tmux | null;
   shell: LoginShell;
   gh: GhVersion;
+  /** The main Chrome's profile (its `Local State`, read only) and its native-host manifests (§14, §15.2). */
+  main: { profile: ChromeProfile; hosts: NativeHostDir };
+  security: SecurityProbe;
 };
 
 export type DoctorInput = {
@@ -49,6 +55,8 @@ export type DoctorInput = {
   info: VersionInfo;
   /** `--fix`: rewrite what lives in `~/.desk` and the Desk host manifest. */
   fix: boolean;
+  /** `--autofill-probe`: ask Chrome to fill a throwaway password and see whether it wants your screen lock first (M17). */
+  autofillProbe?: boolean;
 };
 
 const PRIVATE = 0o600;
@@ -256,7 +264,62 @@ export async function doctor(ports: DoctorPorts, input: DoctorInput): Promise<{ 
     add({ check: "background-mode", level: "warning", message: "Chrome keeps running in the background after its last window", fix: "turn off Continue running background apps in the Desk Chrome's settings" });
   }
 
+  // The main Chrome (§14): its remote debugging left on, and host manifests desk import copied from it.
+  if ((await ports.main.profile.localStatePref("devtools.remote_debugging.user-enabled")) === true) {
+    add({
+      check: "main-remote-debugging",
+      level: "warning",
+      message: "your main Chrome's remote debugging is on: any program can ask to control it",
+      fix: "turn it off at chrome://inspect/#remote-debugging",
+    });
+  }
+  const installedText = await ports.files.read(`${deskHome}/installed.json`);
+  for (const entry of (parseInstalled(installedText ?? "")?.files ?? []).filter(isManagedFile)) {
+    if (entry.kind !== "native-host") continue;
+    const copy = await hosts.read(entry.name);
+    const vendor = await ports.main.hosts.read(entry.name);
+    if (copy !== null && vendor === copy) continue;
+    add({ check: "native-host-copy", level: "warning", ...copiedHostProblem(entry.name, copy, vendor) });
+  }
+
+  if (input.autofillProbe === true) add(autofillFinding(await ports.security.autofill()));
+
   return { code: findings.some((finding) => finding.level === "problem") ? 1 : 0, findings };
+}
+
+/** What is wrong with a host manifest desk import copied (§14), and its fix. */
+function copiedHostProblem(name: string, copy: string | null, vendor: string | null): { message: string; fix: string } {
+  if (vendor === null) return { message: `${name} is gone from your main Chrome, but Desk still has its copy`, fix: "desk uninstall removes it" };
+  if (copy === null) return { message: `the copy of ${name} is gone from the Desk profile`, fix: `desk import native-hosts --host ${name}` };
+  return { message: `the copy of ${name} no longer matches your main Chrome's`, fix: `desk import native-hosts --host ${name}` };
+}
+
+/** The autofill probe's row (M17): Chrome should want your screen lock before it fills a saved password. */
+function autofillFinding(verdict: AutofillVerdict): DoctorFinding {
+  switch (verdict) {
+    case "held-for-screen-lock":
+      return { check: "autofill", level: "ok", message: "Chrome asked for your screen lock before filling the probe's password" };
+    case "filled-without-screen-lock":
+      return {
+        check: "autofill",
+        level: "warning",
+        message: "Chrome filled a saved password without asking for your screen lock, in a browser local programs can drive",
+        fix: "turn on Use your screen lock when filling passwords in the Desk Chrome's Password Manager settings, or keep passwords in 1Password",
+      };
+    case "not-saved":
+      return { check: "autofill", level: "warning", message: "no password was saved on the probe's page, so nothing was tested", fix: "run desk doctor --autofill-probe again and save the throwaway password it shows" };
+    case "unavailable":
+      return {
+        check: "autofill",
+        level: "warning",
+        message: "the autofill probe could not run, or Chrome offered no saved password to fill",
+        fix: "start Desk with desk, run desk doctor --autofill-probe in a terminal, and stay on the probe's tab",
+      };
+    default: {
+      const never: never = verdict;
+      throw new Error(`unknown verdict ${String(never)}`);
+    }
+  }
 }
 
 /** One line per finding, problems last, each problem with its fix. */

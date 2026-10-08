@@ -20,7 +20,9 @@ export type ManagedFile =
   | { kind: "rule-step"; path: string }
   | { kind: "tmux-line"; path: string }
   | { kind: "desk-app"; path: string }
-  | { kind: "launch-agent"; label: string };
+  | { kind: "launch-agent"; label: string }
+  /** A third-party host manifest `desk import native-hosts` copied into the Desk profile, with its sha256 (§14). */
+  | { kind: "native-host"; name: string; sha256: string };
 
 export type ExtrasPorts = {
   lock: InstanceLock;
@@ -41,10 +43,11 @@ export const LOGIN_AGENT_LABEL = "com.noctusoft.desk.login";
 
 const INSTALL_LOCK_MS = 10_000;
 
-function isManagedFile(value: unknown): value is ManagedFile {
+/** A record this Desk wrote; a kind it does not know (a newer Desk's) is someone else's and is written back untouched (D48). */
+export function isManagedFile(value: unknown): value is ManagedFile {
   if (typeof value !== "object" || value === null) return false;
   const { kind } = value as { kind?: unknown };
-  return kind === "skill" || kind === "rule-step" || kind === "tmux-line" || kind === "desk-app" || kind === "launch-agent";
+  return kind === "skill" || kind === "rule-step" || kind === "tmux-line" || kind === "desk-app" || kind === "launch-agent" || kind === "native-host";
 }
 
 /** A skill install wrote is replaced; one you edited (it matches neither the skill nor the sha256 recorded) is kept. */
@@ -109,7 +112,8 @@ export async function installExtras(
     const home = input.home.replace(/\/+$/, "");
     const before = installed.files.filter(isManagedFile);
     const records = new Map<string, ManagedFile>();
-    const keyOf = (entry: ManagedFile) => (entry.kind === "launch-agent" ? `launch-agent:${entry.label}` : `${entry.kind}:${entry.path}`);
+    const keyOf = (entry: ManagedFile) =>
+      entry.kind === "launch-agent" ? `launch-agent:${entry.label}` : entry.kind === "native-host" ? `native-host:${entry.name}` : `${entry.kind}:${entry.path}`;
     for (const entry of before) records.set(keyOf(entry), entry);
     const notes: string[] = [];
 

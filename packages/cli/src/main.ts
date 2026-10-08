@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseVersionInfo, setToggleKey, versionLine, type Prompter, type VersionInfo } from "@desk/core";
+import { parseVersionInfo, setToggleKey, versionLine, type Picker, type Prompter, type VersionInfo } from "@desk/core";
 import { ConfigFileError, FileConfigStore, FileLogSink, logCrashes } from "@desk/node";
 import { runHost } from "@desk/nmhost";
 import { agentPolicyCommand, agentsCommand } from "./agents.ts";
@@ -12,7 +12,8 @@ import { versionsCommand } from "./versions.ts";
 import { newPortCommand } from "./config.ts";
 import { deskPaths, installCommand } from "./install.ts";
 import { launchCommand } from "./launch.ts";
-import { TtyPrompter } from "./prompter.ts";
+import { importCookiesCommand, importNativeHostCommand } from "./import.ts";
+import { TtyPicker, TtyPrompter } from "./prompter.ts";
 import { quitCommand } from "./quit.ts";
 import { daemonRestartCommand, statusCommand } from "./status.ts";
 import { tabCommand } from "./tab.ts";
@@ -28,6 +29,8 @@ export type MainInput = {
   /** The installed version's directory: desk.mjs and its version.json. */
   runtimeDir: string;
   prompter?: Prompter;
+  /** A picker the tests script (desk import cookies). */
+  picker?: Picker;
 };
 
 const USAGE = [
@@ -44,6 +47,8 @@ const USAGE = [
   "       desk daemon restart        restart the terminal daemon after you confirm (tmux sessions survive)",
   "       desk config new-port       move the guarded endpoint to a new free port",
   "       desk config toggle-key <key>   the shortcut that shows, focuses or hides the panel (Command+Shift+Period)",
+  "       desk import cookies [--domains a,b]   move cookies you choose from your main Chrome into Desk",
+  "       desk import native-hosts --host <name>   copy one of your main Chrome's native-messaging hosts into Desk",
   "       desk config agent-policy strict|open   whether agents may read cookies, storage and saved state",
   "       desk agents [pause|resume|detach]       Desk's agent sessions; pause refuses every command but close",
   "       desk install --from <dir>  install a runtime npm run pack built, after you confirm",
@@ -164,8 +169,17 @@ export async function main(input: MainInput): Promise<number> {
       return result.code;
     }
     if (command === "doctor") {
-      if (rest.length > 1 || (rest.length === 1 && rest[0] !== "--fix")) return usage();
-      const result = await doctorCommand({ env: input.env, platform: input.platform, home, deskHome, info: version.info, fix: rest[0] === "--fix" });
+      const flags = new Set(rest);
+      if (flags.size !== rest.length || rest.some((flag) => flag !== "--fix" && flag !== "--autofill-probe")) return usage();
+      const result = await doctorCommand({
+        env: input.env,
+        platform: input.platform,
+        home,
+        deskHome,
+        info: version.info,
+        fix: flags.has("--fix"),
+        ...(flags.has("--autofill-probe") ? { autofillProbe: true, prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout), say } : {}),
+      });
       say(result.message);
       return result.code;
     }
@@ -204,6 +218,35 @@ export async function main(input: MainInput): Promise<number> {
         version: version.info.version,
         prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
         action,
+      });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "import" && rest[0] === "native-hosts") {
+      const host = rest[2];
+      if (rest.length !== 3 || rest[1] !== "--host" || host === undefined || !/^[a-z0-9_]+(\.[a-z0-9_]+)*$/.test(host)) return usage();
+      const result = await importNativeHostCommand({ platform: input.platform, home, deskHome, host, prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout), say });
+      if (result.code === 0) say(result.message);
+      else fail(result.code, result.message);
+      return result.code;
+    }
+    if (command === "import" && rest[0] === "cookies") {
+      let domains: string[] | undefined;
+      const flags = rest.slice(1);
+      if (flags.length === 2 && flags[0] === "--domains" && flags[1] !== undefined && /^[a-z0-9.-]+(,[a-z0-9.-]+)*$/i.test(flags[1])) domains = flags[1].split(",");
+      else if (flags.length !== 0) return usage();
+      const result = await importCookiesCommand({
+        env: input.env,
+        platform: input.platform,
+        home,
+        deskHome,
+        version: version.info.version,
+        appDir: input.runtimeDir,
+        prompter: input.prompter ?? new TtyPrompter(input.stdin, stdout),
+        picker: input.picker ?? new TtyPicker(input.stdin, stdout),
+        say,
+        ...(domains === undefined ? {} : { domains }),
       });
       if (result.code === 0) say(result.message);
       else fail(result.code, result.message);

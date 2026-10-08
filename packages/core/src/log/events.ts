@@ -6,6 +6,9 @@ export type LogEvent =
   | { event: "bad-line"; size: number }
   | { event: "line-refused"; size: number }
   | { event: "state-recovered"; file: "layout" | "panes" | "config" }
+  /** §14: one line per consent operation, counts and exit code only. */
+  | { event: "consent"; op: "import-cookies"; read: number; eligible: number; chosen: number; set: number; failed: number; code: number }
+  | { event: "consent"; op: "import-native-host"; listed: number; copied: number; code: number }
   /** §7.4: how a pane the daemon did not have came back. */
   | { event: "pane-restored"; how: "attach" | "shell" | "waiting" }
   /** §7.4: a fallback shell gave its pane to the tmux session that came back. */
