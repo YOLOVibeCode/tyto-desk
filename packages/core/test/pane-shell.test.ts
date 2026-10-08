@@ -6,9 +6,10 @@ const home = "/Users/alex";
 const config = newDeskConfig({ home, platform: "darwin", chromePort: 9417, gatewayPort: 9583 });
 const parent = { HOME: home, USER: "alex", LOGNAME: "alex", SHELL: "/bin/bash", ANTHROPIC_API_KEY: "x" };
 
-function plan(options: { config?: DeskConfig; shell?: string | null; files?: Record<string, string> } = {}) {
+function plan(options: { config?: DeskConfig; shell?: string | null; files?: Record<string, string>; cwd?: string } = {}) {
   return planPaneShell({
     pane: "p_k2m9q3x7ab",
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     config: options.config ?? config,
     deskHome: `${home}/.desk`,
     home,
@@ -27,6 +28,10 @@ describe("a pane's shell", () => {
     expect(shell).toMatchObject({ file: "/bin/zsh", args: ["-l"], cwd: home, notice: null });
     expect(shell.env).toMatchObject({ HOME: home, TERM_PROGRAM: "Desk", TERM_PROGRAM_VERSION: "0.3.0", DESK_PANE: "p_k2m9q3x7ab" });
     expect(shell.env.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  it("a pane opened from another starts in the directory it was given", async () => {
+    expect((await plan({ cwd: `${home}/Dev/tyto-desk` })).cwd).toBe(`${home}/Dev/tyto-desk`);
   });
 
   it("a pane starts the configured shell over the account's", async () => {

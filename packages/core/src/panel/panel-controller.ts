@@ -1,6 +1,24 @@
+import { checkLayout, defaultLayout, TABS_MAX, type Layout } from "../layout/layout.ts";
+import {
+  activeTab,
+  addTab,
+  closePane,
+  cyclePane,
+  focusPane,
+  layoutPanes,
+  reconcileLayout,
+  resizeFocused,
+  selectTab,
+  setRatio,
+  splitPane,
+  toggleZoom,
+  type ArrowDirection,
+  type SplitDirection,
+} from "../layout/ops.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { HostChannel } from "../ports/host-channel.ts";
 import type { HostConnector } from "../ports/host-connector.ts";
+import type { LayoutView } from "../ports/layout-view.ts";
 import type { PageVisibility } from "../ports/page-visibility.ts";
 import type { Random } from "../ports/random.ts";
 import type { BannerAction, TerminalPane, TerminalView } from "../ports/terminal-view.ts";
@@ -11,6 +29,7 @@ import { Backoff } from "../time/backoff.ts";
 export type PanelPorts = {
   connector: HostConnector;
   view: TerminalView;
+  layout: LayoutView;
   random: Random;
   clock: Clock;
   /** The extension's Desk version. */
@@ -35,6 +54,8 @@ const ALERTS: Readonly<Record<string, string>> = {
 };
 
 const EXITED = "\r\n[the shell exited: press Enter for a new one]\r\n";
+const NARROW = "Split down: the panel is too narrow for two 80-column panes";
+const TOO_MANY_TABS = `Desk holds at most ${TABS_MAX} tabs`;
 
 /** §9's panel-state table: what the banner says in each state. */
 const STATES = {
@@ -52,31 +73,51 @@ const QUICK_CLOSE_MS = 1_000;
 const TRIES = 3;
 /** The panel acknowledges output in steps of this many characters written (§7.3). */
 const ACK_EVERY = 5_000;
+/** How many of its own recent layouts the panel remembers, to know their broadcasts as echoes. */
+const ECHOES = 16;
 
-/** What the banner says when the daemon cannot give this panel's pane a shell; Enter tries again. */
+/** What the banner says when the daemon cannot give a pane a shell; Enter tries again. */
 const PANE_ERRORS: Readonly<Partial<Record<ErrorCode, string>>> = {
   E_SPAWN: "The shell could not start: press Enter to try again",
   E_LIMIT: "Desk's terminal daemon has no room for another pane: press Enter to try again",
 };
 
+/** One pane's terminal in this panel, and where it stands with the daemon. */
+type PaneState = {
+  readonly id: string;
+  readonly term: TerminalPane;
+  /** The snapshot arrived: typed input goes to the pane. */
+  attached: boolean;
+  /** Opened by this panel (and not since taken by another window). */
+  owned: boolean;
+  exited: boolean;
+  failed: boolean;
+  /** Characters written to the terminal since the last ack. */
+  written: number;
+};
+
 /**
- * The side panel (docs/IMPLEMENTATION.md §9 `PanelController`; slice 1c: one pane). It opens its own native connection,
- * says hello with its window, and attaches the daemon's live pane, or a new one at the terminal's size. Typed input
- * goes to the pane and its output to the terminal; a snapshot resets the terminal first. It reconnects with backoff
- * from 100 ms to 2 s and attaches the same pane again. Whatever the host sends passes core's codecs; the rest is
- * dropped.
+ * The side panel (docs/IMPLEMENTATION.md §9 `PanelController`, §10's tabs and splits). It opens its own native
+ * connection and says hello with its window; the daemon's hello carries the layout, which the panel reconciles with the
+ * live panes (a live pane the layout lacks becomes a tab; a pane the daemon lost stays, and its shell starts again when
+ * opened), shows, and opens pane by pane. Every change the user makes (split, close, new tab, focus, zoom, resize, a
+ * dragged divider, a picked tab) goes to the daemon as `layout.put`; the daemon writes `layout.json` and broadcasts it to
+ * every panel, and a panel shows another window's change without taking its panes. Typed input goes to a pane once its
+ * snapshot arrived, and its output to its terminal; a snapshot resets the terminal first. It reconnects with backoff
+ * from 100 ms to 2 s. Whatever the host sends passes core's codecs; the rest is dropped.
  */
 export class PanelController {
   private readonly ports: PanelPorts;
   private readonly backoff = new Backoff(100, 2_000);
   private channel: HostChannel | null = null;
-  private paneId: string | null = null;
-  private term: TerminalPane | null = null;
-  private attached = false;
-  private exited = false;
+  private layout: Layout | null = null;
+  private readonly panes = new Map<string, PaneState>();
+  /** JSON of the layouts this panel sent, oldest first: their broadcasts come back to it as echoes. */
+  private readonly sent: string[] = [];
   private opens = 0;
-  private focused = false;
-  private failed = false;
+  private puts = 0;
+  /** The panel took the keyboard once already (focus on load happens once). */
+  private focusedOnce = false;
   /** The panel stopped reconnecting; its banner says why. */
   private stopped = false;
   /** A host state the banner shows, which a reconnect must not overwrite. */
@@ -87,8 +128,6 @@ export class PanelController {
   /** Whether the banner shows the agents-paused notice, which `agents-resumed` clears. */
   private pausedShown = false;
   private drops = 0;
-  /** Characters written to the terminal since the last ack. */
-  private written = 0;
   private closeOnExit = false;
   private closes = 0;
 
@@ -99,11 +138,208 @@ export class PanelController {
   start(): void {
     this.ports.visibility.onChange((state) => {
       this.post({ type: "visibility", state });
-      // A hidden owner got no output (§7.3): shown again, the panel opens its pane for a fresh snapshot.
-      if (state === "visible" && this.paneId !== null && !this.exited && this.channel !== null) this.open(this.paneId);
+      // A hidden owner got no output (§7.3): shown again, the panel opens its panes for fresh snapshots.
+      if (state === "visible" && this.channel !== null) {
+        for (const pane of this.panes.values()) if (pane.owned && !pane.exited) this.open(pane.id);
+      }
+    });
+    this.ports.layout.onSelectTab((tab) => {
+      const index = this.layout?.tabs.findIndex((t) => t.id === tab) ?? -1;
+      if (index >= 0) this.selectTab(index + 1);
+    });
+    this.ports.layout.onDrag((tab, path, ratio) => {
+      if (this.layout !== null) this.change(setRatio(this.layout, tab, path, ratio));
     });
     this.connect();
   }
+
+  // ---- What the user does (the keymap and the context menu call these, slice 6b) ----
+
+  /** Splits the focused pane; a new pane opens in its directory and takes the focus. */
+  split(direction: SplitDirection): void {
+    const layout = this.layout;
+    const focused = this.focusedPane();
+    if (layout === null || focused === null) return;
+    const added = this.ports.random.id("p");
+    const split = splitPane(layout, { pane: focused.id, added, direction, cols: focused.term.size().cols });
+    if (split.direction !== direction) this.ports.layout.note(NARROW);
+    this.ensure(added);
+    this.change(split.layout);
+    this.open(added, focused.id);
+    this.focusTerminal(added);
+  }
+
+  /** A new tab after the active one, its pane in the focused pane's directory. */
+  newTab(): void {
+    const layout = this.layout;
+    if (layout === null) return;
+    if (layout.tabs.length >= TABS_MAX) {
+      this.ports.layout.note(TOO_MANY_TABS);
+      return;
+    }
+    const from = this.focusedPane()?.id;
+    const pane = this.ports.random.id("p");
+    const tab = this.ports.random.id("t");
+    this.ensure(pane);
+    this.change(addTab(layout, { tab, pane }));
+    this.open(pane, from);
+    this.focusTerminal(pane);
+  }
+
+  /** Closes the focused pane (its shell ends); the last pane of the last tab leaves a fresh one. */
+  closeFocused(): void {
+    const focused = this.focusedPane();
+    if (focused !== null) this.closeOne(focused.id);
+  }
+
+  focusNext(): void {
+    this.moveFocus(1);
+  }
+
+  focusPrevious(): void {
+    this.moveFocus(-1);
+  }
+
+  /** Terminal tab `n` (1–9); past the last tab, the last. */
+  selectTab(n: number): void {
+    if (this.layout === null) return;
+    this.change(selectTab(this.layout, n));
+    const focus = this.focusedPane();
+    if (focus !== null) focus.term.focus();
+  }
+
+  zoom(): void {
+    if (this.layout !== null) this.change(toggleZoom(this.layout));
+  }
+
+  resize(arrow: ArrowDirection): void {
+    if (this.layout !== null) this.change(resizeFocused(this.layout, arrow));
+  }
+
+  // ---- The layout ----
+
+  private focusedPane(): PaneState | null {
+    const tab = this.layout === null ? undefined : activeTab(this.layout);
+    const id = tab?.focus ?? null;
+    return id === null ? null : (this.panes.get(id) ?? null);
+  }
+
+  private moveFocus(step: 1 | -1): void {
+    if (this.layout === null) return;
+    this.change(cyclePane(this.layout, step));
+    this.focusedPane()?.term.focus();
+  }
+
+  private focusTerminal(paneId: string): void {
+    this.panes.get(paneId)?.term.focus();
+  }
+
+  /** A change this panel made: shown, and sent to the daemon, which writes and broadcasts it. */
+  private change(next: Layout): void {
+    if (next === this.layout) return;
+    this.layout = next;
+    this.show();
+    this.puts += 1;
+    const text = JSON.stringify(next);
+    this.sent.push(text);
+    if (this.sent.length > ECHOES) this.sent.shift();
+    this.post({ type: "layout.put", id: `l${this.puts}`, layout: next });
+  }
+
+  private show(): void {
+    const layout = this.layout;
+    if (layout === null) return;
+    const tab = activeTab(layout);
+    this.ports.layout.show({
+      tabs: layout.tabs.map((t, index) => ({ id: t.id, title: `Terminal ${index + 1}`, marked: false })),
+      active: tab?.id ?? null,
+      root: tab?.root ?? null,
+      zoomed: tab?.zoomed ?? null,
+      focus: tab?.focus ?? null,
+    });
+  }
+
+  /** A layout from the daemon (its hello, or another panel's change), checked against the panes it names. */
+  private fromWire(value: Record<string, unknown> | undefined): Layout | null {
+    if (value === undefined) return null;
+    const named = JSON.stringify(value).match(/p_[0-9abcdefghjkmnpqrstvwxyz]{10}/g) ?? [];
+    return checkLayout(value, named);
+  }
+
+  /** Another window's change: shown; its new panes get terminals but stay that window's; its closed ones go. */
+  private adopt(value: Record<string, unknown>): void {
+    const text = JSON.stringify(value);
+    const echo = this.sent.indexOf(text);
+    if (echo >= 0) {
+      this.sent.splice(0, echo + 1);
+      return;
+    }
+    const layout = this.fromWire(value);
+    if (layout === null) return;
+    this.layout = layout;
+    const held = new Set(layoutPanes(layout));
+    for (const [id, pane] of this.panes) {
+      if (held.has(id)) continue;
+      pane.term.dispose();
+      this.panes.delete(id);
+    }
+    for (const id of held) this.ensure(id);
+    this.show();
+  }
+
+  /** The daemon's hello: the layout it carries (or each live pane in a tab), reconciled, shown, and opened. */
+  private greet(live: readonly string[], value: Record<string, unknown> | undefined): void {
+    let layout = this.fromWire(value) ?? this.layout ?? defaultLayout(live);
+    const reconciled = reconcileLayout(layout, live, (pane) => `t_${pane.slice(2)}`);
+    layout = reconciled.layout;
+    let changed = reconciled.changed;
+    if (layout.tabs.length === 0) {
+      layout = addTab(layout, { pane: this.ports.random.id("p"), tab: this.ports.random.id("t") });
+      changed = true;
+    }
+    const held = new Set(layoutPanes(layout));
+    for (const [id, pane] of this.panes) {
+      if (held.has(id)) continue;
+      pane.term.dispose();
+      this.panes.delete(id);
+    }
+    for (const id of held) this.ensure(id);
+    if (changed) this.change(layout);
+    else {
+      this.layout = layout;
+      this.show();
+    }
+    for (const id of held) this.open(id);
+    const focus = this.focusedPane();
+    if (focus !== null && this.ports.focusOnLoad && !this.focusedOnce) {
+      this.focusedOnce = true;
+      focus.term.focus();
+    }
+  }
+
+  private closeOne(paneId: string): void {
+    const layout = this.layout;
+    if (layout === null) return;
+    this.closes += 1;
+    this.post({ type: "close", id: `c${this.closes}`, pane: paneId });
+    const pane = this.panes.get(paneId);
+    pane?.term.dispose();
+    this.panes.delete(paneId);
+    const closed = closePane(layout, paneId);
+    if (closed.emptied) {
+      // The last pane of the last tab: a fresh pane in a tab of its own, in the home directory.
+      const fresh = this.ports.random.id("p");
+      this.ensure(fresh);
+      this.change(addTab(closed.layout, { pane: fresh, tab: this.ports.random.id("t") }));
+      this.open(fresh);
+      this.focusTerminal(fresh);
+      return;
+    }
+    this.change(closed.layout);
+    this.focusedPane()?.term.focus();
+  }
+
+  // ---- The connection ----
 
   private connect(): void {
     if (this.stopped) return;
@@ -117,7 +353,7 @@ export class PanelController {
     channel.onDisconnect((error) => {
       if (this.channel !== channel) return;
       this.channel = null;
-      this.attached = false;
+      for (const pane of this.panes.values()) pane.attached = false;
       if (error !== null && /not found/i.test(error)) {
         this.stop(STATES.notInstalled);
         return;
@@ -146,24 +382,25 @@ export class PanelController {
     this.channel?.post(message);
   }
 
-  /** Counts what the terminal parsed, and acknowledges it in steps of 5,000 characters. */
+  /** Counts what a terminal parsed, and acknowledges it in steps of 5,000 characters. */
   private wrote(paneId: string, length: number): void {
-    if (paneId !== this.paneId) return;
-    this.written += length;
-    if (this.written < ACK_EVERY) return;
-    this.post({ type: "ack", pane: paneId, n: this.written });
-    this.written = 0;
+    const pane = this.panes.get(paneId);
+    if (pane === undefined) return;
+    pane.written += length;
+    if (pane.written < ACK_EVERY) return;
+    this.post({ type: "ack", pane: paneId, n: pane.written });
+    pane.written = 0;
   }
 
   /** A paste, sanitized; a multi-line one into a program without bracketed paste is confirmed first (§10). */
-  private async pasted(term: TerminalPane, text: string): Promise<void> {
+  private async pasted(pane: PaneState, text: string): Promise<void> {
     const clean = sanitizePaste(text);
     if (clean === "") return;
-    if (!term.bracketedPasteMode() && /[\r\n]/.test(clean)) {
+    if (!pane.term.bracketedPasteMode() && /[\r\n]/.test(clean)) {
       const lines = clean.split(/\r\n|\r|\n/).length;
       if (!(await this.ports.view.confirm(`Paste ${lines} lines?`))) return;
     }
-    if (this.term === term) term.paste(clean);
+    if (this.panes.get(pane.id) === pane) pane.term.paste(clean);
   }
 
   /** Every banner goes through here, so `agents-resumed` clears only the paused notice it would have replaced. */
@@ -190,7 +427,7 @@ export class PanelController {
         this.hostBanner = false;
         this.closeOnExit = message.closeOnExit ?? false;
         this.showBanner(null);
-        this.attach(message.panes);
+        this.greet(livePanes(message.panes), message.layout);
         return;
       case "host":
         if (message.state === "install-damaged") this.stop(STATES.installDamaged);
@@ -202,49 +439,53 @@ export class PanelController {
           if (this.drops >= TRIES) this.stop(STATES.messageLimit);
         }
         return;
-      case "snapshot":
-        if (message.pane !== this.paneId || this.term === null) return;
+      case "snapshot": {
+        const pane = this.panes.get(message.pane);
+        if (pane === undefined) return;
         if (message.part === 0) {
-          this.term.reset();
-          this.written = 0;
+          pane.term.reset();
+          pane.written = 0;
         }
-        this.term.write(message.data);
-        if (message.last) this.attached = true;
-        return;
-      case "out": {
-        const paneId = message.pane;
-        if (paneId !== this.paneId || this.term === null) return;
-        const length = message.data.length;
-        this.term.write(message.data, () => this.wrote(paneId, length));
+        pane.term.write(message.data);
+        if (message.last) pane.attached = true;
         return;
       }
-      case "exit":
-        if (message.pane !== this.paneId) return;
-        this.exited = true;
-        this.attached = false;
+      case "out": {
+        const paneId = message.pane;
+        const pane = this.panes.get(paneId);
+        if (pane === undefined) return;
+        const length = message.data.length;
+        pane.term.write(message.data, () => this.wrote(paneId, length));
+        return;
+      }
+      case "exit": {
+        const pane = this.panes.get(message.pane);
+        if (pane === undefined || !pane.owned) return;
+        pane.exited = true;
+        pane.attached = false;
         if (this.closeOnExit) {
-          this.closes += 1;
-          this.post({ type: "close", id: `c${this.closes}`, pane: message.pane });
-          this.open(this.ports.random.id("p"));
+          this.closeOne(pane.id);
           return;
         }
-        this.term?.write(EXITED);
+        pane.term.write(EXITED);
         return;
+      }
       case "detached": {
-        if (message.pane !== this.paneId) return;
-        this.attached = false;
-        const paneId = message.pane;
+        const pane = this.panes.get(message.pane);
+        if (pane === undefined) return;
+        pane.attached = false;
         if (message.reason === "taken") {
+          pane.owned = false;
           this.showBanner("This terminal is open in another window", {
             label: "Bring it here",
             run: () => {
               this.showBanner(null);
-              this.open(paneId);
+              for (const away of [...this.panes.values()]) if (!away.owned) this.open(away.id);
             },
           });
         } else if (message.reason === "stuck") {
           // The daemon gave up waiting for this panel's acks; a fresh snapshot catches up.
-          this.open(paneId);
+          this.open(pane.id);
         } else {
           this.showBanner("The terminal was detached");
         }
@@ -269,10 +510,11 @@ export class PanelController {
           return;
         }
         const text = PANE_ERRORS[message.code];
-        if (text === undefined || message.pane === undefined || message.pane !== this.paneId) return;
-        this.exited = true;
-        this.attached = false;
-        this.failed = true;
+        const pane = message.pane === undefined ? undefined : this.panes.get(message.pane);
+        if (text === undefined || pane === undefined) return;
+        pane.exited = true;
+        pane.attached = false;
+        pane.failed = true;
         this.showBanner(text);
         return;
       }
@@ -282,6 +524,8 @@ export class PanelController {
         return;
       }
       case "layout":
+        this.adopt(message.layout);
+        return;
       case "closed":
       case "panes":
       case "ext.call":
@@ -294,50 +538,52 @@ export class PanelController {
     }
   }
 
-  /** Opens this panel's pane when it still runs, else the daemon's first live pane, else a new one. */
-  private attach(panes: readonly PaneSummary[]): void {
-    const live = panes.filter((pane) => pane.alive).map((pane) => pane.id);
-    const keep = this.paneId !== null && !this.exited && live.includes(this.paneId);
-    this.open(keep ? (this.paneId ?? "") : (live[0] ?? this.ports.random.id("p")));
-  }
+  // ---- Panes ----
 
-  private open(paneId: string): void {
-    if (this.paneId !== paneId || this.term === null) {
-      this.term?.dispose();
-      this.term = this.newTerminal(paneId);
-      this.paneId = paneId;
-    }
-    this.exited = false;
-    this.opens += 1;
-    const size = this.term.size();
-    this.post({ type: "open", id: `o${this.opens}`, pane: paneId, cols: size.cols, rows: size.rows });
-  }
-
-  private newTerminal(paneId: string): TerminalPane {
+  /** The pane's terminal, made once. */
+  private ensure(paneId: string): PaneState {
+    const existing = this.panes.get(paneId);
+    if (existing !== undefined) return existing;
     const term = this.ports.view.create(paneId);
+    const pane: PaneState = { id: paneId, term, attached: false, owned: false, exited: false, failed: false, written: 0 };
+    this.panes.set(paneId, pane);
     term.onInput((data) => {
-      if (this.term !== term) return;
-      if (this.exited) {
+      if (this.panes.get(paneId) !== pane) return;
+      if (pane.exited) {
         if (!data.includes("\r")) return;
-        if (this.failed) {
-          this.failed = false;
+        if (pane.failed) {
+          pane.failed = false;
           this.showBanner(null);
         }
         // The same pane: the daemon starts its new shell there, so exited shells never pile up as panes.
         this.open(paneId);
         return;
       }
-      if (this.attached) this.post({ type: "in", pane: paneId, data });
+      if (pane.attached) this.post({ type: "in", pane: paneId, data });
     });
-    term.onPaste((text) => void this.pasted(term, text));
+    term.onPaste((text) => void this.pasted(pane, text));
     term.onResize((size) => {
       // Once the pane is opened: the daemon applies a resize even while the pane's shell is still starting.
-      if (this.term === term && !this.exited) this.post({ type: "resize", pane: paneId, cols: size.cols, rows: size.rows });
+      if (this.panes.get(paneId) === pane && pane.owned && !pane.exited) this.post({ type: "resize", pane: paneId, cols: size.cols, rows: size.rows });
     });
-    if (this.ports.focusOnLoad && !this.focused) {
-      this.focused = true;
-      term.focus();
-    }
-    return term;
+    term.onFocus(() => {
+      if (this.layout === null || this.focusedPane() === pane) return;
+      this.change(focusPane(this.layout, paneId));
+    });
+    return pane;
   }
+
+  /** Opens (attaches, or starts) the pane at its terminal's size; `cwdFrom` names the pane whose directory it starts in. */
+  private open(paneId: string, cwdFrom?: string): void {
+    const pane = this.ensure(paneId);
+    pane.exited = false;
+    pane.owned = true;
+    this.opens += 1;
+    const size = pane.term.size();
+    this.post({ type: "open", id: `o${this.opens}`, pane: paneId, cols: size.cols, rows: size.rows, ...(cwdFrom === undefined ? {} : { cwdFrom }) });
+  }
+}
+
+function livePanes(panes: readonly PaneSummary[]): string[] {
+  return panes.filter((pane) => pane.alive).map((pane) => pane.id);
 }

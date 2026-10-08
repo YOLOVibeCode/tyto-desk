@@ -5,6 +5,9 @@
   --desk-foreground: #1d1d1f;
   --desk-banner: #fff4d6;
   --desk-alert: #b3261e;
+  --desk-tab: #e8e8ed;
+  --desk-divider: #d2d2d7;
+  --desk-focus: #8e8e93;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -12,6 +15,9 @@
     --desk-foreground: #e5e5e5;
     --desk-banner: #3a2f0b;
     --desk-alert: #8c1d18;
+    --desk-tab: #2c2c2e;
+    --desk-divider: #3a3a3c;
+    --desk-focus: #636366;
   }
 }
 html,
@@ -48,4 +54,83 @@ body {
 }
 #terminal > div {
   height: 100%;
+}
+/* Tabs: a strip of text titles, shown when there are two or more. */
+#tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px 6px 0;
+  overflow-x: auto;
+  font: 12px -apple-system, "Segoe UI", sans-serif;
+}
+#tabs[hidden],
+#note[hidden] {
+  display: none;
+}
+#tabs .tab {
+  max-width: 14em;
+  padding: 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 4px 4px 0 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  opacity: 0.6;
+}
+#tabs .tab.active {
+  background: var(--desk-tab);
+  opacity: 1;
+}
+#tabs .tab.marked::after {
+  content: " •";
+}
+#note {
+  padding: 4px 10px;
+  font: 12px -apple-system, "Segoe UI", sans-serif;
+  opacity: 0.8;
+}
+/* Splits: nested flex boxes; a divider between two parts is dragged to resize them. */
+.split {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.split.row {
+  flex-direction: row;
+}
+.split.col {
+  flex-direction: column;
+}
+.split > .pane,
+.split > .split {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.pane {
+  height: 100%;
+  width: 100%;
+}
+.divider {
+  flex: 0 0 4px;
+  background: var(--desk-divider);
+  touch-action: none;
+}
+.split.row > .divider {
+  cursor: col-resize;
+}
+.split.col > .divider {
+  cursor: row-resize;
+}
+.pane.focused {
+  outline: 1px solid var(--desk-focus);
+  outline-offset: -1px;
+}
+.parking {
+  display: none;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Daemon, WIRE_MESSAGE_MAX, type DaemonMessage, type Layout, type PaneShell } from "../src/index.ts";
-import { FakeClock, FakePtySpawner, FakeTerminalMirror, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
+import { FakeClock, FakeProcessCwd, FakePtySpawner, FakeTerminalMirror, MemoryLayoutStore, MemoryLogSink } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 const OTHER = "p_m9x1d4f6hz";
@@ -24,16 +24,18 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
   const clock = new FakeClock();
   const shutdowns: string[] = [];
   const shells: string[] = [];
+  const cwds = new FakeProcessCwd();
   const daemon = new Daemon({
     spawner,
     clock,
     build: "0.3.0",
-    shellFor: async (pane): Promise<PaneShell> => {
+    cwds,
+    shellFor: async (pane, cwd): Promise<PaneShell> => {
       shells.push(pane);
       return {
         file: "/bin/zsh",
         args: ["-l"],
-        cwd: "/Users/alex",
+        cwd: cwd ?? "/Users/alex",
         env: { HOME: "/Users/alex", DESK_PANE: pane },
         notice: options.notice ?? null,
       };
@@ -70,7 +72,7 @@ function setup(options: { notice?: string | null; layouts?: MemoryLayoutStore } 
     await settle();
     return peer;
   };
-  return { daemon, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client };
+  return { daemon, spawner, mirror, clock, shutdowns, shells, layouts, log, connect, client, cwds };
 }
 
 /** Lets the daemon's pending promises run. */
@@ -84,8 +86,44 @@ describe("the terminal daemon", () => {
     const peer = connect();
 
     peer.send({ type: "hello", vMin: 1, vMax: 3, client: "panel", build: "0.4.0", window: 7 });
+    await settle();
 
-    expect(peer.sent).toEqual([{ type: "hello", v: 1, build: "0.3.0", panes: [], notices: [] }]);
+    expect(peer.sent).toEqual([{ type: "hello", v: 1, build: "0.3.0", panes: [], notices: [], layout: { version: 1, activeTab: null, ui: {}, tabs: [] } }]);
+  });
+
+  it("a panel's hello carries the saved layout, so the panel needs no second round trip", async () => {
+    const saved: Layout = { version: 1, activeTab: "t_0000000001", ui: { fontSize: 14 }, tabs: [{ id: "t_0000000001", focus: PANE, zoomed: null, root: { pane: PANE } }] };
+    const layouts = new MemoryLayoutStore({ layout: saved, recovered: false });
+    const { client } = setup({ layouts });
+
+    const panel = await client("panel", { window: 7 });
+    const cli = await client("cli");
+
+    expect(panel.sent[0]).toMatchObject({ type: "hello", layout: saved });
+    expect(cli.sent[0]).not.toHaveProperty("layout");
+  });
+
+  it("open with cwdFrom starts the new shell in the directory of that pane's shell, read from its process", async () => {
+    const { spawner, client, cwds } = setup();
+    const panel = await client("panel", { window: 7 });
+    panel.send({ type: "open", id: "r1", pane: PANE, cols: 100, rows: 30 });
+    await settle();
+    cwds.cwds.set(spawner.spawned[0]?.pty.pid ?? -1, "/Users/alex/Dev/tyto-desk");
+
+    panel.send({ type: "open", id: "r2", pane: OTHER, cols: 100, rows: 30, cwdFrom: PANE });
+    await settle();
+
+    expect(spawner.spawned[1]?.options.cwd).toBe("/Users/alex/Dev/tyto-desk");
+  });
+
+  it("open with cwdFrom naming a pane that has no shell starts in the default directory", async () => {
+    const { spawner, client } = setup();
+    const panel = await client("panel", { window: 7 });
+
+    panel.send({ type: "open", id: "r1", pane: OTHER, cols: 100, rows: 30, cwdFrom: PANE });
+    await settle();
+
+    expect(spawner.spawned[0]?.options.cwd).toBe("/Users/alex");
   });
 
   it("hello with no common version gets E_STALE and the daemon keeps running", async () => {
@@ -202,7 +240,7 @@ describe("the terminal daemon", () => {
 
     expect(spawner.pty().signals).toEqual([]);
     expect(spawner.spawned).toHaveLength(1);
-    expect(again.sent[0]).toEqual({ type: "hello", v: 1, build: "0.3.0", panes: [{ id: PANE, alive: true }], notices: [] });
+    expect(again.sent[0]).toMatchObject({ type: "hello", v: 1, build: "0.3.0", panes: [{ id: PANE, alive: true }], notices: [] });
     // The mirror kept what the shell printed while no panel owned it (slice 2b).
     expect(again.last()).toMatchObject({ type: "snapshot", pane: PANE, data: '<screen "nobody sees this\\r\\n">' });
   });

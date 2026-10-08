@@ -5,6 +5,8 @@ export type LayoutNode = { pane: string } | { split: "row" | "col"; ratio: numbe
 export type LayoutTab = { id: string; focus: string | null; zoomed: string | null; root: LayoutNode };
 /** `layout.json`: the terminal tabs, their splits, and the ui settings (font size, theme, welcome). */
 export type Layout = { version: 1; activeTab: string | null; ui: Record<string, unknown>; tabs: LayoutTab[] };
+/** The way from a tab's root to a split: `a` or `b` at each split on the way. */
+export type SplitPath = readonly ("a" | "b")[];
 
 /** §7.2's limits: a layout is at most 64 KiB encoded, 16 splits deep, and 32 tabs. */
 export const LAYOUT_BYTES_MAX = 64 * 1024;

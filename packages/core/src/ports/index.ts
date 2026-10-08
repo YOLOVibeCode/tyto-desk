@@ -52,3 +52,5 @@ export type { FileDigest } from "./file-digest.ts";
 export type { GhStatus, Provenance } from "./provenance.ts";
 export type { GhInstalled, GhVersion } from "./gh-version.ts";
 export type { ReleaseFeed, ReleaseRef, Unreachable } from "./release-feed.ts";
+export type { ProcessCwd } from "./process-cwd.ts";
+export type { LayoutShown, LayoutView, TabLabel } from "./layout-view.ts";

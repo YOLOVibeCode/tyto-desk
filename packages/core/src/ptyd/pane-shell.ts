@@ -15,6 +15,8 @@ export type PaneShellInput = {
   deskHome: string;
   /** The account's home: the shell's directory, and where tmux's config is read. */
   home: string;
+  /** The directory a split or a new tab starts in: its focused pane's, which the caller found is a directory. */
+  cwd?: string;
   /** The daemon's own environment. */
   parent: Env;
   version: string;
@@ -26,7 +28,8 @@ export type PaneShellInput = {
 
 /**
  * A new pane's shell (docs/IMPLEMENTATION.md §7.1): argv `[shell, "-l"]` with `shell = config.terminal.shell ??` the
- * account's passwd shell, in the home directory (slice 7 restores saved directories), with the pane environment. The
+ * account's passwd shell, in the directory it was given (a split's, §10) or the home directory (slice 7 restores saved
+ * directories), with the pane environment. The
  * agent-variable gate runs at every spawn; when it withholds the variables, the panel gets the notice.
  */
 export async function planPaneShell(input: PaneShellInput): Promise<PaneShell> {
@@ -35,7 +38,7 @@ export async function planPaneShell(input: PaneShellInput): Promise<PaneShell> {
   return {
     file: shell,
     args: ["-l"],
-    cwd: input.home,
+    cwd: input.cwd ?? input.home,
     env: paneEnvironment({ parent: input.parent, version: input.version, config: input.config, deskHome: input.deskHome, pane: input.pane, gate }),
     notice: gate.allowed ? null : gate.notice,
   };

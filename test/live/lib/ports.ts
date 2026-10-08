@@ -19,4 +19,5 @@ export const LIVE_PORTS = {
   agents: 9547,
   install: 9557,
   update: 9567,
+  layout: 9577,
 } as const;

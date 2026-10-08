@@ -40,16 +40,34 @@ async function start(): Promise<void> {
   }
   const current = await chrome.windows.getCurrent();
   if (typeof current.id !== "number") return;
-  new PanelController({
+  const view = new XtermView({ stage: element("terminal"), tabs: element("tabs"), banner, alert: element("alert"), note: element("note") }, TERMINAL);
+  const panel = new PanelController({
     connector: new ChromeHostConnector(),
-    view: new XtermView(element("terminal"), banner, element("alert"), TERMINAL),
+    view,
+    layout: view,
     random: new WebCryptoRandom(),
     clock: new BrowserClock(),
     build: deskBuild(),
     windowId: current.id,
     focusOnLoad: await focusOnLoad(),
     visibility: new DocumentVisibility(),
-  }).start();
+  });
+  panel.start();
+  // The live suite drives the panel's actions in a test build (the keymap, slice 6b, drives them for you).
+  if (DESK_TEST) {
+    const hooks = (globalThis as { deskTest?: Record<string, unknown> }).deskTest;
+    if (hooks !== undefined) {
+      hooks.action = (name: string, argument?: string | number): void => {
+        if (name === "split-right") panel.split("right");
+        else if (name === "split-down") panel.split("down");
+        else if (name === "new-tab") panel.newTab();
+        else if (name === "close") panel.closeFocused();
+        else if (name === "tab" && typeof argument === "number") panel.selectTab(argument);
+        else if (name === "next") panel.focusNext();
+        else if (name === "zoom") panel.zoom();
+      };
+    }
+  }
 }
 
 void start();

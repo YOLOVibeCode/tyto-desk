@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PanelController } from "../src/index.ts";
-import { FakeClock, FakeHostConnector, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
+import { FakeClock, FakeHostConnector, FakeLayoutView, FakePageVisibility, FakeTerminalView, SeqRandom } from "../src/testing/index.ts";
 
 const PANE = "p_k2m9q3x7ab";
 
@@ -12,6 +12,7 @@ function setup(options: { focusOnLoad?: boolean } = {}) {
   const panel = new PanelController({
     connector,
     view,
+    layout: new FakeLayoutView(),
     random: new SeqRandom([]),
     clock,
     build: "0.3.0",
@@ -31,7 +32,8 @@ describe("the side panel", () => {
     panel.start();
     connector.last().deliver(hello());
 
-    expect(connector.last().posted).toEqual([
+    // Besides the layout.put that saves the new pane's tab (slice 6).
+    expect(connector.last().posted.filter((m) => (m as { type: string }).type !== "layout.put")).toEqual([
       { type: "hello", vMin: 1, vMax: 1, client: "panel", build: "0.3.0", window: 7 },
       { type: "open", id: "o1", pane: "p_0000000001", cols: 100, rows: 30 },
     ]);
@@ -393,7 +395,7 @@ describe("the panel's terminal I/O (slice 2b)", () => {
 
     connector.last().deliver({ type: "exit", pane: PANE, code: 0, signal: null });
 
-    expect(connector.last().posted.slice(-2)).toEqual([
+    expect(connector.last().posted.filter((m) => (m as { type: string }).type !== "layout.put").slice(-2)).toEqual([
       { type: "close", id: "c1", pane: PANE },
       { type: "open", id: "o2", pane: "p_0000000001", cols: 100, rows: 30 },
     ]);
