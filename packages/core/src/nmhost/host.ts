@@ -22,16 +22,19 @@ export type HostInput<Link> = {
   clock: Clock;
   /** The current version's daemon, resolved once; `null` when no version is current. */
   daemonCommand(): Promise<DaemonCommand | null>;
+  /** Whether the current version's files are exactly what its files.sha256 lists (asked only before a start). */
+  verified(): Promise<boolean>;
 };
 
 /**
  * - `foreign-origin`: Chrome started the host for an origin that is not the Desk extension's; nothing was contacted.
  * - `no-current-version`: the daemon is down and no installed version is current to start it from.
+ * - `damaged-version`: the current version's files do not match its files.sha256, so its daemon is not started.
  * - `daemon-unreachable`: the daemon did not answer, even after a start and 3 s of retries.
  */
 export type HostStart<Link> =
   | { ok: true; link: Link; started: boolean }
-  | { ok: false; reason: "foreign-origin" | "no-current-version" | "daemon-unreachable" };
+  | { ok: false; reason: "foreign-origin" | "no-current-version" | "damaged-version" | "daemon-unreachable" };
 
 /**
  * How `desk-nmhost` reaches the daemon (docs/IMPLEMENTATION.md §8). It serves only the Desk extension: any other caller
@@ -45,6 +48,7 @@ export async function startHost<Link>(input: HostInput<Link>): Promise<HostStart
   if (first.reason !== "dead") return { ok: false, reason: "daemon-unreachable" };
   const command = await input.daemonCommand();
   if (command === null) return { ok: false, reason: "no-current-version" };
+  if (!(await input.verified())) return { ok: false, reason: "damaged-version" };
   const pid = await input.spawner.spawn(command.file, command.args, command.env);
   if (pid === null) return { ok: false, reason: "daemon-unreachable" };
   const deadline = input.clock.now() + DAEMON_START_MS;
@@ -64,8 +68,8 @@ export async function startHost<Link>(input: HostInput<Link>): Promise<HostStart
  * version means the install is damaged; a daemon that never answered means it is unreachable. A caller that is not the
  * Desk extension is told nothing.
  */
-export function hostStateFor(reason: "foreign-origin" | "no-current-version" | "daemon-unreachable"): HostState | null {
-  if (reason === "no-current-version") return { type: "host", state: "install-damaged" };
+export function hostStateFor(reason: "foreign-origin" | "no-current-version" | "damaged-version" | "daemon-unreachable"): HostState | null {
+  if (reason === "no-current-version" || reason === "damaged-version") return { type: "host", state: "install-damaged" };
   if (reason === "daemon-unreachable") return { type: "host", state: "no-daemon" };
   return null;
 }

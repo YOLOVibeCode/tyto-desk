@@ -10,6 +10,10 @@ function setup(results: ConstructorParameters<typeof FakeDaemonDialer<typeof lin
   const spawner = new FakeDetachedSpawner();
   const clock = new FakeClock({ auto: true });
   let commands = 0;
+  let verified = true;
+  const setVerified = (value: boolean) => {
+    verified = value;
+  };
   const host = (origin: string | undefined) =>
     startHost({
       origin,
@@ -20,8 +24,9 @@ function setup(results: ConstructorParameters<typeof FakeDaemonDialer<typeof lin
         commands += 1;
         return daemon;
       },
+      verified: async () => verified,
     });
-  return { dialer, spawner, clock, host, commands: () => commands };
+  return { dialer, spawner, clock, host, commands: () => commands, setVerified };
 }
 
 describe("the native host", () => {
@@ -79,11 +84,19 @@ describe("the native host", () => {
     expect(spawner.started).toEqual([]);
   });
 
+  it("the host refuses to start a daemon whose files do not match files.sha256", async () => {
+    const { spawner, host, setVerified } = setup([{ ok: false, reason: "dead" }]);
+    setVerified(false);
+
+    expect(await host(DESK_EXTENSION_ORIGIN)).toEqual({ ok: false, reason: "damaged-version" });
+    expect(spawner.started).toEqual([]);
+  });
+
   it("the host starts no daemon when there is no installed version to start it from", async () => {
     const dialer = new FakeDaemonDialer<typeof link>([{ ok: false, reason: "dead" }]);
     const spawner = new FakeDetachedSpawner();
 
-    const result = await startHost({ origin: DESK_EXTENSION_ORIGIN, dialer, spawner, clock: new FakeClock({ auto: true }), daemonCommand: async () => null });
+    const result = await startHost({ origin: DESK_EXTENSION_ORIGIN, dialer, spawner, clock: new FakeClock({ auto: true }), daemonCommand: async () => null, verified: async () => true });
 
     expect(result).toEqual({ ok: false, reason: "no-current-version" });
     expect(spawner.started).toEqual([]);
@@ -91,6 +104,7 @@ describe("the native host", () => {
 
   it.each([
     ["no-current-version", { type: "host", state: "install-damaged" }],
+    ["damaged-version", { type: "host", state: "install-damaged" }],
     ["daemon-unreachable", { type: "host", state: "no-daemon" }],
     ["foreign-origin", null],
   ] as const)("a host that could not start for %s tells the panel %j before it ends", (reason, message) => {

@@ -7,6 +7,8 @@ import type { DaemonMessage, PaneListEntry } from "../protocol/messages.ts";
  */
 export class FakeDaemonClient implements DaemonClient {
   reachable: boolean;
+  /** A daemon that speaks no protocol version this build does. */
+  stale = false;
   swConnected = false;
   swConnects = 0;
   panels: number[] = [];
@@ -28,6 +30,7 @@ export class FakeDaemonClient implements DaemonClient {
 
   async open(): Promise<DaemonOpen> {
     if (!this.reachable) return { ok: false, reason: "unreachable" };
+    if (this.stale) return { ok: false, reason: "stale" };
     return {
       ok: true,
       session: {

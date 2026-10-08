@@ -73,7 +73,7 @@ describe("the desk command", () => {
     expect(err).toMatch(/version\.json is missing or damaged/);
   });
 
-  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"], ["tab"], ["tab", "theirs"], ["tab", "current", "mine"], ["daemon"], ["daemon", "stop"], ["status", "--json"], ["config"], ["config", "new-port", "now"], ["config", "toggle"], ["agents", "stop"], ["agents", "pause", "now"], ["config", "agent-policy"], ["config", "agent-policy", "loose"]])("desk %s is a usage error (64)", async (...argv) => {
+  it.each([["launch"], ["--yes"], ["install"], ["install", "--from"], ["quit", "--force"], ["quit", "--all", "--all"], ["cdp", "--guarded"], ["cdp", "--raw", "--raw"], ["tab"], ["tab", "theirs"], ["tab", "current", "mine"], ["daemon"], ["daemon", "stop"], ["status", "--json"], ["config"], ["config", "new-port", "now"], ["config", "toggle"], ["doctor", "--security-x"], ["uninstall", "--all"], ["uninstall", "--profile", "--profile"], ["doctor", "--fix", "--fix"], ["agents", "stop"], ["agents", "pause", "now"], ["config", "agent-policy"], ["config", "agent-policy", "loose"]])("desk %s is a usage error (64)", async (...argv) => {
     const { code, err } = await desk(argv);
 
     expect(code).toBe(64);

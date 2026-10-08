@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { daemonEnvironment, encodeNativeFrame, hostStateFor, startHost, terminalBinary, type DaemonCommand } from "@desk/core";
-import { FileLogSink, NodeDetachedSpawner, SystemClock, logCrashes } from "@desk/node";
+import { FileLogSink, NodeAppVersions, NodeDetachedSpawner, SystemClock, logCrashes } from "@desk/node";
 import { UnixDaemonDialer } from "./dialer.ts";
 import { relay } from "./relay.ts";
 
@@ -38,6 +38,10 @@ export async function runHost(input: {
     spawner: new NodeDetachedSpawner(),
     clock: new SystemClock(),
     daemonCommand,
+    verified: async () => {
+      const version = await realpath(join(input.deskHome, "app", "current")).catch(() => null);
+      return version !== null && new NodeAppVersions(input.deskHome).verify(basename(version));
+    },
   });
   if (!started.ok) {
     const state = hostStateFor(started.reason);

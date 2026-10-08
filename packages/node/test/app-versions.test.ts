@@ -174,4 +174,33 @@ describe("NodeAppVersions", () => {
 
     expect(await readFile(join(staged.staging, "desk.mjs"), "utf8")).toBe("export {};\n");
   });
+
+  it("verify passes an installed version whose files match its files.sha256", async () => {
+    const versions = new NodeAppVersions(await deskHome());
+    const staged = await versions.stage(await runtime());
+    if (!staged.ok) throw new Error("stage failed");
+    await versions.commit(staged.staging, "0.3.1-dev.x+a1b2c3d");
+
+    expect(await versions.verify("0.3.1-dev.x+a1b2c3d")).toBe(true);
+  });
+
+  it.each([
+    ["a changed file", (dir: string) => writeFile(join(dir, "desk.mjs"), "export const x = 1;\n")],
+    ["an added file", (dir: string) => writeFile(join(dir, "extra.mjs"), "")],
+    ["a missing file", async (dir: string) => (await import("node:fs/promises")).rm(join(dir, "desk.mjs"))],
+    ["a symbolic link", (dir: string) => symlink("/etc/hosts", join(dir, "hosts"))],
+  ])("verify refuses an installed version with %s", async (_label, change) => {
+    const home = await deskHome();
+    const versions = new NodeAppVersions(home);
+    const staged = await versions.stage(await runtime());
+    if (!staged.ok) throw new Error("stage failed");
+    await versions.commit(staged.staging, "0.3.1-dev.x+a1b2c3d");
+    const dir = join(home, "app", "0.3.1-dev.x+a1b2c3d");
+    await chmod(dir, 0o700);
+    await chmod(join(dir, "desk.mjs"), 0o644).catch(() => undefined);
+
+    await change(dir);
+
+    expect(await versions.verify("0.3.1-dev.x+a1b2c3d")).toBe(false);
+  });
 });

@@ -17,4 +17,5 @@ export const LIVE_PORTS = {
   reuse: 9517,
   watch: 9527,
   agents: 9547,
+  install: 9557,
 } as const;

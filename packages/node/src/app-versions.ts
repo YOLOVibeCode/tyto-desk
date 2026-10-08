@@ -56,6 +56,24 @@ async function copyTree(from: string, to: string, rel: string): Promise<string[]
   return copied;
 }
 
+/** The regular files under `dir`, relative and `/`-separated; `null` when it holds anything else (a link, a socket). */
+async function listTree(dir: string, rel: string): Promise<string[] | null> {
+  const found: string[] = [];
+  for (const entry of await readdir(join(dir, rel), { withFileTypes: true })) {
+    const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      const inner = await listTree(dir, path);
+      if (inner === null) return null;
+      found.push(...inner);
+    } else if (entry.isFile()) {
+      found.push(path);
+    } else {
+      return null;
+    }
+  }
+  return found;
+}
+
 /**
  * `~/.desk/app` (docs/IMPLEMENTATION.md §23.5): versions side by side, each complete once installed, and `current`, a
  * relative symlink that changes only by renaming a new link over it. A runtime is copied into `.staging-<id>` and
@@ -145,6 +163,23 @@ export class NodeAppVersions implements AppVersions {
       throw err;
     }
     return { ok: true, staging, versionJson, build: createHash("sha256").update(listText).digest("hex") };
+  }
+
+  async verify(version: string): Promise<boolean> {
+    if (!isVersionName(version)) return false;
+    const dir = join(this.appDir, version);
+    await assertPathAllowed(dir);
+    const listText = await readFile(join(dir, FILES_SHA256), "utf8").catch(() => null);
+    const listed = listText === null ? null : parseFilesSha256(listText);
+    if (listed === null) return false;
+    const present = await listTree(dir, "");
+    if (present === null) return false;
+    const files = present.filter((path) => path !== FILES_SHA256);
+    if (files.length !== listed.size) return false;
+    for (const path of files) {
+      if (listed.get(path) !== (await fileSha256(join(dir, ...path.split("/"))))) return false;
+    }
+    return true;
   }
 
   async commit(staging: string, version: string): Promise<void> {

@@ -223,3 +223,25 @@ describe("which processes use the Desk profile, and who listens on its port (§6
     expect(await new NodeListenerInfo({ procRoot: proc }).image(5100)).toBeNull();
   });
 });
+
+describe("a login shell's names (docs/IMPLEMENTATION.md §15.3)", () => {
+  it("exportedNames runs the login shell with a constant payload and returns names only", async () => {
+    const shell = await fakeExecutable("zsh", [{ match: ["-l", "-i", "-c", "env | cut -d= -f1"], stdout: "Welcome!\nHOME\nPATH\nANTHROPIC_API_KEY\nPATH\n" }]);
+
+    const names = await new NodeLoginShell({ shell: shell.path, env: { HOME: "/Users/alex", PATH: "/usr/bin:/bin", SECRET: "x" } }).exportedNames();
+
+    expect(names).toEqual(["ANTHROPIC_API_KEY", "HOME", "PATH"]);
+    const [call] = await shell.calls();
+    expect(call?.argv).toEqual(["-l", "-i", "-c", "env | cut -d= -f1"]);
+    expect(call?.env.SECRET).toBeUndefined();
+  });
+
+  it("which passes the command as an argument, never inside the payload", async () => {
+    const shell = await fakeExecutable("zsh", [{ match: ["-l", "-c"], stdout: "/Users/alex/.local/bin/desk\n" }]);
+    const login = new NodeLoginShell({ shell: shell.path, env: { HOME: "/Users/alex" } });
+
+    expect(await login.which("desk")).toBe("/Users/alex/.local/bin/desk");
+    expect(await login.which("desk; rm -rf ~")).toBeNull();
+    expect((await shell.calls()).map((call) => call.argv)).toEqual([["-l", "-c", 'command -v -- "$1"', "desk-which", "desk"]]);
+  });
+});

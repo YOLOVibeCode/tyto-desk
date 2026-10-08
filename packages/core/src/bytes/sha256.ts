@@ -81,3 +81,22 @@ export function sha256(data: Uint8Array): Uint8Array {
   for (let i = 0; i < 8; i += 1) out.setUint32(i * 4, at(h, i));
   return digest;
 }
+
+/** A text's UTF-8 bytes (core has no TextEncoder); an unpaired surrogate becomes U+FFFD, as TextEncoder does. */
+export function utf8(text: string): Uint8Array {
+  const bytes: number[] = [];
+  for (const char of text) {
+    let code = char.codePointAt(0) ?? 0xfffd;
+    if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+    if (code < 0x80) bytes.push(code);
+    else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 63));
+    else if (code < 0x10000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+    else bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 63), 0x80 | ((code >> 6) & 63), 0x80 | (code & 63));
+  }
+  return Uint8Array.from(bytes);
+}
+
+/** The sha256 of a text's UTF-8 bytes, as lowercase hex. */
+export function sha256Hex(text: string): string {
+  return [...sha256(utf8(text))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}

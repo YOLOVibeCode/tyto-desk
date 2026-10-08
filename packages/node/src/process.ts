@@ -145,10 +145,46 @@ export class NodeListenerInfo implements ListenerInfo {
 }
 
 /** The account's passwd shell, which no environment variable changes. */
+/** The variables a login shell starts with: who and where you are, never anything else of Desk's environment. */
+const LOGIN_SHELL_ENV = ["HOME", "USER", "LOGNAME", "PATH", "LANG", "TERM"];
+
+/**
+ * The account's passwd shell, and what a login shell of it exports (§15.3): `[shell, "-l", "-i", "-c", "env | cut -d=
+ * -f1"]`, a constant payload, so values never leave the child; `which` passes the command as `$1`, never in the payload.
+ */
 export class NodeLoginShell implements LoginShell {
+  private readonly env: Record<string, string>;
+  private readonly shellOverride: string | null;
+
+  constructor(options: { env?: Readonly<Record<string, string | undefined>>; shell?: string } = {}) {
+    this.env = {};
+    for (const name of LOGIN_SHELL_ENV) {
+      const value = (options.env ?? process.env)[name];
+      if (value !== undefined) this.env[name] = value;
+    }
+    this.shellOverride = options.shell ?? null;
+  }
+
   async passwdShell(): Promise<string | null> {
+    if (this.shellOverride !== null) return this.shellOverride;
     const shell = userInfo().shell;
     return shell === null || shell === "" ? null : shell;
+  }
+
+  async exportedNames(): Promise<readonly string[] | null> {
+    const shell = await this.passwdShell();
+    if (shell === null) return null;
+    const result = await runArgv(shell, ["-l", "-i", "-c", "env | cut -d= -f1"], { env: this.env, timeoutMs: 10_000, maxBytes: 1024 * 1024 });
+    if (result.code !== 0) return null;
+    return [...new Set(result.stdout.split("\n").filter((line) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(line)))].sort();
+  }
+
+  async which(command: string): Promise<string | null> {
+    const shell = await this.passwdShell();
+    if (shell === null || !/^[\w.-]+$/.test(command)) return null;
+    const result = await runArgv(shell, ["-l", "-c", 'command -v -- "$1"', "desk-which", command], { env: this.env, timeoutMs: 10_000 });
+    const found = result.stdout.trim().split("\n").at(-1) ?? "";
+    return result.code === 0 && found.startsWith("/") ? found : null;
   }
 }
 

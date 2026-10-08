@@ -5,4 +5,6 @@
 export interface NativeHostDir {
   read(name: string): Promise<string | null>;
   write(name: string, text: string): Promise<void>;
+  /** Removes a manifest; nothing when there is none. */
+  remove(name: string): Promise<void>;
 }
