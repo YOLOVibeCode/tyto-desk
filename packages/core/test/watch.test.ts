@@ -516,13 +516,13 @@ describe("desk watch follows the Desk Chrome (slice 3b, §6.4)", () => {
     expect(watch.extension.loads).toEqual([]);
   });
 
-  it("a panel the worker counts as open but that is not connected to the daemon for two checks is closed and reopened", async () => {
+  it("a panel the worker counts as open but that is not connected to the daemon for three checks is closed and reopened", async () => {
     const watch = setup();
     await settle();
     watch.daemon.panels = [];
     watch.bridge.windowList = [win(1, { lastFocused: true, focused: false, panelOpen: true })];
 
-    await pass(watch.clock, 7_000);
+    await pass(watch.clock, 9_000);
 
     expect(watch.bridge.autoOpens).toEqual([{ windowId: 1, close: true }]);
     expect(watch.panels.opened).toEqual([{ extensionId: DESK_EXTENSION_ID, tab: "tab-1" }]);

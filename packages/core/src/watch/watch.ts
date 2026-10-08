@@ -434,7 +434,7 @@ export class ChromeWatch {
   /**
    * Every 2 s while Chrome is followed, since Chrome does not always report a side panel's crash: a service worker gone
    * for two checks in a row means the extension's renderer died; a window whose panel the worker counts as open but
-   * from which no panel is connected to the daemon, for two checks in a row, holds a dead panel. Either is recovered.
+   * from which no panel is connected to the daemon, for three checks in a row, holds a dead panel. Either is recovered.
    */
   private async health(): Promise<void> {
     let misses = 0;
@@ -461,7 +461,8 @@ export class ChromeWatch {
       const suspects = windows.filter((entry) => entry.panelOpen && !connected.has(entry.id)).map((entry) => entry.id);
       for (const id of [...dead.keys()]) if (!suspects.includes(id)) dead.delete(id);
       for (const id of suspects) dead.set(id, (dead.get(id) ?? 0) + 1);
-      const confirmed = [...dead].filter(([, count]) => count >= 2).map(([id]) => id);
+      // Three checks (4 to 6 s): a panel that is still loading says hello well within that.
+      const confirmed = [...dead].filter(([, count]) => count >= 3).map(([id]) => id);
       if (confirmed.length === 0) continue;
       dead.clear();
       await this.recover(new Set(confirmed), "panel-crashed").catch((err: unknown) => this.warn(err));

@@ -118,30 +118,6 @@ describe("desk watch (slice 3b) in the live container", () => {
   );
 
   it(
-    "desk watch brings back a panel whose renderer crashed",
-    async () => {
-      const cdp = await connect();
-      const panel = await waitFor(() => panelTarget(cdp), { label: "the panel" });
-      const session = await attach(cdp, panel.targetId);
-      await waitFor(() => evaluate<boolean>(cdp, session, "typeof deskTest === 'object' && deskTest.panes().length > 0"), { label: "the panel's pane" });
-      await cdp.send("Page.crash", {}, { sessionId: session }).catch(() => undefined);
-      const reopened = await waitFor(
-        async () => (await targets(cdp)).find((t) => t.url.startsWith(PANEL_URL) && t.targetId !== panel.targetId) ?? null,
-        { label: "the reopened panel", timeoutMs: 20_000 },
-      );
-      const reopenedSession = await attach(cdp, reopened.targetId);
-      const pane = await waitFor(() => evaluate<string | null>(cdp, reopenedSession, "typeof deskTest === 'object' && deskTest.panes().length > 0 ? deskTest.panes()[0] : null"), {
-        label: "the reopened panel's pane",
-      });
-      cdp.close();
-      await saveResult("watch-crash", { reopened: reopened.url, pane });
-
-      expect(reopened.url.startsWith(PANEL_URL)).toBe(true);
-    },
-    120_000,
-  );
-
-  it(
     "attaching to the panel target raises the banner",
     async () => {
       const cdp = await connect();

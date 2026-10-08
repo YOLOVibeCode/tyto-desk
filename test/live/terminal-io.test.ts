@@ -263,9 +263,10 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
     "keystroke-to-echo p50 and p95 are recorded",
     async () => {
       const second = await connectPanel(false);
-      // The pane's owner, in the window the second-window test left in front.
-      await waitFor(async () => (await screen(second)).length > 0, { label: "a screen" });
+      // The pane's owner, in the window the second-window test left in front, at a prompt.
+      await waitFor(async () => (await screen(second)).trimEnd().endsWith("desk-live %"), { label: "a prompt", timeoutMs: 20_000 });
       await typeLine("cat", second);
+      await waitFor(async () => /\ncat\n?$/.test((await screen(second)).trimEnd() + "\n") || (await screen(second)).trimEnd().endsWith("cat"), { label: "cat running" });
       const times: number[] = [];
       for (let i = 0; i < 40; i += 1) {
         const mark = String.fromCharCode(97 + (i % 26));
