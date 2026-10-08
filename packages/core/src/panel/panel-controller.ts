@@ -262,7 +262,7 @@ export class PanelController {
       }
       case "alert": {
         const text = ALERTS[message.kind];
-        if (text !== undefined) this.ports.view.banner(text);
+        if (text !== undefined) this.ports.view.alert(text);
         return;
       }
       case "layout":

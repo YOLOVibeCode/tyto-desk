@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { daemonEnvironment, newGuardedPort, terminalBinary } from "@desk/core";
+import { newGuardedPort, terminalBinary, watchEnvironment } from "@desk/core";
 import { CryptoRandom, FileConfigStore, NodeDetachedSpawner, NodeInstanceLock, NodePortProbe, NodeProcessSignals, NodeTextFiles, SystemClock } from "@desk/node";
 import type { CommandResult } from "./install.ts";
 
@@ -22,7 +22,7 @@ export async function newPortCommand(input: { env: NodeJS.ProcessEnv; platform: 
       watchCommand: {
         file: join(input.appDir, terminalBinary(input.platform)),
         args: [join(input.appDir, "desk.mjs"), "watch"],
-        env: { ...daemonEnvironment(input.env), DESK_HOME: input.deskHome },
+        env: watchEnvironment(input.env, input.deskHome),
       },
     },
   );

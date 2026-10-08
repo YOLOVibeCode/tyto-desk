@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WorkerController } from "../src/index.ts";
-import { FakeAgentTabs, FakeClock, FakeExtensionWindows, FakeHostConnector, FakeSidePanelApi, FakeTabTargets } from "../src/testing/index.ts";
+import { FakeAgentTabs, FakeClock, FakeExtensionWindows, FakeHostConnector, FakePanelQuestions, FakeSidePanelApi, FakeTabTargets } from "../src/testing/index.ts";
 
 function setup(options: { open?: number[] } = {}) {
   const connector = new FakeHostConnector();
@@ -13,8 +13,9 @@ function setup(options: { open?: number[] } = {}) {
   const tabs = new FakeTabTargets({ active: new Map([[7, 70]]), targets: new Map([[70, "TAB-70"], [71, "TAB-71"]]) });
   const agentTabs = new FakeAgentTabs();
   agentTabs.onCreate = (tabId) => tabs.targets.set(tabId, `TAB-${tabId}`);
-  const worker = new WorkerController({ connector, sidePanel, windows, tabs, agentTabs, clock, build: "0.3.0" });
-  return { connector, sidePanel, windows, tabs, agentTabs, clock, worker };
+  const questions = new FakePanelQuestions();
+  const worker = new WorkerController({ connector, sidePanel, windows, tabs, agentTabs, clock, questions, build: "0.3.0" });
+  return { connector, sidePanel, windows, tabs, agentTabs, clock, questions, worker };
 }
 
 /** Lets the worker's pending promises run. */
@@ -185,5 +186,99 @@ describe("the service worker", () => {
 
     expect(connector.last().posted.at(-1)).toEqual({ type: "ext.result", id: "t5", ok: false, error: "bad-args" });
     expect(agentTabs.created).toEqual([]);
+  });
+
+  it("an automatic open makes the next panel open with focus=0, and that panel's open puts panel.html back", async () => {
+    const { connector, sidePanel, worker } = setup();
+    await worker.start();
+
+    connector.last().deliver({ type: "ext.call", id: "x9", op: "autoOpen", args: { window: 7, close: false } });
+    await settle();
+    const ready = [...sidePanel.paths];
+    sidePanel.show(7);
+    await settle();
+
+    expect(connector.last().posted.at(-1)).toEqual({ type: "ext.result", id: "x9", ok: true });
+    expect(ready).toEqual(["panel.html?focus=0"]);
+    expect(sidePanel.paths).toEqual(["panel.html?focus=0", "panel.html"]);
+    expect(sidePanel.closes).toEqual([]);
+  });
+
+  it("an automatic open with close closes the window's panel first (a crashed one)", async () => {
+    const { connector, sidePanel, worker } = setup({ open: [7] });
+    await worker.start();
+
+    connector.last().deliver({ type: "ext.call", id: "x10", op: "autoOpen", args: { window: 7, close: true } });
+    await settle();
+
+    expect(sidePanel.closes).toEqual([7]);
+    expect(sidePanel.paths).toEqual(["panel.html?focus=0"]);
+  });
+
+  it("an automatic open that never comes puts panel.html back after 10 s", async () => {
+    const { connector, sidePanel, clock, worker } = setup();
+    await worker.start();
+
+    connector.last().deliver({ type: "ext.call", id: "x11", op: "autoOpen", args: { window: 7, close: false } });
+    await settle();
+    await clock.advance(10_000);
+
+    expect(sidePanel.paths).toEqual(["panel.html?focus=0", "panel.html"]);
+  });
+
+  it("the worker answers an automatic open without a window id with an error", async () => {
+    const { connector, sidePanel, worker } = setup();
+    await worker.start();
+
+    connector.last().deliver({ type: "ext.call", id: "x12", op: "autoOpen", args: { close: true } });
+    await settle();
+
+    expect(connector.last().posted.at(-1)).toEqual({ type: "ext.result", id: "x12", ok: false, error: "bad-args" });
+    expect(sidePanel.paths).toEqual([]);
+  });
+
+  it("the next panel to load after an automatic open is told not to take the keyboard, and only that one", async () => {
+    const { connector, questions, sidePanel, worker } = setup();
+    await worker.start();
+    connector.last().deliver({ type: "ext.call", id: "x13", op: "autoOpen", args: { window: 7, close: false } });
+    await settle();
+
+    const first = questions.ask();
+    const second = questions.ask();
+    await settle();
+
+    expect([first, second]).toEqual([false, true]);
+    expect(sidePanel.paths).toEqual(["panel.html?focus=0", "panel.html"]);
+  });
+
+  it("a panel that asks after Chrome reported it open is still told not to take the keyboard", async () => {
+    const { connector, questions, sidePanel, worker } = setup();
+    await worker.start();
+    connector.last().deliver({ type: "ext.call", id: "x14", op: "autoOpen", args: { window: 7, close: false } });
+    await settle();
+
+    sidePanel.show(7);
+    await settle();
+
+    expect(questions.ask()).toBe(false);
+    expect(sidePanel.paths).toEqual(["panel.html?focus=0", "panel.html"]);
+  });
+
+  it("an automatic open that no panel asked about lets the next panel take the keyboard after 10 s", async () => {
+    const { connector, clock, questions, worker } = setup();
+    await worker.start();
+    connector.last().deliver({ type: "ext.call", id: "x15", op: "autoOpen", args: { window: 7, close: false } });
+    await settle();
+
+    await clock.advance(10_000);
+
+    expect(questions.ask()).toBe(true);
+  });
+
+  it("a panel the user opens takes the keyboard", async () => {
+    const { questions, worker } = setup();
+    await worker.start();
+
+    expect(questions.ask()).toBe(true);
   });
 });

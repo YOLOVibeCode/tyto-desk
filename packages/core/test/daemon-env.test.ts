@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daemonEnvironment } from "../src/index.ts";
+import { daemonEnvironment, watchEnvironment } from "../src/index.ts";
 
 const chromeEnv = {
   HOME: "/Users/alex",
@@ -30,5 +30,24 @@ describe("the daemon's environment", () => {
 
   it.each(["ANTHROPIC_API_KEY", "NODE_OPTIONS", "TMUX", "CHROME_DESKTOP"])("the host never passes %s to the daemon", (name) => {
     expect(daemonEnvironment(chromeEnv)[name]).toBeUndefined();
+  });
+});
+
+describe("desk watch's environment", () => {
+  it.each([
+    ["the installed launcher", { DESK_ALLOW_GUI: "1" }, "DESK_ALLOW_GUI", "1"],
+    ["the Linux test container", { DESK_IN_CONTAINER: "1" }, "DESK_IN_CONTAINER", "1"],
+    ["a DESK_NO_GUI kill switch", { DESK_NO_GUI: "1" }, "DESK_NO_GUI", "1"],
+  ])("desk watch keeps the GUI permission of %s, so a crash relaunch can start Chrome", (_, extra, name, value) => {
+    expect(watchEnvironment({ ...chromeEnv, ...extra }, "/Users/alex/.desk")[name]).toBe(value);
+  });
+
+  it("desk watch's environment is the daemon's allowlist with its Desk home", () => {
+    const env = watchEnvironment(chromeEnv, "/Users/alex/.desk2");
+
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(env.DESK_HOME).toBe("/Users/alex/.desk2");
+    expect(env.HOME).toBe("/Users/alex");
   });
 });

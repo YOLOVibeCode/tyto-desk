@@ -22,14 +22,16 @@ export const CDP_COMMAND_MS = 5_000;
 
 /**
  * One CDP session on the browser target (docs/IMPLEMENTATION.md §2, packages/chrome): commands with ids and budgets,
- * answers matched by id, on the browser session or a target's flattened session. Events are ignored: the role adapters
- * only ask. Desk never attaches to its own extension targets.
+ * answers matched by id, on the browser session or a target's flattened session. Events reach `onEvent` listeners
+ * (`desk watch`'s target watch); the role adapters only ask. Desk never attaches to its own extension targets.
  */
 export class CdpConnection {
   private readonly transport: CdpTransport;
   private readonly pending = new Map<number, Pending>();
   private nextId = 0;
   private closed = false;
+  private readonly eventListeners: ((method: string, params: Record<string, unknown>) => void)[] = [];
+  private readonly closeListeners: (() => void)[] = [];
 
   constructor(transport: CdpTransport) {
     this.transport = transport;
@@ -57,6 +59,17 @@ export class CdpConnection {
     this.end();
   }
 
+  /** Browser-session events (no `id`), in the order Chrome sends them. */
+  onEvent(listener: (method: string, params: Record<string, unknown>) => void): void {
+    this.eventListeners.push(listener);
+  }
+
+  /** Runs once, when the connection ends (Chrome went away, or `close()`). */
+  onClose(listener: () => void): void {
+    if (this.closed) listener();
+    else this.closeListeners.push(listener);
+  }
+
   private receive(text: string): void {
     let message: unknown;
     try {
@@ -64,7 +77,13 @@ export class CdpConnection {
     } catch {
       return;
     }
-    if (typeof message !== "object" || message === null || !("id" in message) || typeof message.id !== "number") return;
+    if (typeof message !== "object" || message === null) return;
+    if (!("id" in message) && "method" in message && typeof message.method === "string" && !("sessionId" in message)) {
+      const params = "params" in message && typeof message.params === "object" && message.params !== null ? (message.params as Record<string, unknown>) : {};
+      for (const listener of this.eventListeners) listener(message.method, params);
+      return;
+    }
+    if (!("id" in message) || typeof message.id !== "number") return;
     const pending = this.pending.get(message.id);
     if (pending === undefined) return;
     this.pending.delete(message.id);
@@ -74,7 +93,9 @@ export class CdpConnection {
   }
 
   private end(): void {
+    if (this.closed) return;
     this.closed = true;
+    for (const listener of this.closeListeners.splice(0)) listener();
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.resolve({ ok: false, reason: "closed" });

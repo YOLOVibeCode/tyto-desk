@@ -1,6 +1,7 @@
 import type { BrowserLifecycle } from "./browser-lifecycle.ts";
 import type { ChromeSettings } from "./chrome-settings.ts";
 import type { DeskExtension } from "./desk-extension.ts";
+import type { PageFocus } from "./page-focus.ts";
 import type { PanelOpener } from "./panel-opener.ts";
 
 /** One CDP connection to the Desk Chrome's browser session, seen through the role ports `desk` and `desk quit` need. */
@@ -9,6 +10,7 @@ export type BrowserSession = {
   panels: PanelOpener;
   settings: ChromeSettings;
   lifecycle: BrowserLifecycle;
+  pages: PageFocus;
   close(): void;
 };
 

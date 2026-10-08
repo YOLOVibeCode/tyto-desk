@@ -53,4 +53,8 @@ export class DaemonExtensionBridge implements ExtensionBridge {
   async tabMine(pane: string): Promise<string | null> {
     return targetId(await this.call({ type: "ext.call", op: "tabMine", args: { pane } }));
   }
+
+  async autoOpen(windowId: number, close: boolean): Promise<boolean> {
+    return (await this.call({ type: "ext.call", op: "autoOpen", args: { window: windowId, close } }))?.ok === true;
+  }
 }

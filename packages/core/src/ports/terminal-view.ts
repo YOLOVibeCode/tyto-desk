@@ -33,4 +33,6 @@ export interface TerminalView {
   banner(text: string | null, action?: BannerAction): void;
   /** Asks the user a yes-or-no question in the panel ("Paste 3 lines?"). */
   confirm(question: string): Promise<boolean>;
+  /** Shows an alert from `desk watch` on a red line of its own, which no banner hides (§9). */
+  alert(text: string): void;
 }

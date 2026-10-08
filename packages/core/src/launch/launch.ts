@@ -170,6 +170,8 @@ export async function launch(ports: LaunchPorts, input: LaunchInput): Promise<La
       wsUrl = found.wsUrl;
     } else {
       if (found.clearStale) await profile.clearStaleSingleton();
+      // A marker that `desk quit --all` left (its watch stopped before reading it) would stop the next crash relaunch.
+      await ports.files.remove(`${input.deskHome}/run/quit.marker`);
       firstRun = await profile.seedFirstRun(FIRST_RUN_PREFS);
       const args = chromeArgs({
         chrome: config.chrome,

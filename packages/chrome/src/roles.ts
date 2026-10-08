@@ -1,6 +1,6 @@
-import type { BrowserConnector, BrowserLifecycle, BrowserSession, DeskExtension, PanelOpener } from "@desk/core";
+import { DESK_EXTENSION_ID, type BrowserConnector, type BrowserLifecycle, type BrowserSession, type DeskExtension, type PageFocus, type PanelOpener } from "@desk/core";
 import { assertPortAllowed } from "@desk/node";
-import { CdpConnection, openWebSocket } from "./cdp.ts";
+import { CDP_COMMAND_MS, CdpConnection, openWebSocket } from "./cdp.ts";
 import { browserEndpointPort } from "./endpoint.ts";
 import { CdpChromeSettings } from "./settings.ts";
 
@@ -80,6 +80,32 @@ export class CdpPanelOpener implements PanelOpener {
 }
 
 /** Ends the Desk Chrome with `Browser.close` (§6.3), never a signal; Chrome may drop the connection before it answers. */
+/**
+ * Gives a page the keyboard back (`PageFocus`, D108): `Page.bringToFront` on the page's own flattened session, then
+ * detaches. It refuses any target of the Desk extension, so Desk still never attaches to its own targets.
+ */
+export class CdpPageFocus implements PageFocus {
+  private readonly cdp: CdpConnection;
+
+  constructor(cdp: CdpConnection) {
+    this.cdp = cdp;
+  }
+
+  async bringToFront(targetId: string): Promise<boolean> {
+    const info = await this.cdp.send("Target.getTargetInfo", { targetId });
+    const target = info.ok ? (info.result.targetInfo as { type?: unknown; url?: unknown } | undefined) : undefined;
+    if (target?.type !== "page" || typeof target.url !== "string" || target.url.startsWith(`chrome-extension://${DESK_EXTENSION_ID}/`)) return false;
+    const attached = await this.cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    const sessionId = attached.ok ? attached.result.sessionId : undefined;
+    if (typeof sessionId !== "string") return false;
+    try {
+      return (await this.cdp.send("Page.bringToFront", {}, CDP_COMMAND_MS, sessionId)).ok;
+    } finally {
+      await this.cdp.send("Target.detachFromTarget", { sessionId });
+    }
+  }
+}
+
 export class CdpBrowserLifecycle implements BrowserLifecycle {
   private readonly cdp: CdpConnection;
 
@@ -112,6 +138,7 @@ export class CdpBrowserConnector implements BrowserConnector {
         panels: new CdpPanelOpener(cdp),
         settings: new CdpChromeSettings(cdp),
         lifecycle: new CdpBrowserLifecycle(cdp),
+        pages: new CdpPageFocus(cdp),
         close: () => cdp.close(),
       },
     };

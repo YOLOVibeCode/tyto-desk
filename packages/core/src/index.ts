@@ -35,7 +35,7 @@ export {
   type DeskConfig,
   type FocusGuard,
 } from "./config/schema.ts";
-export { daemonEnvironment } from "./env/daemon-env.ts";
+export { daemonEnvironment, watchEnvironment } from "./env/daemon-env.ts";
 export type { Env } from "./env/env.ts";
 export { shellEnv, type AgentVariables, type ShellEnvInput } from "./env/shell-env.ts";
 export { DESK_EXTENSION_ID, DESK_EXTENSION_ORIGIN, NATIVE_HOST_NAME } from "./extension/desk-extension.ts";
@@ -76,7 +76,7 @@ export {
 export { ensurePanel, type PanelResult } from "./launch/panel.ts";
 export { pollUntil } from "./launch/poll.ts";
 export { applyChromeSettings, BACKGROUND_MODE_WARNING } from "./launch/settings.ts";
-export { runWatch, type WatchPorts } from "./watch/watch.ts";
+export { ChromeWatch, runWatch, type WatchInput, type WatchPorts } from "./watch/watch.ts";
 export { RESTART_QUESTION, daemonRestart, deskStatus, type StatusPorts } from "./status/status.ts";
 export { QUIT_ALL_QUESTION, quit, type QuitInput, type QuitPorts, type QuitResult } from "./quit/quit.ts";
 export { SETTINGS_PREFS } from "./ports/chrome-settings.ts";

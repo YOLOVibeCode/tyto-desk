@@ -1,15 +1,17 @@
-/* The Desk panel: the banner above, the terminal filling the rest. The theme follows macOS light or dark mode. */
+/* The Desk panel: an alert line (red) and the banner above, the terminal filling the rest. The theme follows macOS light or dark mode. */
 :root {
   color-scheme: light dark;
   --desk-background: #ffffff;
   --desk-foreground: #1d1d1f;
   --desk-banner: #fff4d6;
+  --desk-alert: #b3261e;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --desk-background: #111111;
     --desk-foreground: #e5e5e5;
     --desk-banner: #3a2f0b;
+    --desk-alert: #8c1d18;
   }
 }
 html,
@@ -29,8 +31,15 @@ body {
   background: var(--desk-banner);
   font: 12px -apple-system, "Segoe UI", sans-serif;
 }
-#banner[hidden] {
+#banner[hidden],
+#alert[hidden] {
   display: none;
+}
+#alert {
+  padding: 6px 10px;
+  background: var(--desk-alert);
+  color: #ffffff;
+  font: 600 12px -apple-system, "Segoe UI", sans-serif;
 }
 #terminal {
   flex: 1;

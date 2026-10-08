@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { daemonEnvironment, launch, terminalBinary } from "@desk/core";
+import { launch, terminalBinary, watchEnvironment } from "@desk/core";
 import { CdpBrowserConnector, HttpDevTools, NodeChromeProcess, NodeChromeProfile, NodeNativeHostDir } from "@desk/chrome";
 import {
   CryptoRandom,
@@ -60,7 +60,7 @@ export async function launchCommand(input: {
       watchCommand: {
         file: join(input.appDir, terminalBinary(input.platform)),
         args: [join(input.appDir, "desk.mjs"), "watch"],
-        env: { ...daemonEnvironment(input.env), DESK_HOME: input.deskHome },
+        env: watchEnvironment(input.env, input.deskHome),
       },
     },
   );

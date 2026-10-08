@@ -30,6 +30,21 @@ export class NodeChromeProfile implements ChromeProfile {
     return { host: match[1], pid: Number(match[2]) };
   }
 
+  async exitType(): Promise<string | null> {
+    const file = join(this.userDataDir, "Default", "Preferences");
+    await assertPathAllowed(file);
+    const text = await readIfExists(file);
+    if (text === null) return null;
+    try {
+      const value: unknown = JSON.parse(text);
+      const profile = typeof value === "object" && value !== null ? (value as Record<string, unknown>).profile : undefined;
+      const exit = typeof profile === "object" && profile !== null ? (profile as Record<string, unknown>).exit_type : undefined;
+      return typeof exit === "string" ? exit : null;
+    } catch {
+      return null;
+    }
+  }
+
   async clearStaleSingleton(): Promise<void> {
     for (const name of ["SingletonLock", "SingletonCookie", "SingletonSocket"]) {
       const path = join(this.userDataDir, name);

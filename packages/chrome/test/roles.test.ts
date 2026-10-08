@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CdpBrowserConnector, CdpConnection, CdpDeskExtension, CdpPanelOpener, openWebSocket } from "../src/index.ts";
+import { CdpBrowserConnector, CdpConnection, CdpDeskExtension, CdpPageFocus, CdpPanelOpener, openWebSocket } from "../src/index.ts";
 import { FakeCdp } from "./fake-cdp.ts";
 
 const EXTENSION_ID = "nmnljgjkacmplpfllopodplgmpjogdbf";
@@ -114,5 +114,36 @@ describe("the browser connector", () => {
 
   it("opening a CDP WebSocket refuses a reserved port under Vitest, whoever asks", () => {
     expect(() => openWebSocket("ws://127.0.0.1:9417/devtools/browser/0f1e2d3c")).toThrow(/reserved port 9417/);
+  });
+});
+
+describe("giving a page the keyboard back (D108)", () => {
+  const page = (url: string, type = "page") => () => ({ targetInfo: { targetId: "T1", type, url, attached: false } });
+
+  it("PageFocus brings the page to the front on its own session and detaches", async () => {
+    const transport = new FakeCdp()
+      .on("Target.getTargetInfo", page("https://example.test/form"))
+      .on("Target.attachToTarget", () => ({ sessionId: "S1" }))
+      .on("Page.bringToFront", () => ({}))
+      .on("Target.detachFromTarget", () => ({}));
+
+    expect(await new CdpPageFocus(new CdpConnection(transport)).bringToFront("T1")).toBe(true);
+    expect(transport.sent.map((entry) => [entry.method, entry.sessionId ?? null])).toEqual([
+      ["Target.getTargetInfo", null],
+      ["Target.attachToTarget", null],
+      ["Page.bringToFront", "S1"],
+      ["Target.detachFromTarget", null],
+    ]);
+  });
+
+  it.each([
+    ["a Desk panel", page(`chrome-extension://${EXTENSION_ID}/panel.html`)],
+    ["the Desk worker", page(`chrome-extension://${EXTENSION_ID}/sw.js`, "service_worker")],
+    ["a target that is not a page", page("https://example.test/", "iframe")],
+  ])("PageFocus never attaches to %s", async (_, info) => {
+    const transport = new FakeCdp().on("Target.getTargetInfo", info).on("Target.attachToTarget", () => ({ sessionId: "S1" }));
+
+    expect(await new CdpPageFocus(new CdpConnection(transport)).bringToFront("T1")).toBe(false);
+    expect(transport.methods()).toEqual(["Target.getTargetInfo"]);
   });
 });

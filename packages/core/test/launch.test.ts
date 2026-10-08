@@ -709,6 +709,24 @@ describe("desk, reuse and classification (slice 3b, §6.1 step 4, §6.2)", () =>
     expect(desk.chrome.starts).toHaveLength(1);
   });
 
+  it("a launch removes the quit marker an earlier desk quit left, so desk watch relaunches the next crash", async () => {
+    const desk = setup();
+    await desk.files.write(`${deskHome}/run/quit.marker`, "1\n", 0o600);
+
+    await desk.run();
+
+    expect(await desk.files.read(`${deskHome}/run/quit.marker`)).toBeNull();
+  });
+
+  it("reuse leaves a quit marker alone, since desk quit may be closing Chrome right now", async () => {
+    const desk = await running();
+    await desk.files.write(`${deskHome}/run/quit.marker`, "1\n", 0o600);
+
+    await desk.run();
+
+    expect(await desk.files.read(`${deskHome}/run/quit.marker`)).toBe("1\n");
+  });
+
   it("a dead singleton lock naming another host is removed when no process uses the profile", async () => {
     const desk = setup();
     desk.profile.lock = { host: "old-name.local", pid: 4242 };

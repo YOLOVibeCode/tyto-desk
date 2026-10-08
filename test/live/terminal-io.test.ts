@@ -150,7 +150,9 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       await typeLine("tmux kill-session -t desklive");
       await saveResult("terminal-full-screen", { vimBefore, vimAfter, tmuxBefore, tmuxAfter });
 
-      expect(vimAfter).toEqual(vimBefore);
+      // The panel's height may change across the relaunch (desk watch's alert line), so vi's filler rows may differ.
+      const vimText = (shown: string[]) => shown.filter((line) => line !== "~" && line !== "");
+      expect(vimText(vimAfter)).toEqual(vimText(vimBefore));
       // tmux's status line ends with a clock, which may move on during the re-attach.
       const steady = (shown: string[]) => shown.filter((line) => line.includes("[desklive]") || line.includes("inside-tmux")).map((line) => line.replace(/\d{1,2}:\d{2}.*$/, ""));
       expect(steady(tmuxAfter)).toEqual(steady(tmuxBefore));
@@ -261,9 +263,10 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
     "keystroke-to-echo p50 and p95 are recorded",
     async () => {
       const second = await connectPanel(false);
-      // The pane's owner, in the window the second-window test left in front.
-      await waitFor(async () => (await screen(second)).length > 0, { label: "a screen" });
+      // The pane's owner, in the window the second-window test left in front, at a prompt.
+      await waitFor(async () => (await screen(second)).trimEnd().endsWith("desk-live %"), { label: "a prompt", timeoutMs: 20_000 });
       await typeLine("cat", second);
+      await waitFor(async () => /\ncat\n?$/.test((await screen(second)).trimEnd() + "\n") || (await screen(second)).trimEnd().endsWith("cat"), { label: "cat running" });
       const times: number[] = [];
       for (let i = 0; i < 40; i += 1) {
         const mark = String.fromCharCode(97 + (i % 26));

@@ -300,8 +300,6 @@ describe("the panel's states (docs/IMPLEMENTATION.md §9's panel-state table)", 
   it.each([
     [{ type: "notice", kind: "tmux-line-missing" }, "Agents can't see this Desk until the tmux line is added (desk install); then open a new pane"],
     [{ type: "notice", kind: "agents-paused" }, "Agents are paused: desk agents resume lets them drive this Desk again"],
-    [{ type: "alert", kind: "terminal-attached" }, "Something is attached to this terminal: DevTools, or a CDP client on the raw port"],
-    [{ type: "alert", kind: "agent-state-saved" }, "A Desk agent session saved browser state into your agent-browser files"],
   ])("the panel shows the notice %j in its banner", (message, text) => {
     const { connector, view, panel } = setup();
     panel.start();
@@ -310,6 +308,22 @@ describe("the panel's states (docs/IMPLEMENTATION.md §9's panel-state table)", 
     connector.last().deliver(message);
 
     expect(view.bannerText).toBe(text);
+  });
+
+  it.each([
+    ["terminal-attached", "Something is attached to this terminal: DevTools, or a CDP client on the raw port"],
+    ["agent-state-saved", "A Desk agent session saved browser state into your agent-browser files"],
+  ])("the panel shows the %s alert on its own red line and leaves the banner as it is", (kind, text) => {
+    const { connector, view, panel } = setup();
+    panel.start();
+    connector.last().deliver(hello([{ id: PANE, alive: true }]));
+    connector.last().deliver({ type: "detached", pane: PANE, reason: "closed" });
+    const banner = view.bannerText;
+
+    connector.last().deliver({ type: "alert", kind });
+
+    expect(view.alertText).toBe(text);
+    expect(view.bannerText).toBe(banner);
   });
 });
 

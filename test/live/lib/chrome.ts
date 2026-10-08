@@ -189,7 +189,7 @@ export async function startDeskChrome(options: {
 }
 
 /** Runs xdotool on the container's display. */
-async function xdotool(...args: string[]): Promise<string> {
+export async function xdotool(...args: string[]): Promise<string> {
   const env = { PATH: "/usr/bin:/bin", DISPLAY: process.env.DISPLAY ?? ":99" };
   return (await run("xdotool", args, { env, signal: AbortSignal.timeout(10_000) })).stdout.trim();
 }

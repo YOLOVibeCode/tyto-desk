@@ -4,6 +4,8 @@ import type { SidePanelApi } from "../ports/side-panel-api.ts";
 export class FakeSidePanelApi implements SidePanelApi {
   openOnAction = false;
   open: number[];
+  readonly paths: string[] = [];
+  readonly closes: number[] = [];
   private readonly opened: ((windowId: number) => void)[] = [];
   private readonly closed: ((windowId: number) => void)[] = [];
 
@@ -17,6 +19,15 @@ export class FakeSidePanelApi implements SidePanelApi {
 
   async openWindows(): Promise<readonly number[]> {
     return [...this.open];
+  }
+
+  async setPath(path: string): Promise<void> {
+    this.paths.push(path);
+  }
+
+  async close(windowId: number): Promise<void> {
+    this.closes.push(windowId);
+    this.hide(windowId);
   }
 
   onOpened(listener: (windowId: number) => void): void {

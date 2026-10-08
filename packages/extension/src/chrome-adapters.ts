@@ -7,6 +7,7 @@ import {
   type ExtensionWindows,
   type HostChannel,
   type HostConnector,
+  type PanelQuestions,
   type Random,
   type SidePanelApi,
   type TabTargets,
@@ -40,12 +41,36 @@ export class ChromeSidePanel implements SidePanelApi {
     return contexts.map((context) => context.windowId).filter((id) => id >= 0);
   }
 
+  async setPath(path: string): Promise<void> {
+    await chrome.sidePanel.setOptions({ path }).catch(() => undefined);
+  }
+
+  async close(windowId: number): Promise<void> {
+    await chrome.sidePanel.close({ windowId }).catch(() => undefined);
+  }
+
   onOpened(listener: (windowId: number) => void): void {
     chrome.sidePanel.onOpened?.addListener((info) => listener(info.windowId));
   }
 
   onClosed(listener: (windowId: number) => void): void {
     chrome.sidePanel.onClosed?.addListener((info) => listener(info.windowId));
+  }
+}
+
+/** The panel's question as it loads: whether it may take the keyboard (§9). */
+export const FOCUS_QUESTION = "desk-focus-on-load";
+
+/** The worker's answer, only to the extension's own panel page (D108). */
+export class ChromePanelQuestions implements PanelQuestions {
+  onFocusAsked(answer: () => boolean): void {
+    const panel = chrome.runtime.getURL("panel.html");
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (sender.id !== chrome.runtime.id || sender.url?.startsWith(panel) !== true) return undefined;
+      if (typeof message !== "object" || message === null || (message as { type?: unknown }).type !== FOCUS_QUESTION) return undefined;
+      sendResponse({ focus: answer() });
+      return undefined;
+    });
   }
 }
 

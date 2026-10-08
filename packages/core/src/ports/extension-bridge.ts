@@ -12,4 +12,9 @@ export interface ExtensionBridge {
   tabCurrent(): Promise<string | null>;
   /** The target id of the pane's agent tab, in a tab group named after the pane, created in the background when missing. */
   tabMine(pane: string): Promise<string | null>;
+  /**
+   * Readies an automatic open (`desk watch`, §9): the next panel opens with `focus=0`, so it never takes the keyboard;
+   * with `close`, the window's panel is closed first (a crashed one). `false` when the worker did not answer.
+   */
+  autoOpen(windowId: number, close: boolean): Promise<boolean>;
 }
