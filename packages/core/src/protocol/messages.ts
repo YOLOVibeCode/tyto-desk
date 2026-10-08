@@ -41,6 +41,8 @@ export type LayoutPut = { type: "layout.put"; id: string; layout: unknown };
 export type Ack = { type: "ack"; pane: string; n: number };
 export type Visibility = { type: "visibility"; state: "visible" | "hidden" };
 export type Detach = { type: "detach"; pane: string };
+/** The panel's answer to `tmux-back`: the pane's fallback shell gives way to its tmux session (§7.4). */
+export type Attach = { type: "attach"; pane: string };
 export type Close = { type: "close"; id: string; pane: string };
 /** From `desk watch`: something the panels must show (`terminal-attached`, `agent-state-saved`). */
 export type AlertIn = { type: "alert"; kind: string };
@@ -61,6 +63,7 @@ export type ClientMessage =
   | Ack
   | Visibility
   | Detach
+  | Attach
   | Close
   | AlertIn
   | AgentsState
@@ -107,7 +110,8 @@ export type Panes = {
   /** Whether agents are paused (`desk agents pause`). */
   paused: boolean;
 };
-export type Notice = { type: "notice"; kind: string };
+/** `tmux-back` names the pane and the session that came back (§7.4). */
+export type Notice = { type: "notice"; kind: string; pane?: string; session?: string };
 export type LayoutMessage = { type: "layout"; id?: string; layout: Record<string, unknown> };
 export type Closed = { type: "closed"; pane: string };
 export type Alert = { type: "alert"; kind: string };
@@ -223,6 +227,7 @@ const CLIENT_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
   ack: { required: { type: isType("ack"), pane: isPaneId, n: isWhole(0, 2 ** 31 - 1) } },
   visibility: { required: { type: isType("visibility"), state: isOneOf(["visible", "hidden"]) } },
   detach: { required: { type: isType("detach"), pane: isPaneId } },
+  attach: { required: { type: isType("attach"), pane: isPaneId } },
   close: { required: { type: isType("close"), id: isRequestId, pane: isPaneId } },
   alert: { required: { type: isType("alert"), kind: isText(64) } },
   "agents.state": { required: { type: isType("agents.state"), paused: isBoolean } },
@@ -271,7 +276,7 @@ const DAEMON_SHAPES: Readonly<Record<string, { required: Fields; optional?: Fiel
       paused: isBoolean,
     },
   },
-  notice: { required: { type: isType("notice"), kind: isText(64) } },
+  notice: { required: { type: isType("notice"), kind: isText(64) }, optional: { pane: isPaneId, session: isText(256) } },
   layout: { required: { type: isType("layout"), layout: isRecord }, optional: { id: isRequestId } },
   closed: { required: { type: isType("closed"), pane: isPaneId } },
   alert: { required: { type: isType("alert"), kind: isText(64) } },

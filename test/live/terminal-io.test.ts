@@ -62,6 +62,24 @@ async function lines(of: Panel = current()): Promise<string[]> {
   return (await screen(of)).split("\n").map((line) => line.trimEnd());
 }
 
+/**
+ * The screen's lines once two reads 300 ms apart agree: a re-attach makes a full-screen program redraw (the daemon
+ * resizes it one row smaller and back), and a read between those two redraws shows half of each.
+ */
+async function settledLines(of: Panel = current()): Promise<string[]> {
+  let last = await lines(of);
+  return waitFor(
+    async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const now = await lines(of);
+      const same = JSON.stringify(now) === JSON.stringify(last);
+      last = now;
+      return same ? now : null;
+    },
+    { label: "a settled screen", timeoutMs: 10_000 },
+  );
+}
+
 async function typeText(text: string, of: Panel = current()): Promise<void> {
   await evaluate(of.cdp, of.session, "document.querySelector('textarea.xterm-helper-textarea')?.focus(), true");
   await of.cdp.send("Input.insertText", { text }, { sessionId: of.session });
@@ -134,7 +152,7 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       const vimBefore = await lines();
       await quitAndRelaunch(false);
       await waitFor(async () => (await screen()).includes("Desk was here"), { label: "vi after the re-attach" });
-      const vimAfter = await lines();
+      const vimAfter = await settledLines();
       await typeText(":q!");
       await typeLine("");
       await waitFor(async () => (await screen()).includes("desk-live %"), { label: "the prompt after vi" });
@@ -147,9 +165,11 @@ describe("the terminal's I/O (slice 2b) in the live container", () => {
       const tmuxBefore = await lines();
       await quitAndRelaunch(false);
       await waitFor(async () => (await screen()).includes("[desklive]"), { label: "tmux after the re-attach" });
-      const tmuxAfter = await lines();
+      const tmuxAfter = await settledLines();
+      // What the pane's terminal was written after the re-attach (each write's first 120 characters), for a failure's report.
+      const writes = await evaluate<string[]>(current().cdp, current().session, `deskTest.calls(${JSON.stringify(current().pane)})`).catch(() => []);
       await typeLine("tmux kill-session -t desklive");
-      await saveResult("terminal-full-screen", { vimBefore, vimAfter, tmuxBefore, tmuxAfter });
+      await saveResult("terminal-full-screen", { vimBefore, vimAfter, tmuxBefore, tmuxAfter, writes });
 
       // The panel's height may change across the relaunch (desk watch's alert line), so vi's filler rows may differ.
       const vimText = (shown: string[]) => shown.filter((line) => line !== "~" && line !== "");

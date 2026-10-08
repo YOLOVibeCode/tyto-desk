@@ -58,3 +58,6 @@ export type { ToggleCommand } from "./toggle-command.ts";
 export type { PanelFocusLink } from "./panel-focus-link.ts";
 export type { Badge } from "./badge.ts";
 export type { TabOpener } from "./tab-opener.ts";
+export type { PaneRecord, PaneStore, PanesFile } from "./pane-store.ts";
+export type { TmuxClient, TmuxSessions } from "./tmux-sessions.ts";
+export type { ShellProbe } from "./shell-probe.ts";

@@ -40,6 +40,8 @@ type TestHooks = {
   focused(): string | null;
   /** The note line's text. */
   note(): string;
+  /** Types `data` into a pane as its user would (xterm's own input path, so the panel's keymap does not see it). */
+  input(paneId: string, data: string): boolean;
 };
 
 /** How long a note stays. */
@@ -138,6 +140,11 @@ export class XtermView implements TerminalView, LayoutView {
           return null;
         },
         note: () => (this.noteElement.hidden ? "" : (this.noteElement.textContent ?? "")),
+        input: (paneId, data) => {
+          const term = this.terminals.get(paneId);
+          term?.input(data, true);
+          return term !== undefined;
+        },
       };
       (globalThis as { deskTest?: TestHooks }).deskTest = hooks;
     }

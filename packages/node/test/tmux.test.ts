@@ -68,3 +68,30 @@ describe("NodeTmux", () => {
     expect(await findTmux(tmux.path, { VITEST: "true" })).toBe(tmux.path);
   });
 });
+
+describe("tmux sessions for cold restore (docs/IMPLEMENTATION.md §7.4)", () => {
+  it("NodeTmux lists each client's terminal and session, names with blanks included", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["list-clients"], stdout: "/dev/ttys004 work\n/dev/ttys007 my project\n" }]);
+
+    const clients = await new NodeTmux(tmux.path, { HOME: "/Users/alex" }).clients();
+
+    expect(clients).toEqual([
+      { tty: "/dev/ttys004", session: "work" },
+      { tty: "/dev/ttys007", session: "my project" },
+    ]);
+    expect((await tmux.calls())[0]?.argv).toEqual(["list-clients", "-F", "#{client_tty} #{session_name}"]);
+  });
+
+  it("NodeTmux gives no clients when no server runs", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["list-clients"], stderr: "no server running", exit: 1 }]);
+
+    expect(await new NodeTmux(tmux.path, {}).clients()).toBeNull();
+  });
+
+  it("NodeTmux asks has-session for exactly the name, never a prefix", async () => {
+    const tmux = await fakeExecutable("tmux", [{ match: ["has-session"], stdout: "" }]);
+
+    expect(await new NodeTmux(tmux.path, {}).hasSession("work")).toBe(true);
+    expect((await tmux.calls())[0]?.argv).toEqual(["has-session", "-t", "=work"]);
+  });
+});

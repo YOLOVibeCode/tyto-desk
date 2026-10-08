@@ -1,7 +1,11 @@
 import { checkLayout, defaultLayout, type Layout } from "../layout/layout.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { LayoutStore } from "../ports/layout-store.ts";
+import type { PaneStore } from "../ports/pane-store.ts";
 import type { ProcessCwd } from "../ports/process-cwd.ts";
+import type { ShellProbe } from "../ports/shell-probe.ts";
+import type { TmuxSessions } from "../ports/tmux-sessions.ts";
+import { PaneKeeper } from "./pane-keeper.ts";
 import type { LogSink } from "../ports/log-sink.ts";
 import type { MirrorScreen, TerminalMirror } from "../ports/terminal-mirror.ts";
 import { EscapeTail } from "../term/escape-tail.ts";
@@ -31,16 +35,40 @@ export type PaneShell = {
   cwd: string;
   env: Readonly<Record<string, string>>;
   notice: string | null;
+  /** The pane's login shell, which `panes.json` keeps (for a tmux attach, the shell it falls back to). */
+  loginShell: string;
 };
+
+/** No shell to start: the spawn fails with E_SPAWN. */
+const NO_SHELL: PaneShell = { file: "", args: [], cwd: "", env: {}, notice: null, loginShell: "" };
+
+/** A restored pane's one dim line (§7.4). */
+const ENDED_NOTE = "[Desk: the shell that ran here ended when the terminal daemon stopped; this is a new one]";
+const waitingNote = (name: string) => `[Desk: a new shell while tmux session "${name}" comes back; it takes this pane when this shell is idle]`;
+/** How often, and how long, a fallback shell's tmux session is looked for (§7.4). */
+const SESSION_POLL_MS = 5_000;
+const SESSION_WAIT_MS = 10 * 60_000;
+/** A fallback shell counts as idle after this long without input (and with no child process). */
+const IDLE_INPUT_MS = 5_000;
+
+/** How a pane's shell starts: in a directory, attached to a tmux session, with a dim line, waiting for a session. */
+type Spawn = { cwd: string | null; attach?: string; note?: string; waitFor?: string | null };
 
 export type DaemonPorts = {
   spawner: PtySpawner;
   clock: Clock;
   /** This daemon's version, for `hello`. */
   build: string;
-  /** The new pane's shell; `cwd` is the directory it should start in (a split's or a new tab's), when there is one. */
-  shellFor(pane: string, cwd: string | null): Promise<PaneShell>;
+  /**
+   * The new pane's shell; `cwd` is the directory it should start in (a split's, a new tab's, or a restored pane's),
+   * when there is one; `attach` makes it `tmux attach-session -t =<name>` (§7.4).
+   */
+  shellFor(pane: string, cwd: string | null, attach?: string): Promise<PaneShell>;
   cwds: ProcessCwd;
+  /** `panes.json`, the shell facts and the tmux sessions cold restore uses (§7.4). */
+  paneStore: PaneStore;
+  probe: ShellProbe;
+  sessions: TmuxSessions | null;
   /** Called once, after a shutdown was accepted and every running shell got SIGHUP. */
   onShutdown(mode: "stop" | "restart"): void;
   layouts: LayoutStore;
@@ -73,7 +101,7 @@ const MIRROR_RESUME_BELOW = 100_000;
 
 /** What each client kind may send after hello (§7.2's table). */
 const VERBS: Readonly<Record<ClientKind, readonly ClientMessage["type"][]>> = {
-  panel: ["layout.get", "layout.put", "open", "in", "resize", "ack", "visibility", "detach", "close", "list", "shutdown"],
+  panel: ["layout.get", "layout.put", "open", "in", "resize", "ack", "visibility", "detach", "attach", "close", "list", "shutdown"],
   sw: ["ext.result"],
   cli: ["list", "layout.get", "ext.call", "agents.state", "shutdown"],
   watch: ["list", "alert", "ext.call", "gateway.state"],
@@ -112,6 +140,14 @@ type Pane = {
   mirrorPaused: boolean;
   /** Whether the PTY is paused now: for the owner, for the mirror, or both. */
   ptyPaused: boolean;
+  /** When the owner last typed into the pane. */
+  lastInput: number;
+  /** A tmux attach: when its client exits, the pane goes on as a login shell (§7.4). */
+  attached?: boolean;
+  /** The tmux session a fallback shell waits for (§7.4). */
+  waitingFor?: string;
+  /** The shell's exit is a replacement: the pane goes on with this attach. */
+  replaceWith?: string;
 };
 
 /** An extension call on its way: who asked, under which id, and the worker it went to. */
@@ -132,6 +168,7 @@ export class Daemon {
   private swConnects = 0;
   private nextCall = 0;
   private shuttingDown = false;
+  private readonly keeper: PaneKeeper;
   /** The layout as saved, loaded at the first ask; `null` until then or when none is saved. */
   /** When each alert from `desk watch` was last raised, to replay recent ones to a panel that says hello late. */
   private readonly alerts = new Map<string, number>();
@@ -141,6 +178,7 @@ export class Daemon {
   private paused = false;
 
   constructor(ports: DaemonPorts) {
+    this.keeper = new PaneKeeper({ store: ports.paneStore, cwds: ports.cwds, probe: ports.probe, sessions: ports.sessions, clock: ports.clock });
     this.ports = ports;
   }
 
@@ -200,9 +238,22 @@ export class Daemon {
       case "open":
         void this.open(client, message);
         return;
-      case "in":
-        this.owned(client, message.pane)?.write(message.data);
+      case "in": {
+        const pty = this.owned(client, message.pane);
+        if (pty === null) return;
+        pty.write(message.data);
+        const pane = this.panes.get(message.pane);
+        if (pane !== undefined) pane.lastInput = this.ports.clock.now();
+        // A command entered: its directory is read about 1 s later (§7.4).
+        if (message.data.includes("\r")) this.keeper.entered(message.pane);
         return;
+      }
+      case "attach": {
+        // The panel's answer to "tmux-back": the busy fallback shell gives way now, as the user chose.
+        const pane = this.panes.get(message.pane);
+        if (pane !== undefined && pane.owner === client && pane.waitingFor !== undefined) this.replaceWithAttach(pane, pane.waitingFor);
+        return;
+      }
       case "resize": {
         const pane = this.panes.get(message.pane);
         if (pane !== undefined && pane.starting && pane.owner === client) {
@@ -369,34 +420,93 @@ export class Daemon {
       mirrorBehind: 0,
       mirrorPaused: false,
       ptyPaused: false,
+      lastInput: this.ports.clock.now(),
     };
     this.panes.set(pane.id, pane);
     // A split or a new tab starts where the focused pane's shell is (§10), read from its process.
     const from = message.cwdFrom === undefined ? undefined : this.panes.get(message.cwdFrom);
-    const cwd = from?.pty === null || from?.pty === undefined || !from.alive ? null : await this.ports.cwds.cwdOf(from.pty.pid).catch(() => null);
+    const fromCwd = from?.pty === null || from?.pty === undefined || !from.alive ? null : await this.ports.cwds.cwdOf(from.pty.pid).catch(() => null);
+    // A pane this daemon never had, that panes.json knows: §7.4's cold restore.
+    await this.keeper.load();
+    const plan = existing === undefined && message.cwdFrom === undefined ? await this.keeper.plan(pane.id) : null;
+    if (plan !== null) this.ports.log.write({ event: "pane-restored", how: "attach" in plan ? "attach" : plan.waitFor === null ? "shell" : "waiting" });
+    const how: Spawn =
+      plan === null
+        ? { cwd: fromCwd }
+        : "attach" in plan
+          ? { cwd: plan.cwd, attach: plan.attach }
+          : { cwd: plan.cwd, note: plan.waitFor === null ? ENDED_NOTE : waitingNote(plan.waitFor), waitFor: plan.waitFor };
+    if (!(await this.spawnShell(pane, how))) {
+      this.panes.delete(pane.id);
+      this.fail(client, "E_SPAWN", { id: message.id, pane: pane.id });
+      return;
+    }
+    if (pane.owner !== null) await this.attached(pane, pane.owner);
+  }
+
+  /**
+   * Starts the pane's shell as `how` says, keeping its mirror when it already has one (a tmux client that exited, or a
+   * fallback shell its session replaced). False when nothing started.
+   */
+  private async spawnShell(pane: Pane, how: Spawn): Promise<boolean> {
     let shell: PaneShell;
     try {
-      shell = await this.ports.shellFor(pane.id, cwd);
+      shell = how.attach === undefined ? await this.ports.shellFor(pane.id, how.cwd) : await this.ports.shellFor(pane.id, how.cwd, how.attach);
     } catch {
-      shell = { file: "", args: [], cwd: "", env: {}, notice: null };
+      shell = NO_SHELL;
     }
     const started =
       shell.file === ""
         ? ({ ok: false } as const)
         : this.ports.spawner.spawn({ file: shell.file, args: shell.args, cwd: shell.cwd, env: shell.env, cols: pane.cols, rows: pane.rows });
     pane.starting = false;
-    if (!started.ok) {
-      this.panes.delete(pane.id);
-      this.fail(client, "E_SPAWN", { id: message.id, pane: pane.id });
-      return;
-    }
-    pane.pty = started.pty;
+    if (!started.ok) return false;
+    const pty = started.pty;
+    pane.pty = pty;
     pane.alive = true;
-    pane.screen = this.ports.mirror.create(pane.cols, pane.rows, this.ports.scrollback);
-    started.pty.onData((data) => this.output(pane, data));
-    started.pty.onExit((exit) => this.exited(pane, exit));
+    pane.attached = how.attach !== undefined;
+    if (how.waitFor !== undefined && how.waitFor !== null) pane.waitingFor = how.waitFor;
+    else delete pane.waitingFor;
+    pane.screen ??= this.ports.mirror.create(pane.cols, pane.rows, this.ports.scrollback);
+    pty.onData((data) => this.output(pane, data));
+    pty.onExit((exit) => this.exited(pane, pty, exit));
+    this.keeper.started(pane.id, pty.pid, shell.loginShell);
+    if (how.note !== undefined) this.output(pane, `\u001b[2m${how.note}\u001b[0m\r\n`);
     if (shell.notice !== null && pane.owner !== null) this.send(pane.owner, { type: "notice", kind: shell.notice });
-    if (pane.owner !== null) await this.attached(pane, pane.owner);
+    if (pane.waitingFor !== undefined) void this.awaitSession(pane, pty, pane.waitingFor);
+    return true;
+  }
+
+  /**
+   * §7.4: for 10 minutes a fallback shell's tmux session is looked for every 5 s; once it exists, an idle shell (no
+   * child process, no input for 5 s) gives the pane to it, and a busy one is never replaced: its owner is offered the
+   * attach once.
+   */
+  private async awaitSession(pane: Pane, pty: Pty, name: string): Promise<void> {
+    const deadline = this.ports.clock.now() + SESSION_WAIT_MS;
+    let offered = false;
+    while (this.ports.clock.now() < deadline) {
+      await this.ports.clock.sleep(SESSION_POLL_MS);
+      if (this.shuttingDown || this.panes.get(pane.id) !== pane || pane.pty !== pty || pane.waitingFor !== name) return;
+      if (this.ports.sessions === null || !(await this.ports.sessions.hasSession(name).catch(() => false))) continue;
+      const quiet = this.ports.clock.now() - pane.lastInput >= IDLE_INPUT_MS;
+      if (quiet && !(await this.ports.probe.hasChildren(pty.pid).catch(() => true))) {
+        this.replaceWithAttach(pane, name);
+        return;
+      }
+      if (!offered && pane.owner !== null) {
+        offered = true;
+        this.send(pane.owner, { type: "notice", kind: "tmux-back", pane: pane.id, session: name });
+      }
+    }
+  }
+
+  /** The fallback shell ends, and the pane goes on attached to its tmux session. */
+  private replaceWithAttach(pane: Pane, name: string): void {
+    if (pane.pty === null) return;
+    pane.replaceWith = name;
+    delete pane.waitingFor;
+    pane.pty.kill("SIGHUP");
   }
 
   /** Makes `client` the pane's owner; a previous owner learns it was taken. Flow control starts over. */
@@ -540,9 +650,25 @@ export class Daemon {
     else pane.flowEpoch += 1;
   }
 
-  private exited(pane: Pane, exit: PtyExit): void {
+  private exited(pane: Pane, pty: Pty, exit: PtyExit): void {
+    if (pane.pty !== pty) return;
     pane.alive = false;
     pane.pty = null;
+    this.keeper.ended(pane.id);
+    // A closed pane, or one ending with the daemon, never comes back.
+    if (this.shuttingDown || this.panes.get(pane.id) !== pane) return;
+    const replace = pane.replaceWith;
+    delete pane.replaceWith;
+    if (replace !== undefined || pane.attached === true) {
+      this.ports.log.write({ event: replace !== undefined ? "pane-attached-session" : "pane-tmux-exited", code: exit.code, signal: exit.signal });
+      // §7.4: the fallback shell gave the pane to its session; or the tmux client exited, and a login shell goes on in
+      // the same directory.
+      const cwd = this.keeper.record(pane.id)?.cwd ?? null;
+      void this.spawnShell(pane, replace !== undefined ? { cwd, attach: replace } : { cwd }).then((ok) => {
+        if (!ok && pane.owner !== null) this.send(pane.owner, { type: "exit", pane: pane.id, code: exit.code, signal: exit.signal });
+      });
+      return;
+    }
     if (pane.owner !== null) this.send(pane.owner, { type: "exit", pane: pane.id, code: exit.code, signal: exit.signal });
   }
 
@@ -605,6 +731,7 @@ export class Daemon {
       return;
     }
     this.panes.delete(paneId);
+    this.keeper.closed(paneId);
     if (pane.alive) pane.pty?.kill("SIGHUP");
     pane.screen?.dispose();
     this.send(client, { type: "closed", pane: paneId });
@@ -653,6 +780,7 @@ export class Daemon {
     for (const pane of this.panes.values()) if (pane.alive) pane.pty?.kill("SIGHUP");
     for (const client of [...this.clients]) client.peer.close();
     this.ports.log.write({ event: "shutdown", mode });
-    this.ports.onShutdown(mode);
+    // panes.json is written before the daemon goes (§7.4: flushed on SIGTERM, SIGHUP, and shutdown).
+    void this.keeper.flush().finally(() => this.ports.onShutdown(mode));
   }
 }

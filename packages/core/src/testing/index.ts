@@ -55,3 +55,6 @@ export { FakeToggleCommand } from "./fake-toggle-command.ts";
 export { FakePanelFocusLink } from "./fake-panel-focus-link.ts";
 export { FakeBadge } from "./fake-badge.ts";
 export { FakeTabOpener } from "./fake-tab-opener.ts";
+export { MemoryPaneStore } from "./memory-pane-store.ts";
+export { FakeTmuxSessions } from "./fake-tmux-sessions.ts";
+export { FakeShellProbe } from "./fake-shell-probe.ts";

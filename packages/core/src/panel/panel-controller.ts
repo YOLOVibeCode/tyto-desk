@@ -681,6 +681,18 @@ export class PanelController {
         return;
       }
       case "notice": {
+        if (message.kind === "tmux-back" && message.pane !== undefined && message.session !== undefined) {
+          // §7.4: a busy fallback shell's tmux session came back; one key gives the pane to it.
+          const pane = message.pane;
+          this.showBanner(`The tmux session "${message.session}" is back`, {
+            label: "Attach",
+            run: () => {
+              this.showBanner(null);
+              this.post({ type: "attach", pane });
+            },
+          });
+          return;
+        }
         if (message.kind === "agents-resumed") {
           if (this.pausedShown) this.showBanner(null);
           this.pausedShown = false;

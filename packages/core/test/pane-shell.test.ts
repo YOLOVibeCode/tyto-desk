@@ -6,10 +6,11 @@ const home = "/Users/alex";
 const config = newDeskConfig({ home, platform: "darwin", chromePort: 9417, gatewayPort: 9583 });
 const parent = { HOME: home, USER: "alex", LOGNAME: "alex", SHELL: "/bin/bash", ANTHROPIC_API_KEY: "x" };
 
-function plan(options: { config?: DeskConfig; shell?: string | null; files?: Record<string, string>; cwd?: string } = {}) {
+function plan(options: { config?: DeskConfig; shell?: string | null; files?: Record<string, string>; cwd?: string; attach?: string } = {}) {
   return planPaneShell({
     pane: "p_k2m9q3x7ab",
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.attach === undefined ? {} : { attach: options.attach, tmuxBinary: "/opt/homebrew/bin/tmux" }),
     config: options.config ?? config,
     deskHome: `${home}/.desk`,
     home,
@@ -32,6 +33,13 @@ describe("a pane's shell", () => {
 
   it("a pane opened from another starts in the directory it was given", async () => {
     expect((await plan({ cwd: `${home}/Dev/tyto-desk` })).cwd).toBe(`${home}/Dev/tyto-desk`);
+  });
+
+  it("restore attaches a pane to its tmux session with attach-session -t =name, with the pane environment", async () => {
+    const shell = await plan({ attach: "work", cwd: `${home}/Dev` });
+
+    expect(shell).toMatchObject({ file: "/opt/homebrew/bin/tmux", args: ["attach-session", "-t", "=work"], cwd: `${home}/Dev`, loginShell: "/bin/zsh" });
+    expect(shell.env).toMatchObject({ DESK_PANE: "p_k2m9q3x7ab" });
   });
 
   it("a pane starts the configured shell over the account's", async () => {
