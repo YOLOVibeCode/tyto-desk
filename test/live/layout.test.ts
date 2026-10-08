@@ -74,7 +74,8 @@ async function trees(): Promise<unknown[]> {
   return all;
 }
 
-const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.min(values.length - 1, Math.floor((p / 100) * values.length))] ?? -1;
+/** The nearest-rank percentile: of 20 values, p95 is the 19th smallest, so one slow outlier is not the p95. */
+const percentile = (values: number[], p: number) => [...values].sort((a, b) => a - b)[Math.max(0, Math.ceil((p / 100) * values.length) - 1)] ?? -1;
 
 describe("the panel's tabs and splits (slice 6a) in the live container", () => {
   beforeAll(async () => {
@@ -128,7 +129,7 @@ describe("the panel's tabs and splits (slice 6a) in the live container", () => {
       const worker = await attach(cdp, (await waitFor(async () => (await targets(cdp)).find((t) => t.url === WORKER_URL), { label: "the worker" })).targetId);
       const windowId = await evaluate<number>(cdp, worker, "chrome.windows.getLastFocused().then((w) => w.id)");
       const ready: number[] = [];
-      for (let run = 0; run < 10; run += 1) {
+      for (let run = 0; run < 20; run += 1) {
         current().cdp.close();
         panel = undefined;
         await evaluate(cdp, worker, `chrome.sidePanel.close({ windowId: ${windowId} }).then(() => true)`);
