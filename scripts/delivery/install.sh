@@ -14,7 +14,8 @@
 # version.json names this release and asks before each step (§15.1).
 #
 # Exit: 0 installed · 64 usage · 65 a check failed and nothing was installed · 69 gh missing, signed out, or older than
-# 2.102.0 · 75 GitHub could not be reached · and otherwise `desk install`'s own code (77: you declined).
+# 2.102.0 · 70 install.sh stopped on an error of its own · 75 GitHub could not be reached, or no temporary directory
+# could be made · and otherwise `desk install`'s own code (77: you declined).
 set -euo pipefail
 
 readonly REPO="YOLOVibeCode/tyto-desk"
@@ -76,8 +77,12 @@ if ((10#${BASH_REMATCH[1]} < 2 || (10#${BASH_REMATCH[1]} == 2 && 10#${BASH_REMAT
 fi
 if ! gh auth status >/dev/null 2>&1; then fail 69 "gh is not signed in: gh auth login"; fi
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/desk-install.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d "${TMPDIR:-/tmp}/desk-install.XXXXXX" 2>/dev/null) || fail 75 "no temporary directory could be made; nothing was installed"
+# Removed on every exit with the exit code kept, even when the tarball's directories were read-only. A 0 before the
+# last line is no success: bash 3.2 exits 0 on a fatal error (an unset variable under set -u) after a command that
+# succeeded, so that becomes 70.
+finished=""
+trap 'rc=$?; [ "$rc" -ne 0 ] || [ -n "$finished" ] || rc=70; chmod -R u+rwX "$work" 2>/dev/null || :; rm -rf "$work" 2>/dev/null || :; exit "$rc"' EXIT
 chmod 700 "$work"
 
 # gh, failing with 65 when GitHub answered that what was asked for does not exist, and 75 when it could not be reached.
@@ -113,11 +118,20 @@ for file in "$tb" "$sums"; do
   if [ ! -f "$file" ] || [ -L "$file" ]; then fail 65 "$tag has no $(basename "$file"); nothing was installed"; fi
 done
 
-# Exactly one line names the tarball, as core's parser reads them: `<64 hex>`, a space, then a space or `*`, then the
-# name, nothing else. Two such lines, or none, refuse the download.
+# SHA256SUMS is a few short lines of ASCII. A larger one, or one with a byte outside tab, CR, LF and printable ASCII, is
+# refused before it is read: so trimming means here exactly what it means to core, and no line can take long.
+if (($(wc -c <"$sums") > 4096 || $(LC_ALL=C tr -d '\t\r\n -~' <"$sums" | wc -c) != 0)); then
+  fail 65 "$tag's SHA256SUMS is not a few lines of ASCII; nothing was installed"
+fi
+# Exactly one line names the tarball, read as core's parser reads them: trimmed of spaces, tabs and CR, then `<64 hex>`,
+# a space, then a space or `*`, then the name, nothing else. Two such lines, or none, refuse the download (core would
+# take the last; this is stricter).
 expected=""
 matches=0
 while IFS= read -r line || [ -n "$line" ]; do
+  if [ "${#line}" -gt 256 ]; then fail 65 "$tag's SHA256SUMS has a line longer than 256 characters; nothing was installed"; fi
+  line=${line#"${line%%[![:space:]]*}"}
+  line=${line%"${line##*[![:space:]]}"}
   if [[ $line =~ ^([0-9a-f]{64})\ [\ *](.+)$ ]] && [ "${BASH_REMATCH[2]}" = "$tarball" ]; then
     expected=${BASH_REMATCH[1]}
     matches=$((matches + 1))
@@ -143,7 +157,10 @@ if [ "$(head -c 2 "$tb" | od -An -tx1 | tr -d ' \n')" != "1f8b" ]; then fail 65 
 if ! LC_ALL=C tar -tzf "$tb" >"$work/members" 2>/dev/null || ! LC_ALL=C tar -tvzf "$tb" >"$work/listing" 2>/dev/null; then
   fail 65 "the tarball cannot be read; nothing was installed"
 fi
-while IFS= read -r member; do
+# Each loop must see at least one line: bash 3.2 skips a loop whose input cannot be opened, and would skip its checks.
+members=0
+while IFS= read -r member || [ -n "$member" ]; do
+  members=$((members + 1))
   case "$member" in
     "$top" | "$top/" | "$top/"*) ;;
     *) fail 65 "the tarball holds $member, outside $top/; nothing was installed" ;;
@@ -152,18 +169,22 @@ while IFS= read -r member; do
     */../*) fail 65 "the tarball holds $member, which climbs out with ..; nothing was installed" ;;
   esac
 done <"$work/members"
+if [ "$members" -eq 0 ]; then fail 65 "the tarball lists nothing; nothing was installed"; fi
 # Files and directories only: never a link (a hard link lists as a file `link to` another), a FIFO or a device. A bash
 # loop, so a missing or failing grep can never let one through.
-while IFS= read -r entry; do
+entries=0
+while IFS= read -r entry || [ -n "$entry" ]; do
+  entries=$((entries + 1))
   case "$entry" in
     *" link to "* | *" -> "*) fail 65 "the tarball holds a link; nothing was installed" ;;
     -* | d*) ;;
     *) fail 65 "the tarball holds something that is not a file or a directory; nothing was installed" ;;
   esac
 done <"$work/listing"
+if [ "$entries" -eq 0 ]; then fail 65 "the tarball lists nothing; nothing was installed"; fi
 
 mkdir "$work/runtime"
-if ! tar -xzf "$tb" -C "$work/runtime" 2>/dev/null; then fail 65 "the tarball could not be extracted; nothing was installed"; fi
+if ! LC_ALL=C tar -xzf "$tb" -C "$work/runtime" 2>/dev/null; then fail 65 "the tarball could not be extracted; nothing was installed"; fi
 runtime="$work/runtime/$top"
 node="$runtime/Desk Terminal.app/Contents/MacOS/desk-node"
 if [ ! -f "$node" ] || [ ! -x "$node" ] || [ ! -f "$runtime/desk.mjs" ]; then
@@ -171,3 +192,4 @@ if [ ! -f "$node" ] || [ ! -x "$node" ] || [ ! -f "$runtime/desk.mjs" ]; then
 fi
 
 "$node" "$runtime/desk.mjs" install --from "$runtime" --release "$version" --commit "$commit" || exit $?
+finished=1

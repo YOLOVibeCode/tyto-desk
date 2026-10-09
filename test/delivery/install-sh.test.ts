@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ const REPO = "YOLOVibeCode/tyto-desk";
 const COMMIT = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c";
 const TARBALL = "desk-0.4.0-darwin-arm64.tar.gz";
 // gzip: GNU tar runs it for -z (macOS's bsdtar decompresses itself); ln: the stub gh's link case.
-const TOOLS = ["awk", "basename", "cat", "chmod", "cp", "grep", "gzip", "head", "ln", "mkdir", "mktemp", "od", "rm", "shasum", "tr"];
+const TOOLS = ["awk", "basename", "cat", "chmod", "cp", "grep", "gzip", "head", "ln", "mkdir", "mktemp", "od", "rm", "shasum", "tr", "wc"];
 const MAIN = "9".repeat(40);
 const TAG_OBJECT = "7".repeat(40);
 
@@ -25,19 +25,24 @@ ${RECORD}
 # A gh told to ask another host or repo would answer for it: install.sh must never pass GH_HOST or GH_REPO on.
 if [ -n "$GH_HOST$GH_REPO" ]; then echo "GH_HOST or GH_REPO reached gh" >&2; exit 3; fi
 case "$1" in
-  --version) echo "gh version $STUB_GH_VERSION (2026-01-01)"; exit 0 ;;
+  --version) echo "\${STUB_GH_PREFIX}gh version $STUB_GH_VERSION (2026-01-01)"; exit 0 ;;
   auth) exit "$STUB_GH_AUTH" ;;
   api)
     if [ -n "$STUB_API_FAIL" ]; then echo "$STUB_API_FAIL" >&2; exit 1; fi
     case "$2" in
       */git/ref/tags/*) echo "$STUB_TAG_REF"; exit 0 ;;
-      */git/tags/*) echo "commit $STUB_COMMIT"; exit 0 ;;
+      */git/tags/*)
+        # A tag object STUB_TAGS names answers with its file; any other, with STUB_PEELED or the commit.
+        sha=\${2##*/}
+        if [ -n "$STUB_TAGS" ] && [ -f "$STUB_TAGS/$sha" ]; then cat "$STUB_TAGS/$sha"; exit 0; fi
+        echo "\${STUB_PEELED:-commit $STUB_COMMIT}"; exit 0 ;;
       */branches/main) echo "$STUB_MAIN"; exit 0 ;;
       */compare/*) echo "$STUB_COMPARE"; exit 0 ;;
     esac ;;
   release)
     case "$2" in
       download)
+        if [ -n "$STUB_DOWNLOAD_FAIL" ]; then echo "$STUB_DOWNLOAD_FAIL" >&2; exit 1; fi
         dir=""; prev=""
         for arg in "$@"; do [ "$prev" = "--dir" ] && dir=$arg; prev=$arg; done
         cp "$STUB_RELEASE"/* "$dir"/
@@ -57,9 +62,9 @@ exec "$STUB_REAL_TAR" "$@"
 `,
 };
 
-const DESK_NODE = `#!/bin/sh\n${RECORD}\nexit 0\n`;
+const DESK_NODE = `#!/bin/sh\n${RECORD}\nexit "\${STUB_DESK_EXIT:-0}"\n`;
 
-type Ran = { code: number; stderr: string; calls: string[][] };
+type Ran = { code: number; stderr: string; calls: string[][]; /** TMPDIR for the run, where install.sh makes its own. */ tmp: string };
 
 let tools = "";
 let realTar = "";
@@ -69,20 +74,26 @@ function which(tool: string): string {
 }
 
 /** A release dir holding the tarball (built by the real tar from `files`) and a SHA256SUMS that names it. */
-async function release(files: Record<string, string>, options: { link?: boolean; sums?: (sha: string) => string; raw?: string } = {}): Promise<string> {
+async function release(
+  files: Record<string, string>,
+  options: { link?: boolean; sums?: (sha: string) => string; raw?: string; mode?: Record<string, number>; readOnly?: string[] } = {},
+): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "install-sh-release-"));
   const source = join(dir, "source");
   for (const [path, text] of Object.entries(files)) {
     const full = join(source, path);
     await mkdir(join(full, ".."), { recursive: true });
     await writeFile(full, text);
-    await chmod(full, 0o755);
+    await chmod(full, options.mode?.[path] ?? 0o755);
   }
   if (options.link === true) await symlink("/etc", join(source, "desk-0.4.0", "etc"));
+  for (const path of options.readOnly ?? []) await chmod(join(source, path), 0o555);
   const assets = join(dir, "assets");
   await mkdir(assets);
   if (options.raw === undefined) execFileSync(realTar, ["-czf", join(assets, TARBALL), "-C", source, "desk-0.4.0"]);
   else await writeFile(join(assets, TARBALL), options.raw);
+  // The tarball keeps the read-only modes; the source gets its own back, so the suite's cleanup can remove it.
+  for (const path of options.readOnly ?? []) await chmod(join(source, path), 0o755);
   const sha = createHash("sha256").update(await readFile(join(assets, TARBALL))).digest("hex");
   await writeFile(join(assets, "SHA256SUMS"), options.sums?.(sha) ?? `${sha}  ${TARBALL}\n`);
   return assets;
@@ -124,6 +135,7 @@ async function run(input: {
     STUB_UNAME_S: "Darwin",
     STUB_UNAME_M: "arm64",
     STUB_GH_VERSION: "2.102.0",
+    STUB_GH_PREFIX: "",
     STUB_GH_AUTH: "0",
     STUB_API_FAIL: "",
     DESK_GH: input.relativeGh === true ? join(bin, "gh").replace(/^\/+/, "") : join(bin, "gh"),
@@ -137,6 +149,8 @@ async function run(input: {
     STUB_TAR_LIST: "",
     STUB_TAR_VLIST: "",
     STUB_LINK_SUMS: "",
+    STUB_DOWNLOAD_FAIL: "",
+    STUB_TAGS: "",
     ...input.env,
   };
   const args = input.args ?? ["--version", "0.4.0"];
@@ -151,7 +165,7 @@ async function run(input: {
     .split("\n")
     .filter((line) => line !== "")
     .map((line) => line.split("\u001f").slice(0, -1));
-  return { ...code, calls };
+  return { ...code, calls, tmp: dir };
 }
 
 const named = (ran: Ran, name: string) => ran.calls.filter((call) => call[0] === name).map((call) => call.slice(1));
@@ -222,6 +236,8 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
 
   it.each([
     ["older than 2.102.0", { env: { STUB_GH_VERSION: "2.101.9" } }],
+    ["of an older major version", { env: { STUB_GH_VERSION: "1.200.0" } }],
+    ["one whose version line is not gh's own", { env: { STUB_GH_PREFIX: "not " } }],
     ["signed out", { env: { STUB_GH_AUTH: "1" } }],
     ["missing", { withGh: false }],
     ["named by a relative DESK_GH", { env: { DESK_GH: "gh" } }, "DESK_GH must be the absolute path of gh"],
@@ -233,33 +249,36 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
     expect(named(ran, "gh").filter((argv) => argv[0] === "api" || argv[0] === "release")).toEqual([]);
   });
 
-  it.each<[string, { env?: Record<string, string>; assets?: string }]>([
-    ["the commit is not on main", { env: { STUB_COMPARE: "diverged" } }],
-    ["the sha256 differs from SHA256SUMS", { assets: "wrong-sum" }],
-    ["SHA256SUMS names the tarball twice", { assets: "two-sums" }],
-    ["SHA256SUMS names the tarball twice, the right digest last", { assets: "two-sums-right-last" }],
-    ["GitHub names no head for main", { env: { STUB_MAIN: "" } }],
-    ["verify-asset refuses it", { env: { STUB_VERIFY_ASSET: "1" } }],
-    ["its provenance is refused", { env: { STUB_ATTEST: "1" } }],
-    ["the tag's ref names no commit", { env: { STUB_TAG_REF: "tree " + "1".repeat(40) } }],
-    ["the download is not gzip", { assets: "not-gzip" }],
-  ])("install.sh verifies the tarball before it extracts anything: when %s it exits 65 and extracts nothing", async (_, input) => {
+  const zeros = "0".repeat(64);
+  it.each<[string, { env?: Record<string, string>; sums?: (sha: string) => string; raw?: string }, "download" | "tar"]>([
+    ["the commit is not on main", { env: { STUB_COMPARE: "diverged" } }, "download"],
+    ["the commit is ahead of main", { env: { STUB_COMPARE: "behind" } }, "download"],
+    ["GitHub calls the commits identical but main's head is another", { env: { STUB_COMPARE: "identical" } }, "download"],
+    ["the tag peels to a tag a third time", { env: { STUB_TAG_REF: `tag ${TAG_OBJECT}`, STUB_PEELED: `tag ${TAG_OBJECT}` } }, "download"],
+    ["the tag's ref names more than a commit", { env: { STUB_TAG_REF: `commit ${COMMIT}0` } }, "download"],
+    ["the tag's ref names no commit", { env: { STUB_TAG_REF: "tree " + "1".repeat(40) } }, "download"],
+    ["GitHub names no head for main", { env: { STUB_MAIN: "" } }, "download"],
+    ["the sha256 differs from SHA256SUMS", { sums: () => `${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball twice", { sums: (sha) => `${sha}  ${TARBALL}\n${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball twice, the right digest last", { sums: (sha) => `${zeros}  ${TARBALL}\n${sha}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS names the tarball again on an indented line", { sums: (sha) => `${sha}  ${TARBALL}\n  ${zeros}  ${TARBALL}\r\n` }, "tar"],
+    ["SHA256SUMS holds a byte-order mark, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\ufeff${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS holds a no-break space, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\u00a0${zeros}  ${TARBALL}\n` }, "tar"],
+    ["SHA256SUMS holds a NUL", { sums: (sha) => `${sha}  ${TARBALL}\u0000\n` }, "tar"],
+    ["SHA256SUMS is longer than 4 KiB", { sums: (sha) => `${sha}  ${TARBALL}\n${" ".repeat(5000)}\n` }, "tar"],
+    ["verify-asset refuses it", { env: { STUB_VERIFY_ASSET: "1" } }, "tar"],
+    ["its provenance is refused", { env: { STUB_ATTEST: "1" } }, "tar"],
+    ["the download is not gzip", { raw: "PK\u0003\u0004 a zip, not a gzip" }, "tar"],
+  ])("install.sh verifies before it reads anything it downloaded: when %s it exits 65, and nothing reaches tar", async (_, input, before) => {
     const assets =
-      input.assets === "wrong-sum"
-        ? await release(RUNTIME, { sums: () => `${"0".repeat(64)}  ${TARBALL}\n` })
-        : input.assets === "two-sums"
-          ? await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${"0".repeat(64)}  ${TARBALL}\n` })
-          : input.assets === "two-sums-right-last"
-            ? await release(RUNTIME, { sums: (sha) => `${"0".repeat(64)}  ${TARBALL}\n${sha}  ${TARBALL}\n` })
-          : input.assets === "not-gzip"
-            ? await release(RUNTIME, { raw: "PK\u0003\u0004 a zip, not a gzip" })
-            : undefined;
+      input.sums !== undefined ? await release(RUNTIME, { sums: input.sums }) : input.raw !== undefined ? await release(RUNTIME, { raw: input.raw }) : undefined;
 
     const ran = await run({ ...(input.env === undefined ? {} : { env: input.env }), ...(assets === undefined ? {} : { assets }) });
 
     expect(ran.code).toBe(65);
-    expect(extracted(ran)).toBe(false);
+    expect(named(ran, "tar")).toEqual([]);
     expect(named(ran, "desk-node")).toEqual([]);
+    if (before === "download") expect(named(ran, "gh").filter((argv) => argv[0] === "release" && argv[1] === "download")).toEqual([]);
   });
 
   it.each([
@@ -345,12 +364,159 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
     expect(extracted(ran)).toBe(false);
   });
 
-  it("install.sh refuses a tarball without a Desk runtime in it (65) and runs nothing from it", async () => {
-    const ran = await run({ assets: await release({ "desk-0.4.0/version.json": "{}", "desk-0.4.0/desk.mjs": "" }) });
+  it.each([
+    ["no desk-node", { "desk-0.4.0/version.json": "{}", "desk-0.4.0/desk.mjs": "" }, false],
+    ["no desk.mjs", { "desk-0.4.0/version.json": "{}", "desk-0.4.0/Desk Terminal.app/Contents/MacOS/desk-node": DESK_NODE }, false],
+    ["a desk-node that is not executable", RUNTIME, true],
+  ])("install.sh refuses a tarball without a Desk runtime in it (%s) with 65 and runs nothing from it", async (_, files, notExecutable) => {
+    const ran = await run({ assets: await release(files, notExecutable ? { mode: { "desk-0.4.0/Desk Terminal.app/Contents/MacOS/desk-node": 0o644 } } : {}) });
 
     expect(ran.code).toBe(65);
     expect(ran.stderr).toContain("holds no Desk runtime");
     expect(named(ran, "desk-node")).toEqual([]);
+  });
+
+  it("install.sh refuses a member under a sibling of desk-0.4.0/ whose name only starts the same", async () => {
+    const list = join(await mkdtemp(join(tmpdir(), "install-sh-list-")), "members");
+    await writeFile(list, "desk-0.4.0/\ndesk-0.4.0x/evil\n");
+
+    const ran = await run({ env: { STUB_TAR_LIST: list } });
+
+    expect(ran.code).toBe(65);
+    expect(extracted(ran)).toBe(false);
+  });
+
+  it("install.sh passes desk install's own exit code on: 77 when you decline", async () => {
+    const ran = await run({ env: { STUB_DESK_EXIT: "77" } });
+
+    expect(named(ran, "desk-node")).toHaveLength(1);
+    expect(ran.code).toBe(77);
+  });
+
+  it.each([
+    ["it installs", {}],
+    ["it refuses after downloading", { env: { STUB_VERIFY_ASSET: "1" } }],
+  ])("install.sh removes its temporary directory when %s", async (_, input) => {
+    const ran = await run(input);
+
+    expect((await readdir(ran.tmp)).filter((name) => name.startsWith("desk-install."))).toEqual([]);
+  });
+
+  it("install.sh removes its temporary directory and keeps the exit code when the tarball holds a read-only directory", async () => {
+    const files = { ...RUNTIME, "desk-0.4.0/locked/file": "x" };
+    const ran = await run({ assets: await release(files, { readOnly: ["desk-0.4.0/locked"] }) });
+
+    expect(ran.code).toBe(0);
+    expect(ran.stderr).not.toContain("rm:");
+    expect((await readdir(ran.tmp)).filter((name) => name.startsWith("desk-install."))).toEqual([]);
+  });
+
+  it("install.sh exits 75 when it cannot make its temporary directory, and downloads nothing", async () => {
+    const ran = await run({ env: { TMPDIR: "/nonexistent-desk-tmp" } });
+
+    expect(ran.code).toBe(75);
+    expect(named(ran, "gh").filter((argv) => argv[0] === "api" || argv[0] === "release")).toEqual([]);
+  });
+
+  it.each([
+    ["the release has no such assets", "no assets match the file pattern", 65],
+    ["the download cannot reach GitHub", "error connecting to github.com", 75],
+  ])("install.sh installs nothing when %s", async (_, failure, code) => {
+    const ran = await run({ env: { STUB_DOWNLOAD_FAIL: failure } });
+
+    expect(ran.code).toBe(code);
+    expect(named(ran, "tar")).toEqual([]);
+  });
+
+  it("install.sh peels an annotated tag twice, and no further", async () => {
+    const tags = await mkdtemp(join(tmpdir(), "install-sh-tags-"));
+    const [t1, t2, t3] = ["a", "b", "c"].map((c) => c.repeat(40));
+    await writeFile(join(tags, t1 ?? ""), `tag ${t2}\n`);
+    await writeFile(join(tags, t2 ?? ""), `commit ${COMMIT}\n`);
+    const twice = await run({ env: { STUB_TAG_REF: `tag ${t1}`, STUB_TAGS: tags } });
+    await writeFile(join(tags, t2 ?? ""), `tag ${t3}\n`);
+    await writeFile(join(tags, t3 ?? ""), `commit ${COMMIT}\n`);
+
+    const thrice = await run({ env: { STUB_TAG_REF: `tag ${t1}`, STUB_TAGS: tags } });
+
+    expect(twice.code).toBe(0);
+    expect(thrice.code).toBe(65);
+    expect(extracted(thrice)).toBe(false);
+  });
+
+  it.each([
+    ["names a member outside desk-0.4.0/", "STUB_TAR_LIST", "desk-0.4.0/\nother/evil"],
+    ["shows a FIFO", "STUB_TAR_VLIST", "drwxr-xr-x  0 a a 0 Oct  7 12:00 desk-0.4.0/\nprw-r--r--  0 a a 0 Oct  7 12:00 desk-0.4.0/fifo"],
+  ])("install.sh reads the last line of a tarball listing with no newline: one that %s is refused", async (_, variable, listing) => {
+    const list = join(await mkdtemp(join(tmpdir(), "install-sh-list-")), "listing");
+    await writeFile(list, listing);
+
+    const ran = await run({ env: { [variable]: list } });
+
+    expect(ran.code).toBe(65);
+    expect(extracted(ran)).toBe(false);
+  });
+
+  it("install.sh never reports success after a fatal shell error, which bash 3.2 would otherwise exit 0 on", async () => {
+    // BASH_ENV (the operator's environment) makes mkdir a function that reads an unset variable: under set -u that is a
+    // fatal error in the main shell, after a command that succeeded.
+    const env = join(await mkdtemp(join(tmpdir(), "install-sh-env-")), "env.sh");
+    await writeFile(env, 'mkdir() { : "${DESK_TEST_NEVER_SET}"; }\n');
+
+    const ran = await run({ env: { BASH_ENV: env } });
+
+    expect(ran.code).not.toBe(0);
+    expect(named(ran, "desk-node")).toEqual([]);
+  });
+
+  it.each([
+    ["names no member", "STUB_TAR_LIST"],
+    ["shows no entry", "STUB_TAR_VLIST"],
+  ])("install.sh refuses a tarball whose listing %s, and extracts nothing", async (_, variable) => {
+    const list = join(await mkdtemp(join(tmpdir(), "install-sh-list-")), "empty");
+    await writeFile(list, "");
+
+    const ran = await run({ env: { [variable]: list } });
+
+    expect(ran.code).toBe(65);
+    expect(extracted(ran)).toBe(false);
+  });
+
+  it("install.sh refuses a SHA256SUMS line longer than 256 characters before it trims it", async () => {
+    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${"a".repeat(300)}\n` }) });
+
+    expect(ran.code).toBe(65);
+    expect(named(ran, "tar")).toEqual([]);
+  });
+
+  it("install.sh says in one line that no temporary directory could be made", async () => {
+    const ran = await run({ env: { TMPDIR: "/nonexistent-desk-tmp" } });
+
+    expect(ran.stderr.trim().split("\n").filter((line) => !line.startsWith("install.sh: using DESK_GH="))).toEqual([
+      "install.sh: no temporary directory could be made; nothing was installed",
+    ]);
+  });
+
+  it("install.sh reads a SHA256SUMS whose last line has no newline", async () => {
+    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}` }) });
+
+    expect(ran.code).toBe(0);
+  });
+
+  it("install.sh reads SHA256SUMS lines trimmed, as core does: CRLF line endings still name the tarball", async () => {
+    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\r\n` }) });
+
+    expect(ran.code).toBe(0);
+  });
+
+  it("install.sh refuses a DESK_GH that is not executable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "install-sh-gh-"));
+    await writeFile(join(dir, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+
+    const ran = await run({ env: { DESK_GH: join(dir, "gh") } });
+
+    expect(ran.code).toBe(69);
+    expect(ran.stderr).toContain("DESK_GH must be the absolute path of gh");
   });
 
   it("install.sh never passes GH_HOST or GH_REPO on to gh", async () => {
