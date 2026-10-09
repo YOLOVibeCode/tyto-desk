@@ -76,7 +76,7 @@ function which(tool: string): string {
 /** A release dir holding the tarball (built by the real tar from `files`) and a SHA256SUMS that names it. */
 async function release(
   files: Record<string, string>,
-  options: { link?: boolean; sums?: (sha: string) => string; raw?: string; mode?: Record<string, number>; readOnly?: string[] } = {},
+  options: { link?: boolean; sums?: (sha: string) => string | Buffer; raw?: string; mode?: Record<string, number>; readOnly?: string[] } = {},
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "install-sh-release-"));
   const source = join(dir, "source");
@@ -250,7 +250,7 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
   });
 
   const zeros = "0".repeat(64);
-  it.each<[string, { env?: Record<string, string>; sums?: (sha: string) => string; raw?: string }, "download" | "tar"]>([
+  it.each<[string, { env?: Record<string, string>; sums?: (sha: string) => string | Buffer; raw?: string }, "download" | "tar"]>([
     ["the commit is not on main", { env: { STUB_COMPARE: "diverged" } }, "download"],
     ["the commit is ahead of main", { env: { STUB_COMPARE: "behind" } }, "download"],
     ["GitHub calls the commits identical but main's head is another", { env: { STUB_COMPARE: "identical" } }, "download"],
@@ -265,11 +265,12 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
     ["SHA256SUMS holds a byte-order mark, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\ufeff${zeros}  ${TARBALL}\n` }, "tar"],
     ["SHA256SUMS holds a no-break space, which core would trim", { sums: (sha) => `${sha}  ${TARBALL}\n\u00a0${zeros}  ${TARBALL}\n` }, "tar"],
     ["SHA256SUMS holds a NUL", { sums: (sha) => `${sha}  ${TARBALL}\u0000\n` }, "tar"],
-    ["SHA256SUMS is longer than 4 KiB", { sums: (sha) => `${sha}  ${TARBALL}\n${" ".repeat(5000)}\n` }, "tar"],
+    ["SHA256SUMS is longer than 4 KiB, in lines each short enough", { sums: (sha) => `${sha}  ${TARBALL}\n${`${"#".repeat(90)}\n`.repeat(60)}` }, "tar"],
+    ["SHA256SUMS holds a byte that is not UTF-8, read in a UTF-8 locale", { env: { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8" }, sums: (sha) => Buffer.concat([Buffer.from(`${sha}  ${TARBALL}\n`), Buffer.from([0xff, 0x0a])]) }, "tar"],
     ["verify-asset refuses it", { env: { STUB_VERIFY_ASSET: "1" } }, "tar"],
     ["its provenance is refused", { env: { STUB_ATTEST: "1" } }, "tar"],
     ["the download is not gzip", { raw: "PK\u0003\u0004 a zip, not a gzip" }, "tar"],
-  ])("install.sh verifies before it reads anything it downloaded: when %s it exits 65, and nothing reaches tar", async (_, input, before) => {
+  ])("install.sh verifies before tar reads anything it downloaded: when %s it exits 65", async (_, input, before) => {
     const assets =
       input.sums !== undefined ? await release(RUNTIME, { sums: input.sums }) : input.raw !== undefined ? await release(RUNTIME, { raw: input.raw }) : undefined;
 
@@ -305,8 +306,11 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
   it("install.sh runs from /, so a tool in the directory it was started from is never run, even with . first on PATH", async () => {
     const dir = await mkdtemp(join(tmpdir(), "install-sh-cwd-"));
     const marker = join(dir, "ran");
-    await writeFile(join(dir, "tar"), `#!/bin/sh\n: > ${marker}\nexit 1\n`);
-    await chmod(join(dir, "tar"), 0o755);
+    // uname is the first tool it runs, and tar the last.
+    for (const tool of ["uname", "tar"]) {
+      await writeFile(join(dir, tool), `#!/bin/sh\n: > ${marker}\nexit 1\n`);
+      await chmod(join(dir, tool), 0o755);
+    }
 
     const ran = await run({ cwd: dir, pathFirst: "." });
 
@@ -483,10 +487,23 @@ describe("install.sh, the fresh-Mac installer (docs/IMPLEMENTATION.md §23.5)", 
   });
 
   it("install.sh refuses a SHA256SUMS line longer than 256 characters before it trims it", async () => {
-    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${"a".repeat(300)}\n` }) });
+    // Trimmed first, these 300 spaces and an x would be one short line.
+    const ran = await run({ assets: await release(RUNTIME, { sums: (sha) => `${sha}  ${TARBALL}\n${" ".repeat(300)}x\n` }) });
 
     expect(ran.code).toBe(65);
+    expect(ran.stderr).toContain("a line longer than 256 characters");
     expect(named(ran, "tar")).toEqual([]);
+  });
+
+  it("install.sh turns an exit of 0 before its last line into 70, on every bash", async () => {
+    // BASH_ENV (the operator's environment) makes mkdir end the script with 0, long before desk install.
+    const env = join(await mkdtemp(join(tmpdir(), "install-sh-env-")), "env.sh");
+    await writeFile(env, "mkdir() { exit 0; }\n");
+
+    const ran = await run({ env: { BASH_ENV: env } });
+
+    expect(ran.code).toBe(70);
+    expect(named(ran, "desk-node")).toEqual([]);
   });
 
   it("install.sh says in one line that no temporary directory could be made", async () => {
