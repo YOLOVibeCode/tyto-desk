@@ -185,10 +185,10 @@ describe("lint:install-scripts", () => {
     ["that nothing checks the download", "no checksum or signature"],
     ["the marker it writes", "bin/.install-method"],
     ["the relink of a global agent-browser's bin, even on a local install", "even on a local install"],
-  ])("the install-script allowlist says everything agent-browser 0.38.1's postinstall would do: %s", async (_label, words) => {
+  ])("the install-script allowlist says everything agent-browser 0.38.2's postinstall would do: %s", async (_label, words) => {
     const allowed = JSON.parse(await readFile(allowlist, "utf8")) as Record<string, string>;
 
-    expect(allowed["agent-browser@0.38.1"]).toContain(words);
+    expect(allowed["agent-browser@0.38.2"]).toContain(words);
   });
 });
 
