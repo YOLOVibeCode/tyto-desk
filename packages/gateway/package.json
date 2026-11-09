@@ -11,6 +11,6 @@
   "dependencies": {
     "@desk/core": "0.1.0",
     "@desk/node": "0.1.0",
-    "ws": "8.22.0"
+    "ws": "8.22.1"
   }
 }
