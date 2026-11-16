@@ -44,7 +44,7 @@ async function agentBrowser(): Promise<(...args: string[]) => Promise<Step>> {
 }
 
 describe("agent-browser in the live container", () => {
-  it("agent-browser 0.38.1 opens, snapshots and creates a tab over the port", async () => {
+  it("agent-browser 0.38.2 opens, snapshots and creates a tab over the port", async () => {
     const fixture = await startFixtureServer();
     const chrome = await startDeskChrome({ name: "agent-browser", port: PORT });
     try {
@@ -58,7 +58,7 @@ describe("agent-browser in the live container", () => {
       const closed = await ab("close");
       await saveResult("agent-browser", { steps: [version, opened, snapshot, tabbed, closed], pagesBefore, pagesAfter: pages.length });
 
-      expect(version.out).toBe("agent-browser 0.38.1");
+      expect(version.out).toBe("agent-browser 0.38.2");
       expect(opened).toMatchObject({ ok: true, out: expect.stringContaining("Fixture Two") });
       expect(snapshot).toMatchObject({ ok: true, out: expect.stringMatching(/heading "Fixture Two"[\s\S]*button "Click me"/) });
       expect(tabbed.ok).toBe(true);
